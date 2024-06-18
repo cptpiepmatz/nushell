@@ -1,8 +1,11 @@
-use crate::{Config, Record, ShellError, Span, Value};
+use crate::{Config, FromValue, Record, ShellError, Span, Value};
 use serde::{Deserialize, Serialize};
 
+// This allows the `IntoValue` and `FromValue` derive macros to work.
+use crate as nu_protocol;
+
 /// Definition of a parsed hook from the config object
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromValue)]
 pub struct Hooks {
     pub pre_prompt: Option<Value>,
     pub pre_execution: Option<Value>,

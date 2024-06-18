@@ -1,9 +1,12 @@
 use super::helper::ReconstructVal;
-use crate::{Config, Record, Span, Value};
+use crate::{Config, Record, Span, Value, FromValue};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+// This allows the `IntoValue` and `FromValue` derive macros to work.
+use crate as nu_protocol;
+
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, FromValue)]
 pub enum ErrorStyle {
     Plain,
     Fancy,

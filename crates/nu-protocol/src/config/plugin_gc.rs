@@ -2,14 +2,17 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{record, ShellError, Span, Value};
+use crate::{record, ShellError, Span, Value, FromValue};
 
 use super::helper::{
     process_bool_config, report_invalid_key, report_invalid_value, ReconstructVal,
 };
 
+// This allows the `IntoValue` and `FromValue` derive macros to work.
+use crate as nu_protocol;
+
 /// Configures when plugins should be stopped if inactive
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromValue)]
 pub struct PluginGcConfigs {
     /// The config to use for plugins not otherwise specified
     pub default: PluginGcConfig,
@@ -122,7 +125,7 @@ fn reconstruct_plugins(plugins: &HashMap<String, PluginGcConfig>, span: Span) ->
 }
 
 /// Configures when a plugin should be stopped if inactive
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromValue)]
 pub struct PluginGcConfig {
     /// True if the plugin should be stopped automatically
     pub enabled: bool,

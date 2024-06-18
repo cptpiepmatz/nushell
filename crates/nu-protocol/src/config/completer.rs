@@ -1,12 +1,16 @@
 use std::str::FromStr;
 
+use nu_derive_value::FromValue;
 use serde::{Deserialize, Serialize};
 
 use crate::{record, Config, Span, Value};
 
 use super::helper::ReconstructVal;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default)]
+// This allows the `IntoValue` and `FromValue` derive macros to work.
+use crate as nu_protocol;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, FromValue)]
 pub enum CompletionAlgorithm {
     #[default]
     Prefix,

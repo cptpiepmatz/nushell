@@ -6,7 +6,7 @@ use self::reedline::*;
 use self::table::*;
 
 use crate::engine::Closure;
-use crate::{record, ShellError, Span, Value};
+use crate::{record, FromValue, ShellError, Span, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -20,6 +20,9 @@ pub use self::reedline::{
 };
 pub use self::table::{FooterMode, TableIndexMode, TableMode, TrimStrategy};
 
+// This allows the `IntoValue` and `FromValue` derive macros to work.
+use crate as nu_protocol;
+
 mod completer;
 mod helper;
 mod hooks;
@@ -28,7 +31,7 @@ mod plugin_gc;
 mod reedline;
 mod table;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromValue)]
 pub struct HistoryConfig {
     pub max_size: i64,
     pub sync_on_enter: bool,
@@ -47,7 +50,7 @@ impl Default for HistoryConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromValue)]
 pub struct Config {
     pub external_completer: Option<Closure>,
     pub filesize_metric: bool,

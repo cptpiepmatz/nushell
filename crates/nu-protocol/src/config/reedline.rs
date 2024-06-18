@@ -1,11 +1,14 @@
 use std::str::FromStr;
 
 use super::{extract_value, helper::ReconstructVal};
-use crate::{record, Config, ShellError, Span, Value};
+use crate::{record, Config, FromValue, ShellError, Span, Value};
 use serde::{Deserialize, Serialize};
 
+// This allows the `IntoValue` and `FromValue` derive macros to work.
+use crate as nu_protocol;
+
 /// Definition of a parsed keybinding from the config object
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromValue)]
 pub struct ParsedKeybinding {
     pub modifier: Value,
     pub keycode: Value,
@@ -14,7 +17,7 @@ pub struct ParsedKeybinding {
 }
 
 /// Definition of a parsed menu from the config object
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromValue)]
 pub struct ParsedMenu {
     pub name: Value,
     pub marker: Value,
@@ -25,7 +28,7 @@ pub struct ParsedMenu {
 }
 
 /// Definition of a Nushell CursorShape (to be mapped to crossterm::cursor::CursorShape)
-#[derive(Serialize, Deserialize, Clone, Debug, Copy, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, Default, FromValue)]
 pub enum NuCursorShape {
     UnderScore,
     Line,
@@ -71,7 +74,7 @@ impl ReconstructVal for NuCursorShape {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, FromValue)]
 pub enum HistoryFileFormat {
     /// Store history as an SQLite database with additional context
     Sqlite,
@@ -103,7 +106,7 @@ impl ReconstructVal for HistoryFileFormat {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, Copy, FromValue)]
 pub enum EditBindings {
     Vi,
     #[default]

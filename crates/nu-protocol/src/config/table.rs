@@ -1,9 +1,12 @@
 use super::helper::ReconstructVal;
-use crate::{record, Config, ShellError, Span, Value};
+use crate::{record, Config, FromValue, ShellError, Span, Value};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default)]
+// This allows the `IntoValue` and `FromValue` derive macros to work.
+use crate as nu_protocol;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, FromValue)]
 pub enum TableMode {
     Basic,
     Thin,
@@ -89,6 +92,24 @@ pub enum FooterMode {
     Auto,
 }
 
+impl FromValue for FooterMode {
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        let span = v.span();
+        match v {
+            Value::String { val, .. } if val == "always" => Ok(FooterMode::Always),
+            Value::String { val, .. } if val == "never" => Ok(FooterMode::Never),
+            Value::String { val, .. } if val == "auto" => Ok(FooterMode::Auto),
+            Value::Int { val, .. } => Ok(FooterMode::RowCount(val as u64)),
+            v => Err(ShellError::CantConvert {
+                to_type: Self::expected_type().to_string(),
+                from_type: v.get_type().to_string(),
+                span,
+                help: Some("expected either 'never', 'always', 'auto' or a row count".to_string()),
+            }),
+        }
+    }
+}
+
 impl FromStr for FooterMode {
     type Err = &'static str;
 
@@ -122,7 +143,7 @@ impl ReconstructVal for FooterMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromValue)]
 pub enum TableIndexMode {
     /// Always show indexes
     Always,
@@ -200,6 +221,37 @@ impl Default for TrimStrategy {
             try_to_keep_words: true,
         }
     }
+}
+
+impl FromValue for TrimStrategy {
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        let repr = TrimStrategyValue::from_value(v)?;
+        match repr.methodology {
+            TrimStrategyValueMethodology::Wrapping => Ok(TrimStrategy::Wrap {
+                try_to_keep_words: repr.wrapping_try_keep_words,
+            }),
+            TrimStrategyValueMethodology::Truncating => Ok(TrimStrategy::Truncate {
+                suffix: repr.truncating_suffix,
+            }),
+        }
+    }
+
+    fn expected_type() -> crate::Type {
+        TrimStrategyValue::expected_type()
+    }
+}
+
+#[derive(Debug, FromValue)]
+enum TrimStrategyValueMethodology {
+    Wrapping,
+    Truncating,
+}
+
+#[derive(Debug, FromValue)]
+struct TrimStrategyValue {
+    methodology: TrimStrategyValueMethodology,
+    wrapping_try_keep_words: bool,
+    truncating_suffix: Option<String>,
 }
 
 pub(super) fn try_parse_trim_strategy(
@@ -314,7 +366,7 @@ pub(super) fn reconstruct_trim_strategy(config: &Config, span: Span) -> Value {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromValue)]
 pub struct TableIndent {
     pub left: usize,
     pub right: usize,
