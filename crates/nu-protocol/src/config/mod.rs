@@ -4,7 +4,7 @@ use crate as nu_protocol;
 use crate::FromValue;
 use helper::*;
 use prelude::*;
-use std::collections::HashMap;
+use std::{collections::HashMap, io::IsTerminal};
 
 pub use completions::{
     CompletionAlgorithm, CompletionConfig, CompletionSort, ExternalCompleterConfig,
@@ -106,7 +106,7 @@ impl Default for Config {
             footer_mode: FooterMode::RowCount(25),
             float_precision: 2,
             buffer_editor: Value::nothing(Span::unknown()),
-            use_ansi_coloring: true,
+            use_ansi_coloring: std::io::stdout().is_terminal(), // terminals probably want ansi colors
             bracketed_paste: true,
             edit_mode: EditBindings::default(),
 
