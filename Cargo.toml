@@ -34,6 +34,7 @@ members = [
   "crates/nu-cmd-plugin",
   "crates/nu-command",
   "crates/nu-color-config",
+  "crates/nu-compat",
   "crates/nu-explore",
   "crates/nu-json",
   "crates/nu-lsp",
@@ -119,6 +120,7 @@ nu-ansi-term = "0.50.1"
 nucleo-matcher = "0.3"
 num-format = "0.4"
 num-traits = "0.2"
+object = "0.37"
 oem_cp = "2.0.0"
 omnipath = "0.1"
 open = "5.3"

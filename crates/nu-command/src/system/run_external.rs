@@ -8,6 +8,7 @@ use nu_protocol::{
 };
 use nu_system::{ForegroundChild, kill_by_pid};
 use nu_utils::IgnoreCaseExt;
+use object::{Object, ObjectSection};
 use pathdiff::diff_paths;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -261,6 +262,19 @@ impl Command for External {
 
         // Log the command we're about to run in case it's useful for debugging purposes.
         log::trace!("run-external spawning: {command:?}");
+
+        let binary = std::fs::read(command.get_program()).unwrap();
+        let file = object::read::File::parse(&*binary).unwrap();
+        for section in file.sections() {
+            if let Ok(".nushell") = section.name() {
+                let needle = b"NU_COMPAT_VERSION=";
+                let data = section.data().unwrap();
+                let start = data.windows(needle.len()).position(|w| w == needle).unwrap();
+                let version: Vec<u8> = data[(start + needle.len())..].iter().take_while(|&&item| item != 0).copied().collect();
+                let version = String::from_utf8(version).unwrap();
+                println!("found compatible binary with version: {version}");
+            }
+        }
 
         // Spawn the child process. On Unix, also put the child process to
         // foreground if we're in an interactive session.

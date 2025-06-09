@@ -1,0 +1,18 @@
+[package]
+authors = ["The Nushell Project Developers"]
+description = "Add Nushell Compatibility into your binary."
+edition = "2024"
+license = "MIT"
+name = "nu-compat"
+repository = "https://github.com/nushell/nushell/tree/main/crates/nu-compat"
+version = "0.104.2"
+
+[lints]
+workspace = true
+
+[[example]]
+name = "compat"
+path = "./examples/example.rs"
+
+[dependencies]
+nu-protocol = { path = "../nu-protocol", version = "0.104.2" }
