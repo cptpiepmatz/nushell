@@ -227,7 +227,7 @@ rustls-tls = [
 ]
 
 plugin = ["nu-parser/plugin", "os"]
-sqlite = ["rusqlite"]
+sqlite = ["dep:rusqlite"]
 trash-support = ["trash"]
 
 [dev-dependencies]
