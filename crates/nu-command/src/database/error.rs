@@ -15,69 +15,58 @@ pub enum DatabaseError {
     Shell(ShellError),
 
     NotASqliteFile {
-        span: Span,
         path: PathBuf,
     },
 
     // Failed to open SQLite database from open_connection
     OpenConnection {
-        span: Span,
         error: rusqlite::Error,
     },
 
     // Failed to set busy handler for SQLite database
     SetBusyHandler {
-        span: Span,
         error: rusqlite::Error,
     },
 
     PrepareConnection {
-        span: Span,
         sql: Cow<'static, str>,
         error: rusqlite::Error,
     },
 
     Prepare {
-        span: Span,
         sql: Cow<'static, str>,
         error: rusqlite::Error,
     },
 
     Execute {
-        span: Span,
         sql: Cow<'static, str>,
         error: rusqlite::Error,
     },
 
     Query {
-        span: Span,
         sql: Cow<'static, str>,
         error: rusqlite::Error,
     },
 
     Iterate {
-        span: Span,
         sql: Cow<'static, str>,
         index: usize,
         error: rusqlite::Error,
     },
 
     Get {
-        span: Span,
         sql: Option<Cow<'static, str>>,
         index: Box<dyn RowIndex>,
         error: rusqlite::Error,
     },
 
     Backup {
-        span: Span,
         database_name: DatabaseName<'static>, // no usages of DatabaseName::Attached, so we're fine
         path: Cow<'static, Path>,
         error: rusqlite::Error,
     },
 
     Restore {
-        span: Span,
         database_name: DatabaseName<'static>,
         path: Cow<'static, Path>,
         error: rusqlite::Error,

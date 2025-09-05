@@ -9,7 +9,9 @@ use nu_protocol::{
     Type, Value, engine::EngineState, shell_error::io::IoError,
 };
 use rusqlite::{
-    types::{FromSql, ValueRef}, Connection, DatabaseName, Error as SqliteError, OpenFlags, Row, RowIndex, Rows, Statement, ToSql
+    Connection, DatabaseName, Error as SqliteError, OpenFlags, Row, RowIndex, Rows, Statement,
+    ToSql,
+    types::{FromSql, ValueRef},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -53,7 +55,6 @@ impl SQLiteDatabase {
         match buf == SQLITE_MAGIC_BYTES {
             true => Ok(SQLiteDatabase::new(path, signals)),
             false => Err(DatabaseError::NotASqliteFile {
-                span,
                 path: path.into(),
             }),
         }
@@ -77,15 +78,15 @@ impl SQLiteDatabase {
         Ok(stream)
     }
 
-    pub fn open_connection(&self, span: Span) -> Result<Connection, DatabaseError> {
+    pub fn open_connection(&self) -> Result<Connection, DatabaseError> {
         if self.path == Path::new(MEMORY_DB) {
             return open_connection_in_memory_custom();
         }
 
         let conn = Connection::open(&self.path)
-            .map_err(|error| DatabaseError::OpenConnection { span, error })?;
+            .map_err(|error| DatabaseError::OpenConnection {  error })?;
         conn.busy_handler(Some(SQLiteDatabase::sleeper))
-            .map_err(|error| DatabaseError::SetBusyHandler { span, error })?;
+            .map_err(|error| DatabaseError::SetBusyHandler { error })?;
         Ok(conn)
     }
 
@@ -95,12 +96,11 @@ impl SQLiteDatabase {
         true
     }
 
-    pub fn get_tables(&self, conn: &Connection, span: Span) -> Result<Vec<DbTable>, DatabaseError> {
+    pub fn get_tables(&self, conn: &Connection) -> Result<Vec<DbTable>, DatabaseError> {
         let table_names_sql = "SELECT name FROM sqlite_master WHERE type = 'table'";
         let mut table_names =
             conn.prepare(table_names_sql)
                 .map_err(|error| DatabaseError::PrepareConnection {
-                    span,
                     sql: table_names_sql.into(),
                     error,
                 })?;
@@ -108,7 +108,6 @@ impl SQLiteDatabase {
         let rows = table_names
             .query_map([], |row| row.get(0))
             .map_err(|error| DatabaseError::Query {
-                span,
                 sql: table_names_sql.into(),
                 error,
             })?;
@@ -116,7 +115,6 @@ impl SQLiteDatabase {
 
         for (idx, row) in rows.enumerate() {
             let table_name: String = row.map_err(|error| DatabaseError::Iterate {
-                span,
                 sql: table_names_sql.into(),
                 index: idx,
                 error,
@@ -133,14 +131,13 @@ impl SQLiteDatabase {
         Ok(tables.into_iter().collect())
     }
 
-    pub fn drop_all_tables(&self, conn: &Connection, span: Span) -> Result<(), DatabaseError> {
-        let tables = self.get_tables(conn, span)?;
+    pub fn drop_all_tables(&self, conn: &Connection) -> Result<(), DatabaseError> {
+        let tables = self.get_tables(conn)?;
 
         for table in tables {
             let sql = format!("DROP TABLE {}", table.name);
             conn.execute(&sql, [])
                 .map_err(|error| DatabaseError::Execute {
-                    span,
                     sql: sql.into(),
                     error,
                 })?;
@@ -153,13 +150,11 @@ impl SQLiteDatabase {
         &self,
         conn: &Connection,
         filename: String,
-        span: Span,
     ) -> Result<(), DatabaseError> {
         //vacuum main into 'c:\\temp\\foo.db'
         let sql = format!("vacuum main into '{filename}'");
         conn.execute(&sql, [])
             .map_err(|error| DatabaseError::Execute {
-                span,
                 sql: sql.into(),
                 error,
             })?;
@@ -171,12 +166,10 @@ impl SQLiteDatabase {
         &self,
         conn: &Connection,
         filename: String,
-        span: Span,
     ) -> Result<(), DatabaseError> {
         let filename = PathBuf::from(filename);
         conn.backup(DatabaseName::Main, &filename, None)
             .map_err(|error| DatabaseError::Backup {
-                span,
                 database_name: DatabaseName::Main,
                 path: filename.into(),
                 error,
@@ -188,8 +181,7 @@ impl SQLiteDatabase {
         &self,
         conn: &mut Connection,
         filename: String,
-        span: Span,
-    ) -> Result<(), SqliteError> {
+    ) -> Result<(), DatabaseError> {
         let filename = PathBuf::from(filename);
         conn.restore(
             DatabaseName::Main,
@@ -206,7 +198,6 @@ impl SQLiteDatabase {
             }),
         )
         .map_err(|error| DatabaseError::Restore {
-            span,
             database_name: DatabaseName::Main,
             path: filename.into(),
             error,
@@ -214,36 +205,38 @@ impl SQLiteDatabase {
         Ok(())
     }
 
+    fn get_column_info(row: &Row) -> Result<DbColumn, DatabaseError> {
+        Ok(DbColumn {
+            cid: Self::get_column("cid", row)?,
+            name: Self::get_column("name", row)?,
+            r#type: Self::get_column("type", row)?,
+            notnull: Self::get_column("notnull", row)?,
+            default: Self::get_column("dflt_value", row)?,
+            pk: Self::get_column("pk", row)?,
+        })
+    }
+
     pub fn get_columns(
         &self,
         conn: &Connection,
         table: &DbTable,
-        span: Span,
     ) -> Result<Vec<DbColumn>, DatabaseError> {
         let sql = format!("SELECT * FROM pragma_table_info('{}');", table.name);
+        Self::query_infos(conn, sql.into(), Self::get_column_info)
+    }
 
-        let read_query = |row, span| Ok(DbColumn {
-            cid: Self::get_column("cid", row, span)?,
-            name: Self::get_column("name", row, span)?,
-            r#type: Self::get_column("type", row, span)?,
-            notnull: Self::get_column("notnull", row, span)?,
-            default: Self::get_column("dflt_value", row, span)?,
-            pk: Self::get_column("pk", row, span)?,
-        });
-
-        Self::query_infos(
-            conn,
-            sql.into(),
-            read_query,
-            span,
-        )
+    fn get_constraint_info(row: &Row) -> Result<DbConstraint, DatabaseError> {
+        Ok(DbConstraint {
+            name: Self::get_column("index_name", row)?,
+            column_name: Self::get_column("column_name", row)?,
+            origin: Self::get_column("origin", row)?,
+        })
     }
 
     pub fn get_constraints(
         &self,
         conn: &Connection,
         table: &DbTable,
-        span: Span,
     ) -> Result<Vec<DbConstraint>, DatabaseError> {
         let sql = format!(
             "
@@ -263,52 +256,42 @@ impl SQLiteDatabase {
             &table.name
         );
 
-        let read_query = |row, span| Ok(DbConstraint {
-            name: Self::get_column("index_name", row, span)?,
-            column_name: Self::get_column("column_name", row, span)?,
-            origin: Self::get_column("origin", row, span)?,
-        });
+        Self::query_infos(conn, sql.into(), Self::get_constraint_info)
+    }
 
-        Self::query_infos(
-            conn,
-            sql.into(),
-            read_query,
-            span,
-        )
+    fn get_foreign_key_info(row: &Row) -> Result<DbForeignKey, DatabaseError> {
+        Ok(DbForeignKey {
+            column_name: Self::get_column("from", row)?,
+            ref_table: Self::get_column("table", row)?,
+            ref_column: Self::get_column("to", row)?,
+        })
     }
 
     pub fn get_foreign_keys(
         &self,
         conn: &Connection,
         table: &DbTable,
-        span: Span,
     ) -> Result<Vec<DbForeignKey>, DatabaseError> {
         let sql = format!(
             "SELECT p.`from`, p.`to`, p.`table` FROM pragma_foreign_key_list('{}') p",
             &table.name
         );
 
-        let read_query = |row, span| {
-            Ok(DbForeignKey {
-                column_name: Self::get_column("from", row, span)?,
-                ref_table: Self::get_column("table", row, span)?,
-                ref_column: Self::get_column("to", row, span)?,
-            })
-        };
+        Self::query_infos(conn, sql.into(), Self::get_foreign_key_info)
+    }
 
-        Self::query_infos(
-            conn,
-            sql.into(),
-            read_query,
-            span,
-        )
+    fn get_index_info(row: &Row) -> Result<DbIndex, DatabaseError> {
+        Ok(DbIndex {
+            name: Self::get_column("index_name", row)?,
+            column_name: Self::get_column("name", row)?,
+            seqno: Self::get_column("seqno", row)?,
+        })
     }
 
     pub fn get_indexes(
         &self,
         conn: &Connection,
         table: &DbTable,
-        span: Span,
     ) -> Result<Vec<DbIndex>, DatabaseError> {
         let sql = format!(
             "
@@ -325,57 +308,45 @@ impl SQLiteDatabase {
             &table.name,
         );
 
-        let read_query = |row, span| Ok(DbIndex {
-            name: Self::get_column("index_name", row, span)?,
-            column_name: Self::get_column("name", row, span)?,
-            seqno: Self::get_column("seqno", row, span)?,
-        });
-
-        Self::query_infos(
-            conn,
-            sql.into(),
-            read_query,
-            span,
-        )
+        Self::query_infos(conn, sql.into(), Self::get_index_info)
     }
 
-    fn get_column<T: FromSql>(idx: impl RowIndex + Copy + 'static, row: &Row, span: Span) -> Result<T, DatabaseError> {
+    fn get_column<T: FromSql>(
+        idx: impl RowIndex + Copy + 'static,
+        row: &Row,
+    ) -> Result<T, DatabaseError> {
         row.get(idx).map_err(|error| DatabaseError::Get {
-            span,
             sql: row.as_ref().expanded_sql().map(Cow::Owned),
             index: Box::new(idx),
-            error
+            error,
         })
     }
 
-    // FIXME
     fn query_infos<T>(
         conn: &Connection,
         sql: Cow<'static, str>,
-        read_query: impl Fn(&Row, Span) -> Result<T, DatabaseError>,
-        span: Span,
+        read_query: impl for<'r> Fn(&'r Row<'r>) -> Result<T, DatabaseError>,
     ) -> Result<Vec<T>, DatabaseError> {
         // This uses a lot of matching to avoid unnecessary cloning because Rust doesn't understand
         // .map_err()? as divergent code.
 
         let mut column_names = match conn.prepare(&sql) {
             Ok(column_names) => column_names,
-            Err(error) => return Err(DatabaseError::Prepare { span, sql, error }),
+            Err(error) => return Err(DatabaseError::Prepare { sql, error }),
         };
 
         let mut infos: Vec<T> = Vec::new();
         let mut rows = match column_names.query([]) {
             Ok(rows) => rows,
-            Err(error) => return Err(DatabaseError::Query { span, sql, error }),
+            Err(error) => return Err(DatabaseError::Query { sql, error }),
         };
 
         for i in 0.. {
             match rows.next() {
                 Ok(None) => break,
-                Ok(Some(row)) => infos.push(read_query(row, span)?),
+                Ok(Some(row)) => infos.push(read_query(row)?),
                 Err(error) => {
                     return Err(DatabaseError::Iterate {
-                        span,
                         sql,
                         index: i,
                         error,
