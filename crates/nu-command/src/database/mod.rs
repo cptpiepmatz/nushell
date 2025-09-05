@@ -1,4 +1,5 @@
 mod commands;
+mod error;
 mod values;
 
 use commands::add_commands_decls;

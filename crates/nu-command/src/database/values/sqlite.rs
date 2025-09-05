@@ -1,10 +1,11 @@
+use crate::{database::error::DatabaseError};
+
 use super::definitions::{
     db_column::DbColumn, db_constraint::DbConstraint, db_foreignkey::DbForeignKey,
     db_index::DbIndex, db_table::DbTable,
 };
 use nu_protocol::{
-    CustomValue, PipelineData, Record, ShellError, Signals, Span, Spanned, Value,
-    engine::EngineState, shell_error::io::IoError,
+    engine::EngineState, shell_error::io::IoError, CustomValue, FromValue, IntoValue, PipelineData, Record, ShellError, Signals, Span, Spanned, Type, Value
 };
 use rusqlite::{
     Connection, DatabaseName, Error as SqliteError, OpenFlags, Row, Statement, ToSql,
@@ -33,6 +34,8 @@ pub struct SQLiteDatabase {
 }
 
 impl SQLiteDatabase {
+    const TYPE_NAME: &str = "SQLiteDatabase";
+
     pub fn new(path: &Path, signals: Signals) -> Self {
         Self {
             path: PathBuf::from(path),
@@ -40,59 +43,20 @@ impl SQLiteDatabase {
         }
     }
 
-    pub fn try_from_path(path: &Path, span: Span, signals: Signals) -> Result<Self, ShellError> {
-        let mut file = File::open(path).map_err(|e| IoError::new(e, span, PathBuf::from(path)))?;
+    pub fn try_from_path(path: &Path, span: Span, signals: Signals) -> Result<Self, DatabaseError> {
+        let from_io_error = IoError::factory(span, path);
+        let mut file = File::open(path).map_err(&from_io_error)?;
 
         let mut buf: [u8; 16] = [0; 16];
-        file.read_exact(&mut buf)
-            .map_err(|e| ShellError::Io(IoError::new(e, span, PathBuf::from(path))))
-            .and_then(|_| {
-                if buf == SQLITE_MAGIC_BYTES {
-                    Ok(SQLiteDatabase::new(path, signals))
-                } else {
-                    Err(ShellError::GenericError {
-                        error: "Not a SQLite file".into(),
-                        msg: format!("Could not read '{}' as SQLite file", path.display()),
-                        span: Some(span),
-                        help: None,
-                        inner: vec![],
-                    })
-                }
-            })
-    }
-
-    pub fn try_from_value(value: Value) -> Result<Self, ShellError> {
-        let span = value.span();
-        match value {
-            Value::Custom { val, .. } => match val.as_any().downcast_ref::<Self>() {
-                Some(db) => Ok(Self {
-                    path: db.path.clone(),
-                    signals: db.signals.clone(),
-                }),
-                None => Err(ShellError::CantConvert {
-                    to_type: "database".into(),
-                    from_type: "non-database".into(),
-                    span,
-                    help: None,
-                }),
-            },
-            x => Err(ShellError::CantConvert {
-                to_type: "database".into(),
-                from_type: x.get_type().to_string(),
-                span: x.span(),
-                help: None,
-            }),
+        file.read_exact(&mut buf).map_err(&from_io_error)?;
+        match buf == SQLITE_MAGIC_BYTES {
+            true => Ok(SQLiteDatabase::new(path, signals)),
+            false => Err(DatabaseError::NotASqliteFile { span, path: path.into() })
         }
     }
 
     pub fn try_from_pipeline(input: PipelineData, span: Span) -> Result<Self, ShellError> {
-        let value = input.into_value(span)?;
-        Self::try_from_value(value)
-    }
-
-    pub fn into_value(self, span: Span) -> Value {
-        let db = Box::new(self);
-        Value::custom(db, span)
+        Self::from_value(input.into_value(span)?)
     }
 
     pub fn query(
@@ -352,6 +316,42 @@ impl SQLiteDatabase {
     }
 }
 
+impl FromValue for SQLiteDatabase {
+    fn from_value(value: Value) -> Result<Self, ShellError> {
+        let span = value.span();
+        match value {
+            Value::Custom { val, .. } => match val.as_any().downcast_ref::<Self>() {
+                Some(db) => Ok(Self {
+                    path: db.path.clone(),
+                    signals: db.signals.clone(),
+                }),
+                None => Err(ShellError::CantConvert {
+                    to_type: Self::expected_type().to_string(),
+                    from_type: val.type_name(),
+                    span,
+                    help: None,
+                }),
+            },
+            x => Err(ShellError::CantConvert {
+                to_type: Self::expected_type().to_string(),
+                from_type: x.get_type().to_string(),
+                span: x.span(),
+                help: None,
+            }),
+        }
+    }
+
+    fn expected_type() -> Type {
+        Type::custom(Self::TYPE_NAME)
+    }
+}
+
+impl IntoValue for SQLiteDatabase {
+    fn into_value(self, span: Span) -> Value {
+        Value::custom(Box::new(self), span)
+    }
+}
+
 impl CustomValue for SQLiteDatabase {
     fn clone_value(&self, span: Span) -> Value {
         Value::custom(Box::new(self.clone()), span)
@@ -397,7 +397,7 @@ impl CustomValue for SQLiteDatabase {
     }
 
     fn typetag_name(&self) -> &'static str {
-        "SQLiteDatabase"
+        Self::TYPE_NAME
     }
 
     fn typetag_deserialize(&self) {
