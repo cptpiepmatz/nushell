@@ -77,19 +77,21 @@ impl SQLiteDatabase {
     }
 
     pub fn open_connection(&self) -> Result<Connection, DatabaseError> {
-        if self.path == Path::new(MEMORY_DB) {
-            return open_connection_in_memory_custom();
-        }
+        let select_database_path = || match &self.path {
+            path if path == Path::new(MEMORY_DB) => DatabasePath::MemoryCustom,
+            path => DatabasePath::Path(path.into()),
+        };
 
         let conn = Connection::open(&self.path).map_err(|error| DatabaseError::OpenConnection {
-            path: DatabasePath::Path(PathBuf::from(&self.path)),
+            path: select_database_path(),
             error,
         })?;
         conn.busy_handler(Some(SQLiteDatabase::sleeper))
             .map_err(|error| DatabaseError::SetBusyHandler {
-                path: DatabasePath::Path(PathBuf::from(&self.path)),
+                path: select_database_path(),
                 error,
             })?;
+            
         Ok(conn)
     }
 
