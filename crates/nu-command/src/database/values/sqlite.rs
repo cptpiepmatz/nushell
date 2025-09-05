@@ -1,4 +1,4 @@
-use crate::database::error::DatabaseError;
+use crate::database::error::{DatabaseError, DatabasePath};
 
 use super::definitions::{
     db_column::DbColumn, db_constraint::DbConstraint, db_foreignkey::DbForeignKey,
@@ -54,9 +54,7 @@ impl SQLiteDatabase {
         file.read_exact(&mut buf).map_err(&from_io_error)?;
         match buf == SQLITE_MAGIC_BYTES {
             true => Ok(SQLiteDatabase::new(path, signals)),
-            false => Err(DatabaseError::NotASqliteFile {
-                path: path.into(),
-            }),
+            false => Err(DatabaseError::NotASqliteFile { path: path.into() }),
         }
     }
 
@@ -83,10 +81,15 @@ impl SQLiteDatabase {
             return open_connection_in_memory_custom();
         }
 
-        let conn = Connection::open(&self.path)
-            .map_err(|error| DatabaseError::OpenConnection {  error })?;
+        let conn = Connection::open(&self.path).map_err(|error| DatabaseError::OpenConnection {
+            path: DatabasePath::Path(PathBuf::from(&self.path)),
+            error,
+        })?;
         conn.busy_handler(Some(SQLiteDatabase::sleeper))
-            .map_err(|error| DatabaseError::SetBusyHandler { error })?;
+            .map_err(|error| DatabaseError::SetBusyHandler {
+                path: DatabasePath::Path(PathBuf::from(&self.path)),
+                error,
+            })?;
         Ok(conn)
     }
 
@@ -448,6 +451,7 @@ impl CustomValue for SQLiteDatabase {
     }
 }
 
+#[deprecated]
 pub fn open_sqlite_db(path: &Path, call_span: Span) -> Result<Connection, ShellError> {
     if path.to_string_lossy() == MEMORY_DB {
         open_connection_in_memory_custom()
@@ -463,6 +467,7 @@ pub fn open_sqlite_db(path: &Path, call_span: Span) -> Result<Connection, ShellE
     }
 }
 
+#[deprecated]
 fn run_sql_query(
     conn: Connection,
     sql: &Spanned<String>,
@@ -473,6 +478,7 @@ fn run_sql_query(
     prepared_statement_to_nu_list(stmt, params, sql.span, signals)
 }
 
+#[deprecated]
 // This is taken from to text local_into_string but tweaks it a bit so that certain formatting does not happen
 pub fn value_to_sql(
     engine_state: &EngineState,
@@ -504,6 +510,7 @@ pub fn value_to_sql(
     }
 }
 
+#[deprecated]
 pub fn values_to_sql(
     engine_state: &EngineState,
     values: impl IntoIterator<Item = Value>,
@@ -526,6 +533,7 @@ impl Default for NuSqlParams {
     }
 }
 
+#[deprecated]
 pub fn nu_value_to_params(
     engine_state: &EngineState,
     value: Value,
@@ -569,6 +577,7 @@ pub fn nu_value_to_params(
     }
 }
 
+#[deprecated]
 #[derive(Debug)]
 enum SqliteOrShellError {
     SqliteError(SqliteError),
@@ -602,6 +611,7 @@ impl SqliteOrShellError {
     }
 }
 
+#[deprecated]
 fn read_single_table(
     conn: Connection,
     table_name: String,
@@ -645,6 +655,7 @@ impl TypedColumn {
     }
 }
 
+#[deprecated]
 fn prepared_statement_to_nu_list(
     mut stmt: Statement,
     params: NuSqlParams,
@@ -707,6 +718,7 @@ fn prepared_statement_to_nu_list(
     Ok(Value::list(row_values, call_span))
 }
 
+#[deprecated]
 fn read_entire_sqlite_db(
     conn: Connection,
     call_span: Span,
@@ -730,6 +742,7 @@ fn read_entire_sqlite_db(
     Ok(Value::record(tables, call_span))
 }
 
+#[deprecated]
 pub fn convert_sqlite_row_to_nu_value(row: &Row, span: Span, columns: &[TypedColumn]) -> Value {
     let record = columns
         .iter()
@@ -745,6 +758,7 @@ pub fn convert_sqlite_row_to_nu_value(row: &Row, span: Span, columns: &[TypedCol
     Value::record(record, span)
 }
 
+#[deprecated]
 pub fn convert_sqlite_value_to_nu_value(
     value: ValueRef,
     decl_type: Option<DeclType>,
@@ -768,35 +782,27 @@ pub fn convert_sqlite_value_to_nu_value(
     }
 }
 
-pub fn open_connection_in_memory_custom() -> Result<Connection, ShellError> {
-    let flags = OpenFlags::default();
-    let conn =
-        Connection::open_with_flags(MEMORY_DB, flags).map_err(|e| ShellError::GenericError {
-            error: "Failed to open SQLite custom connection in memory".into(),
-            msg: e.to_string(),
-            span: Some(Span::test_data()),
-            help: None,
-            inner: vec![],
-        })?;
+#[deprecated]
+pub fn open_connection_in_memory_custom() -> Result<Connection, DatabaseError> {
+    let conn = Connection::open(MEMORY_DB).map_err(|error| DatabaseError::OpenConnection {
+        path: DatabasePath::MemoryCustom,
+        error,
+    })?;
     conn.busy_handler(Some(SQLiteDatabase::sleeper))
-        .map_err(|e| ShellError::GenericError {
-            error: "Failed to set busy handler for SQLite custom connection in memory".into(),
-            msg: e.to_string(),
-            span: Some(Span::test_data()),
-            help: None,
-            inner: vec![],
+        .map_err(|error| DatabaseError::SetBusyHandler {
+            path: DatabasePath::MemoryCustom,
+            error,
         })?;
     Ok(conn)
 }
 
-pub fn open_connection_in_memory() -> Result<Connection, ShellError> {
-    Connection::open_in_memory().map_err(|e| ShellError::GenericError {
-        error: "Failed to open SQLite standard connection in memory".into(),
-        msg: e.to_string(),
-        span: Some(Span::test_data()),
-        help: None,
-        inner: vec![],
-    })
+#[deprecated]
+pub fn open_connection_in_memory() -> Result<Connection, DatabaseError> {
+    let conn = Connection::open_in_memory().map_err(|error| DatabaseError::OpenConnection {
+        path: DatabasePath::Memory,
+        error,
+    })?;
+    Ok(conn)
 }
 
 #[cfg(test)]
