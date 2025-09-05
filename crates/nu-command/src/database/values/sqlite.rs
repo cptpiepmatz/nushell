@@ -4,14 +4,12 @@ use super::definitions::{
     db_column::DbColumn, db_constraint::DbConstraint, db_foreignkey::DbForeignKey,
     db_index::DbIndex, db_table::DbTable,
 };
-use fallible_streaming_iterator::FallibleStreamingIterator;
 use nu_protocol::{
     CustomValue, FromValue, IntoValue, PipelineData, Record, ShellError, Signals, Span, Spanned,
     Type, Value, engine::EngineState, shell_error::io::IoError,
 };
 use rusqlite::{
-    Connection, DatabaseName, Error as SqliteError, OpenFlags, Row, Rows, Statement, ToSql,
-    types::ValueRef,
+    types::{FromSql, ValueRef}, Connection, DatabaseName, Error as SqliteError, OpenFlags, Row, RowIndex, Rows, Statement, ToSql
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -216,90 +214,29 @@ impl SQLiteDatabase {
         Ok(())
     }
 
-    fn get_column_info(&self, row: &Row, span: Span) -> Result<DbColumn, DatabaseError> {
-        let make_err = |idx| {
-            move |error| DatabaseError::Get {
-                span,
-                sql: row.as_ref().expanded_sql().map(Cow::Owned),
-                index: Box::new(idx),
-                error,
-            }
-        };
-        let dbc = DbColumn {
-            cid: row.get("cid").map_err(make_err("cid"))?,
-            name: row.get("name").map_err(make_err("name"))?,
-            r#type: row.get("type").map_err(make_err("type"))?,
-            notnull: row.get("notnull").map_err(make_err("notnull"))?,
-            default: row.get("dflt_value").map_err(make_err("dflt_value"))?,
-            pk: row.get("pk").map_err(make_err("pk"))?,
-        };
-        Ok(dbc)
-    }
-
     pub fn get_columns(
         &self,
         conn: &Connection,
         table: &DbTable,
         span: Span,
     ) -> Result<Vec<DbColumn>, DatabaseError> {
-        // This uses a lot of matching to avoid unnecessary cloning because Rust doesn't understand 
-        // .map_err()? as divergent code.
-        let column_names_sql = format!("SELECT * FROM pragma_table_info('{}');", table.name);
-        let mut column_names = match conn.prepare(&column_names_sql) {
-            Ok(column_names) => column_names,
-            Err(error) => {
-                return Err(DatabaseError::Prepare {
-                    span,
-                    sql: column_names_sql.into(),
-                    error,
-                });
-            }
-        };
+        let sql = format!("SELECT * FROM pragma_table_info('{}');", table.name);
 
-        let mut columns: Vec<DbColumn> = Vec::new();
-        let mut rows = match column_names.query([]) {
-            Ok(rows) => rows,
-            Err(error) => {
-                return Err(DatabaseError::Query {
-                    span,
-                    sql: column_names_sql.into(),
-                    error,
-                });
-            }
-        };
-        for i in 0.. {
-            match rows.next() {
-                Ok(None) => break,
-                Ok(Some(row)) => columns.push(self.get_column_info(row, span)?),
-                Err(error) => {
-                    return Err(DatabaseError::Iterate {
-                        span,
-                        sql: column_names_sql.into(),
-                        index: i,
-                        error,
-                    });
-                }
-            }
-        }
+        let read_query = |row, span| Ok(DbColumn {
+            cid: Self::get_column("cid", row, span)?,
+            name: Self::get_column("name", row, span)?,
+            r#type: Self::get_column("type", row, span)?,
+            notnull: Self::get_column("notnull", row, span)?,
+            default: Self::get_column("dflt_value", row, span)?,
+            pk: Self::get_column("pk", row, span)?,
+        });
 
-        Ok(columns)
-    }
-
-    fn get_constraint_info(&self, row: &Row, span: Span) -> Result<DbConstraint, DatabaseError> {
-        let make_err = |idx| {
-            move |error| DatabaseError::Get {
-                span,
-                sql: row.as_ref().expanded_sql().map(Cow::Owned),
-                index: Box::new(idx),
-                error,
-            }
-        };
-        let dbc = DbConstraint {
-            name: row.get("index_name").map_err(make_err("index_name"))?,
-            column_name: row.get("column_name").map_err(make_err("column_name"))?,
-            origin: row.get("origin").map_err(make_err("origin"))?,
-        };
-        Ok(dbc)
+        Self::query_infos(
+            conn,
+            sql.into(),
+            read_query,
+            span,
+        )
     }
 
     pub fn get_constraints(
@@ -308,7 +245,7 @@ impl SQLiteDatabase {
         table: &DbTable,
         span: Span,
     ) -> Result<Vec<DbConstraint>, DatabaseError> {
-        let column_names_sql = format!(
+        let sql = format!(
             "
             SELECT
                 p.origin,
@@ -325,67 +262,55 @@ impl SQLiteDatabase {
             ",
             &table.name
         );
-        let mut column_names = match conn.prepare(&column_names_sql) {
-            Ok(column_names) => column_names,
-            Err(error) => return Err(DatabaseError::Prepare { span, sql: column_names_sql.into(), error })
-        };
 
-        // TODO: HERE
+        let read_query = |row, span| Ok(DbConstraint {
+            name: Self::get_column("index_name", row, span)?,
+            column_name: Self::get_column("column_name", row, span)?,
+            origin: Self::get_column("origin", row, span)?,
+        });
 
-        let mut constraints: Vec<DbConstraint> = Vec::new();
-        let rows = column_names.query_and_then([], |row| self.get_constraint_info(row))?;
-
-        for row in rows {
-            constraints.push(row?);
-        }
-
-        Ok(constraints)
-    }
-
-    fn get_foreign_keys_info(&self, row: &Row) -> Result<DbForeignKey, SqliteError> {
-        let dbc = DbForeignKey {
-            column_name: row.get("from")?,
-            ref_table: row.get("table")?,
-            ref_column: row.get("to")?,
-        };
-        Ok(dbc)
+        Self::query_infos(
+            conn,
+            sql.into(),
+            read_query,
+            span,
+        )
     }
 
     pub fn get_foreign_keys(
         &self,
         conn: &Connection,
         table: &DbTable,
-    ) -> Result<Vec<DbForeignKey>, SqliteError> {
-        let mut column_names = conn.prepare(&format!(
+        span: Span,
+    ) -> Result<Vec<DbForeignKey>, DatabaseError> {
+        let sql = format!(
             "SELECT p.`from`, p.`to`, p.`table` FROM pragma_foreign_key_list('{}') p",
             &table.name
-        ))?;
+        );
 
-        let mut foreign_keys: Vec<DbForeignKey> = Vec::new();
-        let rows = column_names.query_and_then([], |row| self.get_foreign_keys_info(row))?;
-
-        for row in rows {
-            foreign_keys.push(row?);
-        }
-
-        Ok(foreign_keys)
-    }
-
-    fn get_index_info(&self, row: &Row) -> Result<DbIndex, SqliteError> {
-        let dbc = DbIndex {
-            name: row.get("index_name")?,
-            column_name: row.get("name")?,
-            seqno: row.get("seqno")?,
+        let read_query = |row, span| {
+            Ok(DbForeignKey {
+                column_name: Self::get_column("from", row, span)?,
+                ref_table: Self::get_column("table", row, span)?,
+                ref_column: Self::get_column("to", row, span)?,
+            })
         };
-        Ok(dbc)
+
+        Self::query_infos(
+            conn,
+            sql.into(),
+            read_query,
+            span,
+        )
     }
 
     pub fn get_indexes(
         &self,
         conn: &Connection,
         table: &DbTable,
-    ) -> Result<Vec<DbIndex>, SqliteError> {
-        let mut column_names = conn.prepare(&format!(
+        span: Span,
+    ) -> Result<Vec<DbIndex>, DatabaseError> {
+        let sql = format!(
             "
             SELECT
                 m.name AS index_name,
@@ -398,16 +323,68 @@ impl SQLiteDatabase {
                 AND m.tbl_name = '{}'
             ",
             &table.name,
-        ))?;
+        );
 
-        let mut indexes: Vec<DbIndex> = Vec::new();
-        let rows = column_names.query_and_then([], |row| self.get_index_info(row))?;
+        let read_query = |row, span| Ok(DbIndex {
+            name: Self::get_column("index_name", row, span)?,
+            column_name: Self::get_column("name", row, span)?,
+            seqno: Self::get_column("seqno", row, span)?,
+        });
 
-        for row in rows {
-            indexes.push(row?);
+        Self::query_infos(
+            conn,
+            sql.into(),
+            read_query,
+            span,
+        )
+    }
+
+    fn get_column<T: FromSql>(idx: impl RowIndex + Copy + 'static, row: &Row, span: Span) -> Result<T, DatabaseError> {
+        row.get(idx).map_err(|error| DatabaseError::Get {
+            span,
+            sql: row.as_ref().expanded_sql().map(Cow::Owned),
+            index: Box::new(idx),
+            error
+        })
+    }
+
+    // FIXME
+    fn query_infos<T>(
+        conn: &Connection,
+        sql: Cow<'static, str>,
+        read_query: impl Fn(&Row, Span) -> Result<T, DatabaseError>,
+        span: Span,
+    ) -> Result<Vec<T>, DatabaseError> {
+        // This uses a lot of matching to avoid unnecessary cloning because Rust doesn't understand
+        // .map_err()? as divergent code.
+
+        let mut column_names = match conn.prepare(&sql) {
+            Ok(column_names) => column_names,
+            Err(error) => return Err(DatabaseError::Prepare { span, sql, error }),
+        };
+
+        let mut infos: Vec<T> = Vec::new();
+        let mut rows = match column_names.query([]) {
+            Ok(rows) => rows,
+            Err(error) => return Err(DatabaseError::Query { span, sql, error }),
+        };
+
+        for i in 0.. {
+            match rows.next() {
+                Ok(None) => break,
+                Ok(Some(row)) => infos.push(read_query(row, span)?),
+                Err(error) => {
+                    return Err(DatabaseError::Iterate {
+                        span,
+                        sql,
+                        index: i,
+                        error,
+                    });
+                }
+            }
         }
 
-        Ok(indexes)
+        Ok(infos)
     }
 }
 

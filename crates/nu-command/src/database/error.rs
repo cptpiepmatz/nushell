@@ -5,7 +5,7 @@ use std::{
 
 use nu_engine::command_prelude::IoError;
 use nu_protocol::{ShellError, Span};
-use rusqlite::{DatabaseName, RowIndex, Statement};
+use rusqlite::{DatabaseName, Row, RowIndex, Statement};
 
 pub enum DatabaseError {
     /// Non-database errors.
