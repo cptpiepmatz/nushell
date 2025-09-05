@@ -1,12 +1,14 @@
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
+    fmt::Debug,
 };
 
 use nu_engine::command_prelude::IoError;
 use nu_protocol::{ShellError, Span};
-use rusqlite::{DatabaseName, Row, RowIndex, Statement};
+use rusqlite::{DatabaseName, RowIndex, Statement};
 
+#[derive(Debug)]
 pub enum DatabaseError {
     /// Non-database errors.
     ///
@@ -20,11 +22,13 @@ pub enum DatabaseError {
 
     // Failed to open SQLite database from open_connection
     OpenConnection {
+        path: DatabasePath,
         error: rusqlite::Error,
     },
 
     // Failed to set busy handler for SQLite database
     SetBusyHandler {
+        path: DatabasePath,
         error: rusqlite::Error,
     },
 
@@ -56,7 +60,7 @@ pub enum DatabaseError {
 
     Get {
         sql: Option<Cow<'static, str>>,
-        index: Box<dyn RowIndex>,
+        index: Box<dyn RowIndexDebug>,
         error: rusqlite::Error,
     },
 
@@ -73,6 +77,19 @@ pub enum DatabaseError {
     },
 }
 
+#[derive(Debug)]
+pub enum DatabasePath {
+    Path(PathBuf),
+    // "Failed to open SQLite standard connection in memory"
+    Memory,
+    // "Failed to open SQLite custom connection in memory"
+    // "Failed to set busy handler for SQLite custom connection in memory"
+    MemoryCustom,
+}
+
+trait RowIndexDebug: RowIndex + Debug {}
+impl<T: RowIndex + Debug> RowIndexDebug for T {}
+
 impl DatabaseError {
     pub(crate) fn get_sql(
         stmt: &Statement,
@@ -81,6 +98,10 @@ impl DatabaseError {
         stmt.expanded_sql()
             .map(Cow::Owned)
             .unwrap_or_else(|| raw_sql.into())
+    }
+
+    pub fn into_shell_error(self, call_span: Span) -> ShellError {
+        todo!()
     }
 }
 
