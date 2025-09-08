@@ -19,7 +19,10 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
         // Database-related
         // Adds all related commands to query databases
         #[cfg(feature = "sqlite")]
-        add_database_decls(&mut working_set);
+        match nu_experimental::DATABASE_CMD_NEXT.get() {
+            false => database::add_database_decls(&mut working_set),
+            true => database_next::add_database_decls(&mut working_set), 
+        }
 
         // Charts
         bind_command! {
