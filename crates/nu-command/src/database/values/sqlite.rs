@@ -6,7 +6,9 @@ use super::definitions::{
 };
 use nu_protocol::{
     CustomValue, FromValue, IntoValue, PipelineData, Record, ShellError, Signals, Span, Spanned,
-    Type, Value, engine::EngineState, shell_error::io::IoError,
+    Type, Value,
+    engine::{EngineState, Stack},
+    shell_error::io::IoError,
 };
 use rusqlite::{
     Connection, DatabaseName, Error as SqliteError, Row, RowIndex, Statement, ToSql,
@@ -51,11 +53,19 @@ pub struct SQLiteDatabase {
 impl SQLiteDatabase {
     const TYPE_NAME: &str = "SQLiteDatabase";
 
-    /// Construct a new `SQLiteDatabase` to be stored on disk.
-    pub fn new(path: impl Into<PathBuf>, signals: Signals) -> Self {
+    /// Construct a new `SQLiteDatabase` from a `DatabasePath`.
+    pub fn new(path: DatabasePath, signals: Signals) -> Self {
         Self {
-            path: DatabasePath::Path(path.into()),
+            path,
             signals,
+        }
+    }
+
+    /// Construct a new `SQLiteDatabase` on disk.
+    pub fn new_on_path(path: PathBuf, span: Span, signals: Signals) -> Self {
+        Self {
+            path: DatabasePath::Path(Spanned {item: path, span}),
+            signals
         }
     }
 
@@ -95,7 +105,7 @@ impl SQLiteDatabase {
         })?;
 
         match &buf == SQLITE_MAGIC_BYTES {
-            true => Ok(SQLiteDatabase::new(path, signals)),
+            true => Ok(SQLiteDatabase::new_on_path(path, span, signals)),
             false => Err(DatabaseError::NotASqliteFile { path }),
         }
     }
@@ -106,8 +116,8 @@ impl SQLiteDatabase {
     }
 
     pub fn open_connection(&self) -> Result<Connection, DatabaseError> {
-        let (conn, set_busy_handler) = match self.path {
-            DatabasePath::Path(path_buf) => (Connection::open(&path_buf), true),
+        let (conn, set_busy_handler) = match &self.path {
+            DatabasePath::Path(Spanned {item: path_buf, ..}) => (Connection::open(&path_buf), true),
             DatabasePath::InMemory => (Connection::open_in_memory(), false),
             DatabasePath::InMemoryCustom => (Connection::open(MEMORY_DB), true),
         };
@@ -354,7 +364,7 @@ impl SQLiteDatabase {
         row: &Row,
     ) -> Result<T, DatabaseError> {
         row.get(idx).map_err(|error| DatabaseError::Get {
-            sql: row.as_ref().expanded_sql().map(Cow::Owned),
+            sql: row.as_ref().expanded_sql().map(SqlInput::Owned),
             index: Box::new(idx),
             error,
         })
@@ -362,10 +372,10 @@ impl SQLiteDatabase {
 
     fn query_infos<T>(
         conn: &Connection,
-        sql: Cow<'static, str>,
+        sql: SqlInput,
         read_query: impl for<'r> Fn(&'r Row<'r>) -> Result<T, DatabaseError>,
     ) -> Result<Vec<T>, DatabaseError> {
-        let mut column_names = match conn.prepare(&sql) {
+        let mut column_names = match conn.prepare(sql.as_str()) {
             Ok(column_names) => column_names,
             Err(error) => return Err(DatabaseError::Prepare { sql, error }),
         };
@@ -547,7 +557,10 @@ impl SQLiteDatabase {
                 .map_err(|err| err.into_shell_error(call_span))?,
         };
 
-        let sql = SqlInput::Spanned { value: format!("SELECT * FROM [{}]", table_name.item), span: table_name.span };
+        let sql = SqlInput::Spanned {
+            value: format!("SELECT * FROM [{}]", table_name.item),
+            span: table_name.span,
+        };
 
         self.query(conn, sql, None, call_span)
     }
@@ -695,6 +708,20 @@ impl DatabasePath {
             DatabasePath::Path(path_buf) => Some(path_buf.item.as_path()),
             DatabasePath::InMemory => None,
             DatabasePath::InMemoryCustom => Some(Path::new(MEMORY_DB)),
+        }
+    }
+
+    pub fn new(
+        path: Spanned<String>,
+        engine_state: &EngineState,
+        stack: &Stack,
+    ) -> Result<Self, ShellError> {
+        match path.item.as_str() {
+            MEMORY_DB => Ok(Self::InMemoryCustom),
+            item => Ok(Self::Path(Spanned {
+                item: engine_state.cwd(Some(stack))?.join(item).to_std_path_buf(),
+                span: path.span,
+            })),
         }
     }
 }

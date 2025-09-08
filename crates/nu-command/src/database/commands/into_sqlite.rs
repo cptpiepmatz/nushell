@@ -1,12 +1,9 @@
-use crate::{
-    MEMORY_DB,
-    database::values::sqlite::{open_sqlite_db, values_to_sql},
-};
 use nu_engine::command_prelude::*;
 
 use itertools::Itertools;
 use nu_protocol::Signals;
-use std::{borrow::Cow, path::Path};
+
+use crate::{database::values::sqlite::DatabasePath, SQLiteDatabase};
 
 pub const DEFAULT_TABLE_NAME: &str = "main";
 
@@ -101,27 +98,22 @@ struct Table {
 
 impl Table {
     pub fn new(
-        db_path: &Spanned<String>,
+        db_path: Spanned<String>,
         table_name: Option<Spanned<String>>,
         engine_state: &EngineState,
         stack: &Stack,
+        call_span: Span,
     ) -> Result<Self, nu_protocol::ShellError> {
         let table_name = table_name
             .map(|table_name| table_name.item)
             .unwrap_or_else(|| DEFAULT_TABLE_NAME.to_string());
 
-        let span = db_path.span;
-        let db_path: Cow<'_, Path> = match db_path.item.as_str() {
-            MEMORY_DB => Cow::Borrowed(Path::new(&db_path.item)),
-            item => engine_state
-                .cwd(Some(stack))?
-                .join(item)
-                .to_std_path_buf()
-                .into(),
-        };
+        let db_path = DatabasePath::new(db_path, engine_state, stack)?;
+        let db = SQLiteDatabase::new(db_path, engine_state.signals().clone());
+
 
         // create the sqlite database table
-        let conn = open_sqlite_db(&db_path, span)?;
+        let conn = db.open_connection().map_err(|err| err.into_shell_error(call_span))?;
 
         Ok(Self { conn, table_name })
     }
@@ -206,7 +198,7 @@ fn operate(
     let span = call.head;
     let file_name: Spanned<String> = call.req(engine_state, stack, 0)?;
     let table_name: Option<Spanned<String>> = call.get_flag(engine_state, stack, "table-name")?;
-    let table = Table::new(&file_name, table_name, engine_state, stack)?;
+    let table = Table::new(file_name, table_name, engine_state, stack)?;
     Ok(action(engine_state, input, table, span, engine_state.signals())?.into_pipeline_data())
 }
 
