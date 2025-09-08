@@ -191,7 +191,7 @@ fn main() -> Result<()> {
     // you'll be able to access this open connection from anywhere in the program
     // by using the identical connection string.
     #[cfg(feature = "sqlite")]
-    let db = nu_command::open_connection_in_memory_custom()?;
+    let db = nu_command::database::open_connection_in_memory_custom()?;
     #[cfg(feature = "sqlite")]
     db.last_insert_rowid();
 
