@@ -110,11 +110,6 @@ impl SQLiteDatabase {
         }
     }
 
-    pub fn try_from_pipeline(input: PipelineData, span: Span) -> Result<Self, DatabaseError> {
-        Self::from_value(input.into_value(span).map_err(DatabaseError::Shell)?)
-            .map_err(DatabaseError::Shell)
-    }
-
     pub fn open_connection(&self) -> Result<Connection, DatabaseError> {
         let (conn, set_busy_handler) = match &self.path {
             DatabasePath::Path(Spanned {item: path_buf, ..}) => (Connection::open(&path_buf), true),
@@ -410,6 +405,10 @@ impl SQLiteDatabase {
 /// All of these include a [`call_span`](Span) to allow providing spanned errors.
 /// These methods directly return [`ShellError`] and need no further span handling.
 impl SQLiteDatabase {
+    pub fn try_from_pipeline(input: PipelineData, span: Span) -> Result<Self, ShellError> {
+        Self::from_value(input.into_value(span)?)
+    }
+
     pub fn query<'c>(
         &self,
         conn: impl Into<Option<&'c Connection>>,

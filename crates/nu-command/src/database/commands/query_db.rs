@@ -99,9 +99,12 @@ stor open | query db "SELECT data->'baz' AS baz FROM my_table" | update baz {fro
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let sql: Spanned<String> = call.req(engine_state, stack, 0)?;
-        let params_value: Value = call
+        let params: Value = call
             .get_flag(engine_state, stack, "params")?
             .unwrap_or_else(|| Value::nothing(Span::unknown()));
+
+        let db = SQLiteDatabase::try_from_pipeline(input, call.head)?;
+        let params = db.build_params(params)?;
 
         let params = nu_value_to_params(engine_state, params_value, call.head)?;
 
