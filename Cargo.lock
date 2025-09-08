@@ -3916,6 +3916,7 @@ dependencies = [
  "titlecase",
  "toml",
  "trash",
+ "typetag",
  "umask",
  "unicode-segmentation",
  "unicode-width 0.2.0",

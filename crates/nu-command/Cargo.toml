@@ -24,7 +24,7 @@ nu-experimental = { path = "../nu-experimental", version = "0.107.1" }
 nu-glob = { path = "../nu-glob", version = "0.107.1" }
 nu-json = { path = "../nu-json", version = "0.107.1" }
 nu-parser = { path = "../nu-parser", version = "0.107.1" }
-nu-path = { path = "../nu-path", version = "0.107.1" }
+nu-path = { path = "../nu-path", version = "0.107.1", features = ["serde"] }
 nu-pretty-hex = { path = "../nu-pretty-hex", version = "0.107.1" }
 nu-protocol = { path = "../nu-protocol", version = "0.107.1", default-features = false }
 nu-system = { path = "../nu-system", version = "0.107.1" }
@@ -109,6 +109,7 @@ sysinfo = { workspace = true }
 tabled = { workspace = true, features = ["ansi"], default-features = false }
 titlecase = { workspace = true }
 toml = { workspace = true, features = ["preserve_order"] }
+typetag = { workspace = true }
 unicode-segmentation = { workspace = true }
 update-informer = { workspace = true, optional = true }
 ureq = { workspace = true, default-features = false, features = [
@@ -229,7 +230,7 @@ rustls-tls = [
 ]
 
 plugin = ["nu-parser/plugin", "os"]
-sqlite = ["rusqlite"]
+sqlite = ["dep:rusqlite"]
 trash-support = ["trash"]
 
 [dev-dependencies]
