@@ -9,8 +9,8 @@ use nu_protocol::{
     Type, Value, engine::EngineState, shell_error::io::IoError,
 };
 use rusqlite::{
-    Connection, DatabaseName, Error as SqliteError, Row, RowIndex, Statement,
-    ToSql, params_from_iter,
+    Connection, DatabaseName, Error as SqliteError, Row, RowIndex, Statement, ToSql,
+    params_from_iter,
     types::{FromSql, ValueRef},
 };
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,8 @@ use std::{
     fs::File,
     io::Read,
     ops::Deref,
-    path::{Path, PathBuf}, str::FromStr,
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 
 const SQLITE_MAGIC_BYTES: &[u8; 16] = b"SQLite format 3\0";
@@ -423,11 +424,7 @@ impl SQLiteDatabase {
             .into_shell_error(call_span)
         })?;
 
-        let columns: Vec<TypedColumn> = stmt
-            .columns()
-            .iter()
-            .map(TypedColumn::from)
-            .collect();
+        let columns: Vec<TypedColumn> = stmt.columns().iter().map(TypedColumn::from).collect();
 
         let params = params.into().unwrap_or_default();
         let rows = match params {
@@ -482,7 +479,7 @@ impl SQLiteDatabase {
         )
     }
 
-    fn read_all<'c>(
+    pub fn read_all<'c>(
         &self,
         conn: impl Into<Option<&'c Connection>>,
         call_span: Span,
@@ -535,6 +532,54 @@ impl SQLiteDatabase {
         }
 
         Ok(Value::record(tables, call_span))
+    }
+
+    pub fn read_one<'c>(
+        &self,
+        conn: impl Into<Option<&'c Connection>>,
+        table_name: Spanned<String>,
+        call_span: Span,
+    ) -> Result<Value, ShellError> {
+        let conn = match conn.into() {
+            Some(conn) => conn,
+            None => &self
+                .open_connection()
+                .map_err(|err| err.into_shell_error(call_span))?,
+        };
+
+        let sql = SqlInput::Spanned { value: format!("SELECT * FROM [{}]", table_name.item), span: table_name.span };
+
+        self.query(conn, sql, None, call_span)
+    }
+
+    pub fn build_params(&self, value: Value) -> Result<NuSqlParams, ShellError> {
+        match value {
+            Value::Record { val, .. } => Ok(NuSqlParams::Named(
+                val.into_owned()
+                    .into_iter()
+                    .map(|(mut column, value)| {
+                        if !column.starts_with([':', '@', '$']) {
+                            column.insert(0, ':')
+                        };
+                        (column, Box::new(ValueDto(value)) as Box<dyn ToSql>)
+                    })
+                    .collect(),
+            )),
+
+            Value::List { vals, .. } => Ok(NuSqlParams::List(
+                vals.into_iter()
+                    .map(|val| Box::new(ValueDto(val)) as Box<dyn ToSql>)
+                    .collect(),
+            )),
+
+            // We accept no parameters
+            Value::Nothing { .. } => Ok(NuSqlParams::default()),
+
+            _ => Err(ShellError::TypeMismatch {
+                err_message: "Invalid parameters value: expected record or list".to_string(),
+                span: value.span(),
+            }),
+        }
     }
 }
 
@@ -658,10 +703,7 @@ impl DatabasePath {
 pub enum SqlInput {
     Static(&'static str),
     Owned(String),
-    Spanned {
-        value: String,
-        span: Span,
-    }
+    Spanned { value: String, span: Span },
 }
 
 impl SqlInput {
@@ -672,11 +714,11 @@ impl SqlInput {
             SqlInput::Spanned { value: s, .. } => s,
         }
     }
-    
+
     pub fn span(&self) -> Option<Span> {
         match self {
-            Self::Spanned {span, ..} => Some(*span),
-            _ => None   
+            Self::Spanned { span, .. } => Some(*span),
+            _ => None,
         }
     }
 }
