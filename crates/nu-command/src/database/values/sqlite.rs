@@ -1,4 +1,4 @@
-use crate::database::error::{DatabaseError, DatabasePath};
+use crate::database::{error::DatabaseError, values::dto::ValueDto};
 
 use super::definitions::{
     db_column::DbColumn, db_constraint::DbConstraint, db_foreignkey::DbForeignKey,
@@ -9,52 +9,93 @@ use nu_protocol::{
     Type, Value, engine::EngineState, shell_error::io::IoError,
 };
 use rusqlite::{
-    Connection, DatabaseName, Error as SqliteError, OpenFlags, Row, RowIndex, Rows, Statement,
-    ToSql,
+    Connection, DatabaseName, Error as SqliteError, Row, RowIndex, Statement,
+    ToSql, params_from_iter,
     types::{FromSql, ValueRef},
 };
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
+    fmt::{Debug, Display},
     fs::File,
     io::Read,
-    path::{Path, PathBuf},
+    ops::Deref,
+    path::{Path, PathBuf}, str::FromStr,
 };
 
-const SQLITE_MAGIC_BYTES: &[u8] = "SQLite format 3\0".as_bytes();
-pub const MEMORY_DB: &str = "file:memdb1?mode=memory&cache=shared";
+const SQLITE_MAGIC_BYTES: &[u8; 16] = b"SQLite format 3\0";
+const MEMORY_DB: &str = "file:memdb1?mode=memory&cache=shared";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SQLiteDatabase {
-    // I considered storing a SQLite connection here, but decided against it because
-    // 1) YAGNI, 2) it's not obvious how cloning a connection could work, 3) state
-    // management gets tricky quick. Revisit this approach if we find a compelling use case.
-    pub path: PathBuf,
+    /// Path representation to build [`Connection`]s.
+    ///
+    /// # Implementation Notes
+    /// This doesn't store a `Connection` directly because:
+    /// - YAGNI
+    /// - not obvious how cloning could work
+    /// - tricky state management
+    pub path: DatabasePath,
+
+    // Skip serialization for this as `CustomValue`s only really get serialized for plugins.
     #[serde(skip, default = "Signals::empty")]
-    // this understandably can't be serialized. think that's OK, I'm not aware of a
-    // reason why a CustomValue would be serialized outside of a plugin
     signals: Signals,
 }
 
+/// Unspanned methods.
+///
+/// All of these methods do not work with spans as they operate without any user input.
+/// Therefore do all of these return [`DatabaseError`] which can be converted into a [`ShellError`]
+/// using [`DatabaseError::into_shell_error`] with a provided [`Span`].
 impl SQLiteDatabase {
     const TYPE_NAME: &str = "SQLiteDatabase";
 
-    pub fn new(path: &Path, signals: Signals) -> Self {
+    /// Construct a new `SQLiteDatabase` to be stored on disk.
+    pub fn new(path: impl Into<PathBuf>, signals: Signals) -> Self {
         Self {
-            path: PathBuf::from(path),
+            path: DatabasePath::Path(path.into()),
             signals,
         }
     }
 
-    pub fn try_from_path(path: &Path, signals: Signals, span: Span) -> Result<Self, DatabaseError> {
-        let from_io_error = IoError::factory(span, path);
-        let mut file = File::open(path).map_err(&from_io_error)?;
+    /// Construct a new in-memory `SQLiteDatabase`.
+    pub fn new_in_memory(signals: Signals) -> Self {
+        Self {
+            path: DatabasePath::InMemory,
+            signals,
+        }
+    }
+
+    /// Construct a new in-memory `SQLiteDatabase` with custom parameters.
+    pub fn new_in_custom_memory(signals: Signals) -> Self {
+        Self {
+            path: DatabasePath::InMemoryCustom,
+            signals,
+        }
+    }
+
+    pub fn read_from_path(
+        path: impl Into<PathBuf>,
+        signals: Signals,
+        span: Span,
+    ) -> Result<Self, DatabaseError> {
+        let path = path.into();
+        let mut file =
+            File::open(&path).map_err(|error| IoError::new(error, span, path.clone()))?;
 
         let mut buf: [u8; 16] = [0; 16];
-        file.read_exact(&mut buf).map_err(&from_io_error)?;
-        match buf == SQLITE_MAGIC_BYTES {
+        file.read_exact(&mut buf).map_err(|error| {
+            IoError::new_with_additional_context(
+                error,
+                span,
+                path.clone(),
+                "Could not read magic bytes for SQLite database file",
+            )
+        })?;
+
+        match &buf == SQLITE_MAGIC_BYTES {
             true => Ok(SQLiteDatabase::new(path, signals)),
-            false => Err(DatabaseError::NotASqliteFile { path: path.into() }),
+            false => Err(DatabaseError::NotASqliteFile { path }),
         }
     }
 
@@ -63,35 +104,26 @@ impl SQLiteDatabase {
             .map_err(DatabaseError::Shell)
     }
 
-    pub fn query(
-        &self,
-        sql: &Spanned<String>,
-        params: NuSqlParams,
-        call_span: Span,
-    ) -> Result<Value, DatabaseError> {
-        let conn = open_sqlite_db(&self.path, call_span)?;
-        let stream = run_sql_query(conn, sql, params, &self.signals)
-            .map_err(|e| e.into_shell_error(sql.span, "Failed to query SQLite database"))?;
-
-        Ok(stream)
-    }
-
     pub fn open_connection(&self) -> Result<Connection, DatabaseError> {
-        let select_database_path = || match &self.path {
-            path if path == Path::new(MEMORY_DB) => DatabasePath::MemoryCustom,
-            path => DatabasePath::Path(path.into()),
+        let (conn, set_busy_handler) = match self.path {
+            DatabasePath::Path(path_buf) => (Connection::open(&path_buf), true),
+            DatabasePath::InMemory => (Connection::open_in_memory(), false),
+            DatabasePath::InMemoryCustom => (Connection::open(MEMORY_DB), true),
         };
 
-        let conn = Connection::open(&self.path).map_err(|error| DatabaseError::OpenConnection {
-            path: select_database_path(),
+        let conn = conn.map_err(|error| DatabaseError::OpenConnection {
+            path: self.path.clone(),
             error,
         })?;
-        conn.busy_handler(Some(SQLiteDatabase::sleeper))
-            .map_err(|error| DatabaseError::SetBusyHandler {
-                path: select_database_path(),
-                error,
-            })?;
-            
+
+        if set_busy_handler {
+            conn.busy_handler(Some(SQLiteDatabase::sleeper))
+                .map_err(|error| DatabaseError::SetBusyHandler {
+                    path: self.path.clone(),
+                    error,
+                })?;
+        }
+
         Ok(conn)
     }
 
@@ -105,7 +137,7 @@ impl SQLiteDatabase {
         let table_names_sql = "SELECT name FROM sqlite_master WHERE type = 'table'";
         let mut table_names =
             conn.prepare(table_names_sql)
-                .map_err(|error| DatabaseError::PrepareConnection {
+                .map_err(|error| DatabaseError::Prepare {
                     sql: table_names_sql.into(),
                     error,
                 })?;
@@ -317,7 +349,7 @@ impl SQLiteDatabase {
     }
 
     fn get_column<T: FromSql>(
-        idx: impl RowIndex + Copy + 'static,
+        idx: impl RowIndex + Debug + Copy + 'static,
         row: &Row,
     ) -> Result<T, DatabaseError> {
         row.get(idx).map_err(|error| DatabaseError::Get {
@@ -332,9 +364,6 @@ impl SQLiteDatabase {
         sql: Cow<'static, str>,
         read_query: impl for<'r> Fn(&'r Row<'r>) -> Result<T, DatabaseError>,
     ) -> Result<Vec<T>, DatabaseError> {
-        // This uses a lot of matching to avoid unnecessary cloning because Rust doesn't understand
-        // .map_err()? as divergent code.
-
         let mut column_names = match conn.prepare(&sql) {
             Ok(column_names) => column_names,
             Err(error) => return Err(DatabaseError::Prepare { sql, error }),
@@ -361,6 +390,151 @@ impl SQLiteDatabase {
         }
 
         Ok(infos)
+    }
+}
+
+/// Spanned methods.
+///
+/// These methods are expected to be used from user input and therefore all work with spans.
+/// All of these include a [`call_span`](Span) to allow providing spanned errors.
+/// These methods directly return [`ShellError`] and need no further span handling.
+impl SQLiteDatabase {
+    pub fn query<'c>(
+        &self,
+        conn: impl Into<Option<&'c Connection>>,
+        sql: impl Into<SqlInput>,
+        params: impl Into<Option<NuSqlParams>>,
+        call_span: Span,
+    ) -> Result<Value, ShellError> {
+        let sql = sql.into();
+
+        let conn = match conn.into() {
+            Some(conn) => conn,
+            None => &self
+                .open_connection()
+                .map_err(|error| error.into_shell_error(call_span))?,
+        };
+
+        let mut stmt = conn.prepare(sql.as_str()).map_err(|error| {
+            DatabaseError::Prepare {
+                sql: sql.clone(),
+                error,
+            }
+            .into_shell_error(call_span)
+        })?;
+
+        let columns: Vec<TypedColumn> = stmt
+            .columns()
+            .iter()
+            .map(TypedColumn::from)
+            .collect();
+
+        let params = params.into().unwrap_or_default();
+        let rows = match params {
+            NuSqlParams::List(items) => {
+                stmt.query(params_from_iter(items.iter().map(|item| item.deref())))
+            }
+            NuSqlParams::Named(items) => {
+                let params: Vec<(&str, &dyn ToSql)> = items
+                    .iter()
+                    .map(|(key, val)| (key.as_str(), val.deref()))
+                    .collect();
+                stmt.query(params.as_slice())
+            }
+        };
+        let mut rows = rows.map_err(|error| {
+            DatabaseError::Query {
+                sql: sql.clone(),
+                error,
+            }
+            .into_shell_error(call_span)
+        })?;
+
+        let mut row_values = Vec::new();
+        for idx in 0.. {
+            self.signals.check(&call_span)?;
+            match rows.next() {
+                Ok(None) => break,
+                Ok(Some(row)) => row_values.push(self.row_to_value(row, call_span, &columns)),
+                Err(error) => {
+                    return Err(DatabaseError::Iterate {
+                        sql: sql.clone(),
+                        index: idx,
+                        error,
+                    }
+                    .into_shell_error(call_span));
+                }
+            }
+        }
+
+        Ok(Value::list(row_values, call_span))
+    }
+
+    fn row_to_value(&self, row: &Row, span: Span, columns: &[TypedColumn]) -> Value {
+        Value::record(
+            Record::from_iter(columns.iter().enumerate().map(|(i, col)| {
+                (
+                    col.name.clone(),
+                    ValueDto::from_value_ref(row.get_ref_unwrap(i), col.decl_type, span).0,
+                )
+            })),
+            span,
+        )
+    }
+
+    fn read_all<'c>(
+        &self,
+        conn: impl Into<Option<&'c Connection>>,
+        call_span: Span,
+    ) -> Result<Value, ShellError> {
+        let conn = match conn.into() {
+            Some(conn) => conn,
+            None => &self
+                .open_connection()
+                .map_err(|err| err.into_shell_error(call_span))?,
+        };
+
+        let get_table_names_sql = "SELECT name FROM sqlite_master WHERE type = 'table'";
+        let mut get_table_names = conn.prepare(get_table_names_sql).map_err(|error| {
+            DatabaseError::Prepare {
+                sql: get_table_names_sql.into(),
+                error,
+            }
+            .into_shell_error(call_span)
+        })?;
+
+        let mut rows = get_table_names.query([]).map_err(|error| {
+            DatabaseError::Query {
+                sql: get_table_names_sql.into(),
+                error,
+            }
+            .into_shell_error(call_span)
+        })?;
+
+        let mut tables = Record::new();
+        for i in 0.. {
+            self.signals.check(&call_span)?;
+            match rows.next() {
+                Err(error) => {
+                    return Err(DatabaseError::Iterate {
+                        sql: get_table_names_sql.into(),
+                        index: i,
+                        error,
+                    }
+                    .into_shell_error(call_span));
+                }
+                Ok(None) => break,
+                Ok(Some(row)) => {
+                    let table_name: String =
+                        Self::get_column(0, row).map_err(|err| err.into_shell_error(call_span))?;
+                    let table_sql = format!("SELECT * FROM [{table_name}]");
+                    let rows = self.query(conn, table_sql, None, call_span)?;
+                    tables.push(table_name, rows);
+                }
+            }
+        }
+
+        Ok(Value::record(tables, call_span))
     }
 }
 
@@ -410,7 +584,9 @@ impl CustomValue for SQLiteDatabase {
     }
 
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
-        let db = open_sqlite_db(&self.path, span)?;
+        let db = self
+            .open_connection()
+            .map_err(|err| err.into_shell_error(span))?;
         read_entire_sqlite_db(db, span, &self.signals)
             .map_err(|e| e.into_shell_error(span, "Failed to read from SQLite database"))
     }
@@ -450,6 +626,89 @@ impl CustomValue for SQLiteDatabase {
 
     fn typetag_deserialize(&self) {
         unimplemented!("typetag_deserialize")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DatabasePath {
+    /// Store database on disk.
+    Path(Spanned<PathBuf>),
+
+    /// Store database in memory.
+    InMemory,
+
+    /// Store database in memory with custom parameters.
+    InMemoryCustom,
+}
+
+impl DatabasePath {
+    /// [`Path`] representation of a `DatabasePath`.
+    ///
+    /// Returns [`None`] for `DatabasePath::Memory`.
+    pub fn as_path(&self) -> Option<&Path> {
+        match self {
+            DatabasePath::Path(path_buf) => Some(path_buf.item.as_path()),
+            DatabasePath::InMemory => None,
+            DatabasePath::InMemoryCustom => Some(Path::new(MEMORY_DB)),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SqlInput {
+    Static(&'static str),
+    Owned(String),
+    Spanned {
+        value: String,
+        span: Span,
+    }
+}
+
+impl SqlInput {
+    pub fn as_str(&self) -> &str {
+        match self {
+            SqlInput::Static(s) => s,
+            SqlInput::Owned(s) => s,
+            SqlInput::Spanned { value: s, .. } => s,
+        }
+    }
+    
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Self::Spanned {span, ..} => Some(*span),
+            _ => None   
+        }
+    }
+}
+
+impl From<&'static str> for SqlInput {
+    fn from(value: &'static str) -> Self {
+        Self::Static(value)
+    }
+}
+
+impl From<String> for SqlInput {
+    fn from(value: String) -> Self {
+        Self::Owned(value)
+    }
+}
+
+impl From<Spanned<String>> for SqlInput {
+    fn from(value: Spanned<String>) -> Self {
+        Self::Spanned {
+            value: value.item,
+            span: value.span,
+        }
+    }
+}
+
+impl Display for SqlInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SqlInput::Static(s) => Display::fmt(s, f),
+            SqlInput::Owned(s) => Display::fmt(s, f),
+            SqlInput::Spanned { value: s, .. } => Display::fmt(s, f),
+        }
     }
 }
 
@@ -633,11 +892,24 @@ pub enum DeclType {
 }
 
 impl DeclType {
+    #[deprecated]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "JSON" => Some(DeclType::Json),
             "JSONB" => Some(DeclType::Jsonb),
             _ => None, // We are only special-casing JSON(B) columns for now
+        }
+    }
+}
+
+impl FromStr for DeclType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "JSON" => Ok(DeclType::Json),
+            "JSONB" => Ok(DeclType::Jsonb),
+            _ => Err(()), // We are only special-casing JSON(B) columns for now
         }
     }
 }
@@ -648,7 +920,17 @@ pub struct TypedColumn {
     pub decl_type: Option<DeclType>,
 }
 
+impl<'s> From<&rusqlite::Column<'s>> for TypedColumn {
+    fn from(c: &rusqlite::Column<'s>) -> Self {
+        Self {
+            name: c.name().to_owned(),
+            decl_type: c.decl_type().and_then(DeclType::from_str),
+        }
+    }
+}
+
 impl TypedColumn {
+    #[deprecated]
     pub fn from_rusqlite_column(c: &rusqlite::Column) -> Self {
         Self {
             name: c.name().to_owned(),
@@ -787,12 +1069,12 @@ pub fn convert_sqlite_value_to_nu_value(
 #[deprecated]
 pub fn open_connection_in_memory_custom() -> Result<Connection, DatabaseError> {
     let conn = Connection::open(MEMORY_DB).map_err(|error| DatabaseError::OpenConnection {
-        path: DatabasePath::MemoryCustom,
+        path: DatabasePath::InMemoryCustom,
         error,
     })?;
     conn.busy_handler(Some(SQLiteDatabase::sleeper))
         .map_err(|error| DatabaseError::SetBusyHandler {
-            path: DatabasePath::MemoryCustom,
+            path: DatabasePath::InMemoryCustom,
             error,
         })?;
     Ok(conn)
@@ -801,7 +1083,7 @@ pub fn open_connection_in_memory_custom() -> Result<Connection, DatabaseError> {
 #[deprecated]
 pub fn open_connection_in_memory() -> Result<Connection, DatabaseError> {
     let conn = Connection::open_in_memory().map_err(|error| DatabaseError::OpenConnection {
-        path: DatabasePath::Memory,
+        path: DatabasePath::InMemory,
         error,
     })?;
     Ok(conn)
