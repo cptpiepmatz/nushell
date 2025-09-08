@@ -3095,3 +3095,58 @@ impl_cmp_std!(<> OsStr, PathBuf<Form>);
 impl_cmp_std!(<'a> &'a OsStr, PathBuf<Form>);
 impl_cmp_std!(<'a> Cow<'a, OsStr>, PathBuf<Form>);
 impl_cmp_std!(<> OsString, PathBuf<Form>);
+
+#[cfg(feature = "serde")]
+mod serde_impl {
+    use super::*;
+    use serde::{Deserialize, Serialize, de::Error};
+
+    impl<Form: PathForm> Serialize for Path<Form> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            self.inner.serialize(serializer)
+        }
+    }
+
+    impl<Form: PathForm> Serialize for PathBuf<Form> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            self.inner.serialize(serializer)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for PathBuf<Any> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            Ok(PathBuf::from(std::path::PathBuf::deserialize(
+                deserializer,
+            )?))
+        }
+    }
+
+    impl<'de> Deserialize<'de> for PathBuf<Relative> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let any = PathBuf::<Any>::deserialize(deserializer)?;
+            Self::try_from(any).map_err(|_| D::Error::custom("path is not relative"))
+        }
+    }
+
+    impl<'de> Deserialize<'de> for PathBuf<Absolute> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let any = PathBuf::<Any>::deserialize(deserializer)?;
+            Self::try_from(any).map_err(|_| D::Error::custom("path is not absolute"))
+        }
+    }
+}

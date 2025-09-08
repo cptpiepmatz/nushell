@@ -14,12 +14,17 @@ bench = false
 [dependencies]
 dirs = { workspace = true }
 ref-cast = "1.0.23"
+serde = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 omnipath = { workspace = true }
 
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies]
 pwd = { workspace = true }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
 
 [lints]
 workspace = true
