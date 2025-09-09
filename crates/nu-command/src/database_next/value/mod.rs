@@ -3,6 +3,8 @@ use nu_protocol::{CustomValue, FromValue, IntoValue, ShellError, Span, Value};
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, path::{Path, PathBuf}};
 
+use crate::database_next::{connection::DatabaseConnection, error::DatabaseError};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseValue {
     storage: DatabaseStorage,
@@ -10,6 +12,10 @@ pub struct DatabaseValue {
 
 impl DatabaseValue {
     pub const TYPE_NAME: &'static str = "database";
+
+    pub fn open_connection(&self) -> Result<DatabaseConnection, DatabaseError> {
+        DatabaseConnection::open(self)
+    }
 }
 
 #[typetag::serde]
