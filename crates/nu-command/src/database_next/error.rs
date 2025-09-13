@@ -23,6 +23,12 @@ pub enum DatabaseError {
         error: rusqlite::Error,
     },
 
+    QueryStatement {
+        sql: SqlString,
+        span: Span,
+        error: rusqlite::Error,
+    },
+
     Io(IoError),
 
     FromUtf8 {

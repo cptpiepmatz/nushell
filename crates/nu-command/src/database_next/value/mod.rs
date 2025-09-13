@@ -1,9 +1,7 @@
-use nu_path::AbsolutePathBuf;
 use nu_protocol::{CustomValue, FromValue, IntoValue, ShellError, Span, Value};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, path::{Path, PathBuf}};
 
-use crate::database_next::{connection::DatabaseConnection, error::DatabaseError, storage::DatabaseStorage};
+use crate::database_next::plumbing::storage::DatabaseStorage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseValue {
@@ -25,6 +23,7 @@ impl CustomValue for DatabaseValue {
     }
 
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
+        let _ = span;
         todo!()
     }
 
@@ -42,6 +41,7 @@ impl CustomValue for DatabaseValue {
         column_name: String,
         path_span: Span,
     ) -> Result<Value, ShellError> {
+        let _ = (self_span, column_name, path_span);
         todo!()
     }
 }
