@@ -1,4 +1,4 @@
-use nu_protocol::Span;
+use nu_protocol::{Span, Value};
 use rusqlite::{Rows, Statement, ToSql};
 
 use crate::database_next::{
@@ -29,7 +29,7 @@ impl<'c> DatabaseStatement<'c> {
 
     #[inline]
     fn apply_params<'s, T, FU, FN>(
-        &'s mut self,
+        stmt: &'s mut Statement<'c>,
         params: DatabaseParams,
         mut unnamed: FU,
         mut named: FN,
@@ -42,55 +42,56 @@ impl<'c> DatabaseStatement<'c> {
         match params {
             DatabaseParams::Unnamed(values) => {
                 let params: Vec<_> = values.iter().map(|v| v as &dyn ToSql).collect();
-                unnamed(&mut self.inner, params.as_slice())
+                unnamed(stmt, params.as_slice())
             }
             DatabaseParams::Named(values) => {
                 let params: Vec<_> = values
                     .iter()
                     .map(|(k, v)| (k.as_str(), v as &dyn ToSql))
                     .collect();
-                named(&mut self.inner, params.as_slice())
+                named(stmt, params.as_slice())
             }
         }
     }
 
     pub fn execute(&mut self, params: DatabaseParams, span: Span) -> Result<usize, DatabaseError> {
-        self.apply_params(
+        Self::apply_params(
+            &mut self.inner,
             params,
             |stmt, params| stmt.execute(params),
             |stmt, params| stmt.execute(params),
         )
         .map_err(|error| DatabaseError::ExecuteStatement {
-            sql: self.sql(),
+            sql: self.sql.clone(),
             span,
             error,
         })
     }
 
-    pub fn query_raw(&mut self, params: DatabaseParams, span: Span) -> Result<Rows<'_>, DatabaseError> {
-        let self_ptr: *const Self = self;
-
-        self.apply_params(
+    #[inline]
+    fn query_rows<'s>(
+        stmt: &'s mut Statement<'c>,
+        sql: &SqlString,
+        params: DatabaseParams,
+        span: Span,
+    ) -> Result<Rows<'s>, DatabaseError> {
+        Self::apply_params(
+            stmt,
             params,
             |stmt, p| stmt.query(p),
             |stmt, p| stmt.query(p),
         )
-        .map_err(|error| {
-            // SAFETY:
-            // - Runs only on Err, no `Rows<'_>`, so no active `&mut self` borrow.
-            // - We don't move `self` in this fn, so `self_ptr` stays valid.
-            // - `sql()` needs only `&self` and does not mutate.
-            // - `map_err` can't take `&self` (Ok holds `Rows<'_>` borrowing `self`), so we read via `self_ptr`.
-            //
-            // ALTERNATIVE:
-            // - Call `self.sql()` before `apply_params`, but that may clone strings/span on the fast path.
-            let sql = unsafe { (&*self_ptr).sql() };
-            DatabaseError::QueryStatement { sql, span, error }
+        .map_err(|error| DatabaseError::QueryStatement {
+            sql: sql.clone(),
+            span,
+            error,
         })
     }
 
-    pub fn query(&mut self, params: DatabaseParams, span: Span) -> Result<(), DatabaseError> {
-        let _ = (params, span);
+    pub fn query(&mut self, params: DatabaseParams, span: Span) -> Result<Value, DatabaseError> {
+        let mut rows = Self::query_rows(&mut self.inner, &self.sql, params, span)?;
+        let row = rows.next().unwrap().unwrap();
+        let sql = self.sql.expanded(row.as_ref());
         todo!()
     }
 }
