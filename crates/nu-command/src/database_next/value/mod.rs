@@ -3,7 +3,7 @@ use nu_protocol::{CustomValue, FromValue, IntoValue, ShellError, Span, Value};
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, path::{Path, PathBuf}};
 
-use crate::database_next::{connection::DatabaseConnection, error::DatabaseError};
+use crate::database_next::{connection::DatabaseConnection, error::DatabaseError, storage::DatabaseStorage};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseValue {
@@ -12,10 +12,6 @@ pub struct DatabaseValue {
 
 impl DatabaseValue {
     pub const TYPE_NAME: &'static str = "database";
-
-    pub fn open_connection(&self) -> Result<DatabaseConnection, DatabaseError> {
-        DatabaseConnection::open(self)
-    }
 }
 
 #[typetag::serde]
@@ -77,24 +73,8 @@ impl FromValue for DatabaseValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DatabaseStorage {
-    File { path: AbsolutePathBuf, span: Span },
-    InMemoryStor,
-    InMemoryHistory,
-}
-
-impl DatabaseStorage {
-    /// Get storage path for the database.
-    ///
-    /// The return is marked as a [`Path`] as [`Connection::open`](rusqlite::Connection::open) asks
-    /// for an [`AsRef<Path>`](AsRef) even though this might contain in memory values like
-    /// ":memory:".
-    pub fn as_path(&self) -> &Path {
-        match self {
-            DatabaseStorage::File { path, .. } => path.as_std_path(),
-            DatabaseStorage::InMemoryStor => Path::new(":memory:"),
-            DatabaseStorage::InMemoryHistory => Path::new("file:memdb1?mode=memory&cache=shared"),
-        }
+impl AsRef<DatabaseStorage> for DatabaseValue {
+    fn as_ref(&self) -> &DatabaseStorage {
+        &self.storage
     }
 }

@@ -3,7 +3,7 @@ use nu_protocol::engine::StateWorkingSet;
 mod commands;
 mod value;
 mod error;
-mod connection;
+mod plumbing;
 
 const SQLITE_MAGIC_BYTES: &[u8; 16] = b"SQLite format 3\0";
 
