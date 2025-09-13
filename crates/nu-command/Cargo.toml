@@ -180,6 +180,7 @@ os = [
 	# include other features
 	"js",
 	"network",
+	"nu-engine/os",
 	"nu-protocol/os",
 	"nu-utils/os",
 
