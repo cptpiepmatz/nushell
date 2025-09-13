@@ -1,7 +1,13 @@
 use nu_protocol::{Span, shell_error::location::Location};
 use rusqlite::Connection;
 
-use crate::database_next::{error::DatabaseError, plumbing::{sql::SqlString, statement::DatabaseStatement, storage::DatabaseStorage}};
+use crate::database_next::{
+    error::DatabaseError,
+    plumbing::{
+        params::DatabaseParams, sql::SqlString, statement::DatabaseStatement,
+        storage::DatabaseStorage,
+    },
+};
 
 #[derive(Debug)]
 pub struct DatabaseConnection {
@@ -35,12 +41,17 @@ impl DatabaseConnection {
     ) -> Result<DatabaseStatement<'_>, DatabaseError> {
         let conn = &self.inner;
         match conn.prepare(sql.as_str()) {
-            Ok(stmt) => Ok(DatabaseStatement { inner: stmt, sql}),
-            Err(error) => Err(DatabaseError::PrepareStatement { sql, span, error })
+            Ok(stmt) => Ok(DatabaseStatement { inner: stmt, sql }),
+            Err(error) => Err(DatabaseError::PrepareStatement { sql, span, error }),
         }
     }
 
-    pub fn execute() -> Result<(), DatabaseError> {
-        todo!()
+    pub fn execute(
+        &self,
+        sql: SqlString,
+        params: DatabaseParams,
+        span: Span,
+    ) -> Result<usize, DatabaseError> {
+        self.prepare(sql, span)?.execute(params, span)
     }
 }
