@@ -1,6 +1,6 @@
 use std::string::FromUtf8Error;
 
-use nu_protocol::{Span, shell_error::io::IoError};
+use nu_protocol::{shell_error::io::IoError, Span, Type, Value};
 
 use crate::database_next::plumbing::{sql::SqlString, storage::DatabaseStorage};
 
@@ -27,6 +27,17 @@ pub enum DatabaseError {
         sql: SqlString,
         span: Span,
         error: rusqlite::Error,
+    },
+
+    Iterate {
+        sql: SqlString,
+        index: usize,
+        error: rusqlite::Error,
+    },
+
+    Unsupported {
+        r#type: Type,
+        span: Span,
     },
 
     Io(IoError),
