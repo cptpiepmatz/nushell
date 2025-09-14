@@ -40,6 +40,7 @@ impl DatabaseConnection {
     pub fn open_from_value(value: Value) -> Result<Self, DatabaseError> {
         let bytes = value.into_binary().map_err(DatabaseError::Shell)?;
         
+        // TODO: use `Connection::deserialize_read_exact` to load bytes as sqlite db
 
         todo!()
     }
