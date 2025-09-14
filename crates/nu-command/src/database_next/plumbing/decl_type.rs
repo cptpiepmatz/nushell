@@ -17,37 +17,72 @@ pub enum DatabaseDeclType {
     Binary,
     CellPath,
     Nothing,
-    Any,
 }
 
 impl DatabaseDeclType {
+    // strict types
+    const INT: &str = "INT";
+    const FLOAT: &str = "REAL";
+    const STRING: &str = "TEXT";
+    const BINARY: &str = "BLOB";
+    const ANY: &str = "ANY";
+
+    // custom types when not strict
+    const BOOL: &str = "NU BOOL TEXT";
+    const GLOB: &str = "NU GLOB TEXT";
+    const FILESIZE: &str = "NU FILESIZE INT";
+    const DURATION: &str = "NU DURATION INT";
+    const DATE: &str = "NU DATE TEXT";
+    const RECORD: &str = "NU RECORD JSON TEXT";
+    const LIST: &str = "NU LIST JSON TEXT";
+    const CELLPATH: &str = "NU CELLPATH TEXT";
+    const NOTHING: &str = "NU NOTHING ANY";
+
     #[rustfmt::skip]
     pub fn as_str(&self, strict: bool) -> Option<&str> {
         match (self, strict) {
-            (Self::Bool,     true)  => Some("TEXT"),
-            (Self::Bool,     false) => Some("BOOL TEXT"),
-            (Self::Int,      _)     => Some("INT"),
-            (Self::Float,    _)     => Some("REAL"),
-            (Self::String,   _)     => Some("TEXT"),
+            (Self::Bool,     true)  => Some(Self::STRING),
+            (Self::Bool,     false) => Some(Self::BOOL),
+            (Self::Int,      _)     => Some(Self::INT),
+            (Self::Float,    _)     => Some(Self::FLOAT),
+            (Self::String,   _)     => Some(Self::STRING),
             (Self::Glob,     true)  => None,
-            (Self::Glob,     false) => Some("GLOB TEXT"),
+            (Self::Glob,     false) => Some(Self::GLOB),
             (Self::Filesize, true)  => None,
-            (Self::Filesize, false) => Some("FILESIZE INT"),
+            (Self::Filesize, false) => Some(Self::FILESIZE),
             (Self::Duration, true)  => None,
-            (Self::Duration, false) => Some("DURATION INT"),
+            (Self::Duration, false) => Some(Self::DURATION),
             (Self::Date,     true)  => None,
-            (Self::Date,     false) => Some("DATE TEXT"),
-            (Self::Record,   true)  => Some("TEXT"),
-            (Self::Record,   false) => Some("RECORD JSON TEXT"),
-            (Self::List,     true)  => Some("TEXT"),
-            (Self::List,     false) => Some("LIST JSON TEXT"),
-            (Self::Binary,   _)     => Some("BLOB"),
+            (Self::Date,     false) => Some(Self::DATE),
+            (Self::Record,   true)  => Some(Self::STRING),
+            (Self::Record,   false) => Some(Self::RECORD),
+            (Self::List,     true)  => Some(Self::STRING),
+            (Self::List,     false) => Some(Self::LIST),
+            (Self::Binary,   _)     => Some(Self::BINARY),
             (Self::CellPath, true)  => None,
-            (Self::CellPath, false) => Some("CELLPATH TEXT"),
-            (Self::Nothing,  true)  => Some("ANY"),
-            (Self::Nothing,  false) => Some("NOTHING ANY"),
-            (Self::Any,      _)     => Some("ANY"),
+            (Self::CellPath, false) => Some(Self::CELLPATH),
+            (Self::Nothing,  true)  => Some(Self::ANY),
+            (Self::Nothing,  false) => Some(Self::NOTHING),
         }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        Some(match value {
+            Self::BOOL => Self::Bool,
+            Self::INT => Self::Int,
+            Self::FLOAT => Self::Float,
+            Self::STRING => Self::String,
+            Self::GLOB => Self::Glob,
+            Self::FILESIZE => Self::Filesize,
+            Self::DURATION => Self::Duration,
+            Self::DATE => Self::Date,
+            Self::RECORD => Self::Record,
+            Self::LIST => Self::List,
+            Self::BINARY => Self::Binary,
+            Self::CELLPATH => Self::CellPath,
+            Self::NOTHING => Self::Nothing,
+            _ => return None,
+        })
     }
 }
 
@@ -69,7 +104,11 @@ impl TryFrom<&Value> for DatabaseDeclType {
             Value::Binary { .. } => Ok(Self::Binary),
             Value::CellPath { .. } => Ok(Self::CellPath),
             Value::Nothing { .. } => Ok(Self::Nothing),
-            value => Err(DatabaseError::Unsupported {
+            // explicitly state these to get an error if we add another value variant
+            Value::Range { .. }
+            | Value::Closure { .. }
+            | Value::Error { .. }
+            | Value::Custom { .. } => Err(DatabaseError::Unsupported {
                 r#type: value.get_type(),
                 span: value.span(),
             }),
