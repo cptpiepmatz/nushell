@@ -1,5 +1,5 @@
 use nu_protocol::{Span, Value, shell_error::location::Location};
-use rusqlite::{Connection, DatabaseName, backup::Progress};
+use rusqlite::{Connection, backup::Progress};
 
 use crate::database_next::{
     error::DatabaseError,
@@ -50,7 +50,7 @@ impl DatabaseConnection {
             let storage = DatabaseStorage::new_writable_memory(path, span);
             let mut conn = Self::open(storage, span)?;
             conn.inner
-                .restore::<_, fn(Progress)>(DatabaseName::Main, path, None)
+                .restore("main", path, None::<fn(Progress)>)
                 .map_err(|error| DatabaseError::Restore {
                     path: path.into(),
                     span,
