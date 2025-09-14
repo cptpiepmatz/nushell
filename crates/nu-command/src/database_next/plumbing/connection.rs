@@ -1,4 +1,4 @@
-use nu_protocol::{Span, shell_error::location::Location};
+use nu_protocol::{shell_error::location::Location, Span, Value};
 use rusqlite::Connection;
 
 use crate::database_next::{
@@ -53,5 +53,14 @@ impl DatabaseConnection {
         span: Span,
     ) -> Result<usize, DatabaseError> {
         self.prepare(sql, span)?.execute(params, span)
+    }
+
+    pub fn query(
+        &self,
+        sql: SqlString,
+        params: DatabaseParams,
+        span: Span,
+    ) -> Result<Value, DatabaseError> {
+        self.prepare(sql, span)?.query(params, span)
     }
 }
