@@ -27,6 +27,10 @@ impl<'c> DatabaseStatement<'c> {
         }
     }
 
+    pub fn readonly(&self) -> bool {
+        self.inner.readonly()
+    }
+
     #[inline]
     fn apply_params<'s, T, FU, FN>(
         stmt: &'s mut Statement<'c>,
