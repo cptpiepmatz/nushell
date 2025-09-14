@@ -8,8 +8,8 @@ use crate::database_next::{
 
 #[derive(Debug)]
 pub struct DatabaseStatement<'c> {
-    pub(super) inner: Statement<'c>,
-    pub(super) sql: SqlString,
+    inner: Statement<'c>,
+    sql: SqlString,
 }
 
 impl<'c> DatabaseStatement<'c> {

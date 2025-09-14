@@ -4,8 +4,8 @@ use crate::database_next::plumbing::decl_type::DatabaseDeclType;
 
 #[derive(Debug)]
 pub struct DatabaseColumn {
-    pub(super) name: String,
-    pub(super) decl_type: Option<DatabaseDeclType>,
+    pub name: String,
+    pub decl_type: Option<DatabaseDeclType>,
 }
 
 impl<'s> From<Column<'s>> for DatabaseColumn {

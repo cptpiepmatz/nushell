@@ -11,7 +11,7 @@ use crate::database_next::{
 
 #[derive(Debug)]
 pub struct DatabaseConnection {
-    pub(super) inner: Connection,
+    inner: Connection,
 }
 
 impl DatabaseConnection {

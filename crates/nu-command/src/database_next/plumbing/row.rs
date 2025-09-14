@@ -11,8 +11,8 @@ use crate::database_next::{
 
 #[derive(Debug)]
 pub struct DatabaseRow<'stmt, 'sql> {
-    pub(super) inner: &'stmt Row<'stmt>,
-    pub(super) sql: &'sql SqlString,
+    inner: &'stmt Row<'stmt>,
+    sql: &'sql SqlString,
 }
 
 impl<'stmt, 'sql> DatabaseRow<'stmt, 'sql> {
