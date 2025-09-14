@@ -11,7 +11,7 @@ impl DatabaseParams {
     ) -> Result<Self, DatabaseError> {
         let mut values = Vec::with_capacity(iter.len());
         for value in iter {
-            let value = nu_value_to_rusqlite_value(value)?;
+            let value = nu_value_to_rusqlite_value(value, false)?;
             values.push(value);
         }
         Ok(Self::Unnamed(values))
@@ -22,7 +22,7 @@ impl DatabaseParams {
     ) -> Result<Self, DatabaseError> {
         let mut values = Vec::with_capacity(iter.len());
         for (key, value) in iter {
-            let value = nu_value_to_rusqlite_value(value)?;
+            let value = nu_value_to_rusqlite_value(value, false)?;
             values.push((key, value));
         }
         Ok(Self::Named(values))
