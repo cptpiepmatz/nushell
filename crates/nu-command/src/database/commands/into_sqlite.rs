@@ -1,4 +1,7 @@
-use crate::database::{MEMORY_DB, values::sqlite::{open_sqlite_db, values_to_sql}};
+use crate::database::{
+    MEMORY_DB,
+    values::sqlite::{open_sqlite_db, values_to_sql},
+};
 use nu_engine::command_prelude::*;
 
 use itertools::Itertools;

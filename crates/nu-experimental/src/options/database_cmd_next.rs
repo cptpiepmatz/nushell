@@ -7,7 +7,7 @@ use crate::*;
 /// - `query db`
 /// - `query`
 /// - `schema`
-/// 
+///
 /// And in the future of the `stor` commands.
 ///
 /// The new implementation is built completely separately next to the old one, so any changes

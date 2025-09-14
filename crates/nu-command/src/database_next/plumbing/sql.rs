@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use nu_protocol::{shell_error::location::Location, FromValue, Span, Spanned};
+use nu_protocol::{FromValue, Span, Spanned, shell_error::location::Location};
 use rusqlite::Statement;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

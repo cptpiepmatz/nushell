@@ -57,19 +57,15 @@ impl FromValue for DatabaseValue {
         if let Value::Custom { val, .. } = v {
             return match val.as_any().downcast_ref::<Self>() {
                 Some(database_value) => Ok(database_value.clone()),
-                None => todo!()
-            }
+                None => todo!(),
+            };
         }
 
         todo!()
     }
 
     fn expected_type() -> nu_protocol::Type {
-        nu_protocol::Type::Custom(
-            Self::TYPE_NAME
-                .to_string()
-                .into_boxed_str(),
-        )
+        nu_protocol::Type::Custom(Self::TYPE_NAME.to_string().into_boxed_str())
     }
 }
 

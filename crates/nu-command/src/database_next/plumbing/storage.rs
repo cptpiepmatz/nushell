@@ -2,7 +2,7 @@ use std::path::Path;
 
 use nu_path::AbsolutePathBuf;
 use nu_protocol::Span;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DatabaseStorage {
