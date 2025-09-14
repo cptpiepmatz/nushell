@@ -284,7 +284,6 @@ plugin = [
   "nu-cmd-lang/plugin",
   "nu-command/plugin",
   "nu-engine/plugin",
-  "nu-engine/plugin",
   "nu-parser/plugin",
   "nu-protocol/plugin",
 ]

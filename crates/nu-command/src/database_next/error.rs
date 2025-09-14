@@ -1,7 +1,6 @@
-use std::{borrow::Cow, fmt::Debug, string::FromUtf8Error};
+use std::{borrow::Cow, fmt::Debug, path::PathBuf, string::FromUtf8Error};
 
-use nu_protocol::{Span, Type, shell_error::io::IoError};
-use rusqlite::RowIndex;
+use nu_protocol::{shell_error::io::IoError, ShellError, Span, Type};
 
 use crate::database_next::plumbing::{
     decl_type::DatabaseDeclType, sql::SqlString, storage::DatabaseStorage,
@@ -9,8 +8,17 @@ use crate::database_next::plumbing::{
 
 #[derive(Debug)]
 pub enum DatabaseError {
+    // rare cases, only when nothing to do with database
+    Shell(ShellError),
+
     OpenConnection {
         storage: DatabaseStorage,
+        span: Span,
+        error: rusqlite::Error,
+    },
+
+    Restore {
+        path: PathBuf,
         span: Span,
         error: rusqlite::Error,
     },

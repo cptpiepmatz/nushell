@@ -91,10 +91,11 @@ rayon = { workspace = true }
 reedline = { workspace = true, optional = true }
 roxmltree = { workspace = true }
 rusqlite = { workspace = true, features = [
-	"bundled",
 	"backup",
+	"bundled",
 	"chrono",
 	"column_decltype",
+	"serialize",
 ], optional = true }
 rustls = { workspace = true, optional = true, features = ["ring"] }
 rustls-native-certs = { workspace = true, optional = true }

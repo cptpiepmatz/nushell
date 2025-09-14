@@ -16,6 +16,10 @@ pub struct DatabaseRow<'stmt, 'sql> {
 }
 
 impl<'stmt, 'sql> DatabaseRow<'stmt, 'sql> {
+    pub fn new(row: &'stmt Row<'stmt>, sql: &'sql SqlString) -> Self {
+        DatabaseRow { inner: row, sql }
+    }
+
     pub fn read_all(&self, columns: &[DatabaseColumn], span: Span) -> Result<Value, DatabaseError> {
         let mut record = Record::new();
         for column in columns {

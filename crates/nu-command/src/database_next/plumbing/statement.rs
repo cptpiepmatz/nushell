@@ -13,6 +13,10 @@ pub struct DatabaseStatement<'c> {
 }
 
 impl<'c> DatabaseStatement<'c> {
+    pub(super) fn new(stmt: Statement<'c>, sql: SqlString) -> Self {
+        Self {inner: stmt, sql}
+    }
+
     fn sql(&self) -> SqlString {
         let expanded = self.inner.expanded_sql();
         match (&self.sql, expanded) {
@@ -106,10 +110,7 @@ impl<'c> DatabaseStatement<'c> {
             match rows.next() {
                 Ok(None) => break,
                 Ok(Some(row)) => {
-                    let row = DatabaseRow {
-                        inner: row,
-                        sql: &self.sql,
-                    };
+                    let row = DatabaseRow::new(row, &self.sql);
                     let record = row.read_all(&columns, span)?;
                     values.push(record);
                 }
