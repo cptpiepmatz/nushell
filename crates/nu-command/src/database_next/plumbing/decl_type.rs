@@ -66,8 +66,8 @@ impl DatabaseDeclType {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
-        Some(match value {
+    pub fn from_str(s: &str) -> Option<Self> {
+        Some(match s.to_uppercase().as_str() {
             Self::BOOL => Self::Bool,
             Self::INT => Self::Int,
             Self::FLOAT => Self::Float,

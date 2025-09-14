@@ -1,11 +1,13 @@
 use crate::database_next::{error::DatabaseError, plumbing::decl_type::DatabaseDeclType};
 
 use nu_protocol::{Span, Value as NuValue, shell_error::io::IoError};
-use rusqlite::{Column, Row, types::Value as RusqliteValue};
+use rusqlite::types::Value as RusqliteValue;
 
+pub mod column;
 pub mod connection;
 pub mod decl_type;
 pub mod params;
+pub mod row;
 pub mod sql;
 pub mod statement;
 pub mod storage;
@@ -112,16 +114,4 @@ fn rusqlite_value_to_nu_value(
             span,
         }),
     }
-}
-
-fn row_to_nu_value<'s>(
-    row: &Row<'s>,
-    columns: &[Column<'s>],
-    span: Span,
-) -> Result<NuValue, DatabaseError> {
-    for column in columns {
-        let value: RusqliteValue = row.get(column.name()).unwrap();
-    }
-
-    todo!()
 }

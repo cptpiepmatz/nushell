@@ -3,7 +3,7 @@ use rusqlite::{Rows, Statement, ToSql};
 
 use crate::database_next::{
     error::DatabaseError,
-    plumbing::{params::DatabaseParams, sql::SqlString},
+    plumbing::{column::DatabaseColumn, params::DatabaseParams, row::DatabaseRow, sql::SqlString},
 };
 
 #[derive(Debug)]
@@ -89,23 +89,41 @@ impl<'c> DatabaseStatement<'c> {
     }
 
     pub fn query(&mut self, params: DatabaseParams, span: Span) -> Result<Value, DatabaseError> {
-        let column_names = self.inner.column_names();
+        let columns = self
+            .inner
+            .columns()
+            .into_iter()
+            .map(DatabaseColumn::from)
+            .collect::<Vec<_>>();
         let mut rows = Self::query_rows(&mut self.inner, &self.sql, params, span)?;
 
+        let mut values = Vec::new();
         for index in 0.. {
             match rows.next() {
                 Ok(None) => break,
-                Ok(Some(row)) => todo!(),
+                Ok(Some(row)) => {
+                    let row = DatabaseRow {
+                        inner: row,
+                        sql: &self.sql,
+                    };
+                    let record = row.read_all(&columns, span)?;
+                    values.push(record);
+                }
                 Err(error) => {
                     let sql = match rows.as_ref() {
                         Some(stmt) => self.sql.expanded(stmt),
                         None => self.sql.clone(),
                     };
-                    return Err(DatabaseError::Iterate { sql, index, error });
+                    return Err(DatabaseError::Iterate {
+                        sql,
+                        index,
+                        span,
+                        error,
+                    });
                 }
             }
         }
 
-        todo!()
+        Ok(Value::list(values, span))
     }
 }

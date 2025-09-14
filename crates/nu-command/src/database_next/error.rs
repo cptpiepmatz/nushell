@@ -1,11 +1,13 @@
-use std::{borrow::Cow, string::FromUtf8Error};
+use std::{borrow::Cow, fmt::Debug, string::FromUtf8Error};
 
-use nu_protocol::{Span, Type, Value, shell_error::io::IoError};
+use nu_protocol::{Span, Type, shell_error::io::IoError};
+use rusqlite::RowIndex;
 
 use crate::database_next::plumbing::{
     decl_type::DatabaseDeclType, sql::SqlString, storage::DatabaseStorage,
 };
 
+#[derive(Debug)]
 pub enum DatabaseError {
     OpenConnection {
         storage: DatabaseStorage,
@@ -34,6 +36,14 @@ pub enum DatabaseError {
     Iterate {
         sql: SqlString,
         index: usize,
+        span: Span,
+        error: rusqlite::Error,
+    },
+
+    Get {
+        sql: SqlString,
+        index: String,
+        span: Span,
         error: rusqlite::Error,
     },
 
