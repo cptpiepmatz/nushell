@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nu_protocol::{location, CustomValue, FromValue, IntoValue, ShellError, Span, Value};
+use nu_protocol::{CustomValue, FromValue, IntoValue, ShellError, Span, Value, location};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 

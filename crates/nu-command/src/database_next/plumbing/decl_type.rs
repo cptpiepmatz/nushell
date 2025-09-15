@@ -134,6 +134,7 @@ impl Display for DatabaseDeclType {
             DatabaseDeclType::Binary => "Binary",
             DatabaseDeclType::CellPath => "CellPath",
             DatabaseDeclType::Nothing => "Nothing",
-        }.fmt(f)
+        }
+        .fmt(f)
     }
 }

@@ -222,12 +222,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 None,
             ),
-            DatabaseError::Todo { msg, span } => generic_error(
-                "Database To-Do",
-                msg,
-                span,
-                None
-            ),
+            DatabaseError::Todo { msg, span } => generic_error("Database To-Do", msg, span, None),
             DatabaseError::Io(io_error) => ShellError::Io(io_error),
             DatabaseError::FromUtf8 { span, error } => generic_error(
                 "Encountered non-utf8 strings in database",
@@ -243,7 +238,7 @@ impl From<DatabaseError> for ShellError {
                 "Invalid declaration type",
                 format!("{} cannot be deserialized as {}", rusqlite_type, decl_type),
                 span,
-                None 
+                None,
             ),
         }
     }
