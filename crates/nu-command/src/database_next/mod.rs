@@ -1,16 +1,9 @@
-use nu_protocol::engine::StateWorkingSet;
-
-mod commands;
+pub mod commands;
 mod error;
 mod plumbing;
-mod value;
+pub mod value;
 
-const SQLITE_MAGIC_BYTES: &[u8; 16] = b"SQLite format 3\0";
-
-pub fn add_database_decls(working_set: &mut StateWorkingSet) {
-    let _ = working_set;
-    todo!()
-}
+pub use commands::add_database_decls;
 
 // TODO: provide database connection for history
 

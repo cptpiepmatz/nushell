@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Debug, path::PathBuf, string::FromUtf8Error};
 
-use nu_protocol::{ShellError, Span, Type, shell_error::io::IoError};
+use nu_protocol::{shell_error::{io::IoError, location::Location}, ShellError, Span, Type};
 
 use crate::database_next::plumbing::{
     decl_type::DatabaseDeclType, sql::SqlString, storage::DatabaseStorage,
