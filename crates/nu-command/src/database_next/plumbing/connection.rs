@@ -1,4 +1,6 @@
-use nu_protocol::{Span, Value, shell_error::location::Location};
+use nu_protocol::{
+    DataSource, FromValue, PipelineData, Span, Spanned, Value, shell_error::location::Location,
+};
 use rusqlite::{Connection, backup::Progress};
 
 use crate::database_next::{
@@ -9,6 +11,11 @@ use crate::database_next::{
     },
 };
 
+/// Name for the used database.
+///
+/// In a typical sqlite setup with a connection only keeping one database open, you only have "main".
+const DATABASE_NAME: &str = "main";
+
 #[derive(Debug)]
 pub struct DatabaseConnection {
     inner: Connection,
@@ -16,33 +23,72 @@ pub struct DatabaseConnection {
 }
 
 impl DatabaseConnection {
-    pub fn open(storage: DatabaseStorage, span: Span) -> Result<Self, DatabaseError> {
-        let conn =
-            Connection::open(storage.as_path()).map_err(|error| DatabaseError::OpenConnection {
-                storage: storage.clone(),
-                span,
-                error,
-            })?;
+    fn open_raw(storage: DatabaseStorage) -> Result<Self, (rusqlite::Error, DatabaseStorage)> {
+        let conn = match Connection::open_with_flags(storage.as_path(), storage.flags()) {
+            Ok(conn) => conn,
+            Err(err) => return Err((err, storage)),
+        };
+
         Ok(Self {
             inner: conn,
             storage,
         })
     }
 
-    pub fn open_internal(
-        storage: impl AsRef<DatabaseStorage>,
-        location: Location,
-    ) -> Result<Self, DatabaseError> {
-        let _ = (storage, location);
-        todo!("implement this as the connection for the history db")
+    pub fn open(storage: DatabaseStorage, span: Span) -> Result<Self, DatabaseError> {
+        Self::open_raw(storage).map_err(|(error, storage)| DatabaseError::OpenConnection {
+            storage,
+            span,
+            error,
+        })
     }
 
-    pub fn open_from_value(value: Value) -> Result<Self, DatabaseError> {
-        let bytes = value.into_binary().map_err(DatabaseError::Shell)?;
-        
-        // TODO: use `Connection::deserialize_read_exact` to load bytes as sqlite db
+    pub fn open_internal(
+        storage: DatabaseStorage,
+        location: Location,
+    ) -> Result<Self, DatabaseError> {
+        Self::open_raw(storage).map_err(|(error, storage)| DatabaseError::OpenInternalConnection {
+            storage,
+            location,
+            error,
+        })
+    }
 
-        todo!()
+    pub fn open_from_value(value: Value, span: Span) -> Result<Self, DatabaseError> {
+        let bytes = Spanned::<Vec<u8>>::from_value(value).map_err(DatabaseError::Shell)?;
+        let storage = DatabaseStorage::new_writable_memory(&bytes.item, span);
+        let mut conn = Self::open(storage, span)?;
+        conn.inner
+            .deserialize_read_exact(
+                DATABASE_NAME,
+                bytes.item.as_slice(),
+                bytes.item.len(),
+                false,
+            )
+            .map_err(|error| DatabaseError::Deserialize {
+                call_span: span,
+                value_span: bytes.span,
+                error,
+            })?;
+        Ok(conn)
+    }
+
+    pub fn open_from_pipeline(pipeline: PipelineData, span: Span) -> Result<Self, DatabaseError> {
+        if let Some(metadata) = pipeline.metadata()
+            && let DataSource::FilePath(path) = metadata.data_source
+        {
+            let path = nu_path::PathBuf::from(path)
+                .try_into_absolute()
+                .map_err(|_| DatabaseError::Todo {
+                    msg: "Handle non absolute paths from pipeline".into(),
+                    span,
+                })?;
+            let storage = DatabaseStorage::ReadonlyFile { path, span };
+            return Self::open(storage, span);
+        }
+
+        let value = pipeline.into_value(span).map_err(DatabaseError::Shell)?;
+        Self::open_from_value(value, span)
     }
 
     pub fn promote(self) -> Result<Self, DatabaseError> {
@@ -51,7 +97,7 @@ impl DatabaseConnection {
             let storage = DatabaseStorage::new_writable_memory(path, span);
             let mut conn = Self::open(storage, span)?;
             conn.inner
-                .restore("main", path, None::<fn(Progress)>)
+                .restore(DATABASE_NAME, path, None::<fn(Progress)>)
                 .map_err(|error| DatabaseError::Restore {
                     path: path.into(),
                     span,

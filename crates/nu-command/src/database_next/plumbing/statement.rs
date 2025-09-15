@@ -14,7 +14,7 @@ pub struct DatabaseStatement<'c> {
 
 impl<'c> DatabaseStatement<'c> {
     pub(super) fn new(stmt: Statement<'c>, sql: SqlString) -> Self {
-        Self {inner: stmt, sql}
+        Self { inner: stmt, sql }
     }
 
     fn sql(&self) -> SqlString {

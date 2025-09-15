@@ -1,4 +1,8 @@
-use std::{hash::{BuildHasher, Hash, Hasher, RandomState}, path::Path, sync::LazyLock};
+use std::{
+    hash::{BuildHasher, Hash, Hasher, RandomState},
+    path::Path,
+    sync::LazyLock,
+};
 
 use nu_path::AbsolutePathBuf;
 use nu_protocol::Span;
@@ -6,7 +10,7 @@ use rusqlite::OpenFlags;
 use serde::{Deserialize, Serialize};
 
 /// Process local deterministic ID hasher.
-/// 
+///
 /// Provides a process-local hasher for deterministic, reproducible ids.
 /// The same input will always hash to the same value within a single run.
 /// Not stable across different runs or binaries.
@@ -63,9 +67,9 @@ impl DatabaseStorage {
 
     pub fn flags(&self) -> OpenFlags {
         match self {
-            Self::WritableMemory { .. }
-            | Self::InMemoryStor { .. }
-            | Self::InMemoryHistory => OpenFlags::default(),
+            Self::WritableMemory { .. } | Self::InMemoryStor { .. } | Self::InMemoryHistory => {
+                OpenFlags::default()
+            }
             Self::ReadonlyFile { .. } => {
                 OpenFlags::SQLITE_OPEN_READ_ONLY
                     | OpenFlags::SQLITE_OPEN_URI

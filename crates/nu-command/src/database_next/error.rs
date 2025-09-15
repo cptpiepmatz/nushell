@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Debug, path::PathBuf, string::FromUtf8Error};
 
-use nu_protocol::{shell_error::io::IoError, ShellError, Span, Type};
+use nu_protocol::{ShellError, Span, Type, shell_error::io::IoError};
 
 use crate::database_next::plumbing::{
     decl_type::DatabaseDeclType, sql::SqlString, storage::DatabaseStorage,
@@ -16,10 +16,22 @@ pub enum DatabaseError {
         span: Span,
         error: rusqlite::Error,
     },
+    
+    OpenInternalConnection {
+        storage: DatabaseStorage,
+        location: Location,
+        error: rusqlite::Error,
+    },
 
     Restore {
         path: PathBuf,
         span: Span,
+        error: rusqlite::Error,
+    },
+
+    Deserialize {
+        call_span: Span,
+        value_span: Span,
         error: rusqlite::Error,
     },
 

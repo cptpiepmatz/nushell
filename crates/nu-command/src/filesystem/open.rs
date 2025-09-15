@@ -145,7 +145,7 @@ impl Command for Open {
                     return Err(err.into());
                 } else {
                     #[cfg(feature = "sqlite")]
-                    if !raw {
+                    if !nu_experimental::DATABASE_CMD_NEXT.get() && !raw {
                         let res = SQLiteDatabase::try_from_path(
                             path,
                             arg_span,
