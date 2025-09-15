@@ -98,7 +98,7 @@ impl DatabaseConnection {
             let mut conn = Self::open(storage, span)?;
             conn.inner
                 .restore(DATABASE_NAME, path, None::<fn(Progress)>)
-                .map_err(|error| DatabaseError::Restore {
+                .map_err(|error| DatabaseError::Promote {
                     path: path.into(),
                     span,
                     error,

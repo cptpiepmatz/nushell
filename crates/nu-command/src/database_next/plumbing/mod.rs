@@ -109,7 +109,7 @@ fn rusqlite_value_to_nu_value(
             }
         },
         (value, Some(decl_type)) => Err(DatabaseError::InvalidDeclType {
-            value,
+            rusqlite_type: value.data_type(),
             decl_type,
             span,
         }),

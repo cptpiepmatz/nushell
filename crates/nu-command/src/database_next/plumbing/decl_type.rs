@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use nu_protocol::Value;
 
 use crate::database_next::error::DatabaseError;
@@ -113,5 +115,25 @@ impl TryFrom<&Value> for DatabaseDeclType {
                 span: value.span(),
             }),
         }
+    }
+}
+
+impl Display for DatabaseDeclType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DatabaseDeclType::Bool => "Bool",
+            DatabaseDeclType::Int => "Int",
+            DatabaseDeclType::Float => "Float",
+            DatabaseDeclType::String => "String",
+            DatabaseDeclType::Glob => "Glob",
+            DatabaseDeclType::Filesize => "Filesize",
+            DatabaseDeclType::Duration => "Duration",
+            DatabaseDeclType::Date => "Date",
+            DatabaseDeclType::Record => "Record",
+            DatabaseDeclType::List => "List",
+            DatabaseDeclType::Binary => "Binary",
+            DatabaseDeclType::CellPath => "CellPath",
+            DatabaseDeclType::Nothing => "Nothing",
+        }.fmt(f)
     }
 }
