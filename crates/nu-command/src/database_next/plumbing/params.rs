@@ -6,6 +6,10 @@ pub enum DatabaseParams {
 }
 
 impl DatabaseParams {
+    pub fn new_empty() -> Self {
+        Self::Unnamed(vec![])
+    }
+
     pub fn new_unnamed(
         iter: impl ExactSizeIterator<Item = nu_protocol::Value>,
     ) -> Result<Self, DatabaseError> {

@@ -3905,6 +3905,7 @@ dependencies = [
  "oem_cp",
  "open",
  "os_pipe",
+ "parking_lot",
  "pathdiff",
  "percent-encoding",
  "pretty_assertions",

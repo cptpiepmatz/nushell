@@ -1,5 +1,6 @@
 use nu_protocol::{
-    DataSource, FromValue, PipelineData, Span, Spanned, Value, shell_error::location::Location,
+    DataSource, FromValue, PipelineData, Record, Span, Spanned, Value, location,
+    shell_error::location::Location,
 };
 use rusqlite::{Connection, backup::Progress};
 
@@ -137,5 +138,33 @@ impl DatabaseConnection {
         span: Span,
     ) -> Result<Value, DatabaseError> {
         self.prepare(sql, span)?.query(params, span)
+    }
+
+    pub fn read_all(&self, span: Span) -> Result<Value, DatabaseError> {
+        let tables_sql = SqlString::new_internal(
+            "SELECT name FROM sqlite_master WHERE type='table'",
+            location!(),
+        );
+        let tables = self.query(tables_sql, DatabaseParams::new_empty(), span)?;
+
+        #[derive(Debug, FromValue)]
+        struct TableName {
+            name: String,
+        }
+
+        let table_names = Vec::<TableName>::from_value(tables).map_err(DatabaseError::Shell)?;
+
+        let mut record = Record::new();
+        for TableName { name } in table_names {
+            let values_sql = SqlString::new_internal(format!("SELECT * FROM {name}"), location!());
+            let values = self.query(values_sql, DatabaseParams::new_empty(), span)?;
+            record.push(name, values);
+        }
+
+        Ok(Value::record(record, span))
+    }
+
+    pub fn storage(&self) -> &DatabaseStorage {
+        &self.storage
     }
 }

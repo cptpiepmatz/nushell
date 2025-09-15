@@ -1,15 +1,24 @@
-use nu_protocol::{CustomValue, FromValue, IntoValue, ShellError, Span, Value};
+use std::sync::Arc;
+
+use nu_protocol::{location, CustomValue, FromValue, IntoValue, ShellError, Span, Value};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::database_next::plumbing::storage::DatabaseStorage;
+use crate::database_next::plumbing::{connection::DatabaseConnection, storage::DatabaseStorage};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DatabaseValue {
-    storage: DatabaseStorage,
+    conn: Arc<Mutex<DatabaseConnection>>,
 }
 
 impl DatabaseValue {
     pub const TYPE_NAME: &'static str = "database";
+
+    pub fn new(conn: DatabaseConnection) -> Self {
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+        }
+    }
 }
 
 #[typetag::serde]
@@ -23,8 +32,8 @@ impl CustomValue for DatabaseValue {
     }
 
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
-        let _ = span;
-        todo!()
+        let conn = self.conn.lock();
+        Ok(conn.read_all(span)?)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -54,14 +63,15 @@ impl IntoValue for DatabaseValue {
 
 impl FromValue for DatabaseValue {
     fn from_value(v: Value) -> Result<Self, ShellError> {
-        if let Value::Custom { val, .. } = v {
-            return match val.as_any().downcast_ref::<Self>() {
-                Some(database_value) => Ok(database_value.clone()),
-                None => todo!(),
-            };
+        if let Value::Custom { val, .. } = &v
+            && let Some(val) = val.as_any().downcast_ref::<Self>()
+        {
+            return Ok(val.clone());
         }
 
-        todo!()
+        let span = v.span();
+        let conn = DatabaseConnection::open_from_value(v, span)?;
+        Ok(Self::new(conn))
     }
 
     fn expected_type() -> nu_protocol::Type {
@@ -69,8 +79,30 @@ impl FromValue for DatabaseValue {
     }
 }
 
-impl AsRef<DatabaseStorage> for DatabaseValue {
-    fn as_ref(&self) -> &DatabaseStorage {
-        &self.storage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DatabaseValueDto {
+    storage: DatabaseStorage,
+}
+
+impl Serialize for DatabaseValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let conn = self.conn.lock();
+        let storage = conn.storage().clone();
+        DatabaseValueDto { storage }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DatabaseValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let dto = DatabaseValueDto::deserialize(deserializer)?;
+        let conn = DatabaseConnection::open_internal(dto.storage, location!())
+            .map_err(|err| serde::de::Error::custom(ShellError::from(err).to_string()))?;
+        Ok(Self::new(conn))
     }
 }

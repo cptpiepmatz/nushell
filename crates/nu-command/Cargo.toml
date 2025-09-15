@@ -81,6 +81,7 @@ num-traits = { workspace = true }
 oem_cp = { workspace = true }
 open = { workspace = true, optional = true }
 os_pipe = { workspace = true, optional = true }
+parking_lot = { workspace = true }
 pathdiff = { workspace = true }
 percent-encoding = { workspace = true }
 print-positions = { workspace = true }

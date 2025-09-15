@@ -125,6 +125,7 @@ fn generic_error(
     }
 }
 
+// TODO: for SqlString uses, also use the span/location of them
 impl From<DatabaseError> for ShellError {
     fn from(error: DatabaseError) -> Self {
         match error {
