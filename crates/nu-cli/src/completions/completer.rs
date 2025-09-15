@@ -394,15 +394,14 @@ impl NuCompleter {
                             //   - "--foo ..a" => ["--foo", "..a"] => "..a"
                             //   - "--foo=..a" => ["--foo", "..a"] => "..a"
                             // - strip placeholder (`a`) if present
-                            let (new_span, prefix) = if matches!(arg, Argument::Named(_)) {
-                                strip_placeholder_with_rsplit(
+                            let (new_span, prefix) = match arg {
+                                Argument::Named(_) => strip_placeholder_with_rsplit(
                                     working_set,
                                     &span,
                                     |b| *b == b'=' || *b == b' ',
                                     strip,
-                                )
-                            } else {
-                                strip_placeholder_if_any(working_set, &span, strip)
+                                ),
+                                _ => strip_placeholder_if_any(working_set, &span, strip),
                             };
                             let ctx = Context::new(working_set, new_span, prefix, offset);
 
@@ -524,11 +523,9 @@ impl NuCompleter {
                                     .collect();
                             let mut new_span = span;
                             // strip the placeholder
-                            if strip {
-                                if let Some(last) = text_spans.last_mut() {
-                                    last.pop();
-                                    new_span = Span::new(span.start, span.end.saturating_sub(1));
-                                }
+                            if strip && let Some(last) = text_spans.last_mut() {
+                                last.pop();
+                                new_span = Span::new(span.start, span.end.saturating_sub(1));
                             }
                             if let Some(external_result) =
                                 self.external_completion(closure, &text_spans, offset, new_span)
@@ -750,19 +747,19 @@ impl NuCompleter {
             .captures_to_stack_preserve_out_dest(closure.captures.clone());
 
         // Line
-        if let Some(pos_arg) = block.signature.required_positional.first() {
-            if let Some(var_id) = pos_arg.var_id {
-                callee_stack.add_var(
-                    var_id,
-                    Value::list(
-                        spans
-                            .iter()
-                            .map(|it| Value::string(it, Span::unknown()))
-                            .collect(),
-                        Span::unknown(),
-                    ),
-                );
-            }
+        if let Some(pos_arg) = block.signature.required_positional.first()
+            && let Some(var_id) = pos_arg.var_id
+        {
+            callee_stack.add_var(
+                var_id,
+                Value::list(
+                    spans
+                        .iter()
+                        .map(|it| Value::string(it, Span::unknown()))
+                        .collect(),
+                    Span::unknown(),
+                ),
+            );
         }
 
         let result = eval_block::<WithoutDebug>(
