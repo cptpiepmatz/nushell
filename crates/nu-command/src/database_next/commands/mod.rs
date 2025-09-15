@@ -16,4 +16,6 @@ pub use to_sqlite::*;
 
 pub fn add_database_decls(working_set: &mut StateWorkingSet) {
     working_set.add_decl(Box::new(FromSqlite));
+    working_set.add_decl(Box::new(FromDb));
+    working_set.add_decl(Box::new(ToSqlite));
 }

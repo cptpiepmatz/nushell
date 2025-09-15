@@ -23,6 +23,7 @@ impl Command for FromSqlite {
             )
             .category(Category::Database)
             .input_output_type(Type::Binary, DatabaseValue::expected_type())
+            .switch("promote", "Immediately promote database into memory", None)
     }
 
     fn description(&self) -> &str {
@@ -39,12 +40,16 @@ impl Command for FromSqlite {
 
     fn run(
         &self,
-        _: &EngineState,
-        _: &mut Stack,
+        engine_state: &EngineState,
+        stack: &mut Stack,
         call: &Call,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let conn = DatabaseConnection::open_from_pipeline(input, call.head)?;
+        let conn = match call.has_flag(engine_state, stack, "promote")? {
+            true => conn.promote()?,
+            false => conn,
+        };
         let value = DatabaseValue::new(conn);
         let value = value.into_value(call.head);
         Ok(PipelineData::value(value, None))

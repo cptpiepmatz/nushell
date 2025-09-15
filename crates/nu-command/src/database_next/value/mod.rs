@@ -19,6 +19,11 @@ impl DatabaseValue {
             conn: Arc::new(Mutex::new(conn)),
         }
     }
+
+    pub fn is(value: &Value) -> bool {
+        let Value::Custom { val, .. } = value else { return false };
+        val.as_any().is::<DatabaseValue>()
+    }
 }
 
 #[typetag::serde]
