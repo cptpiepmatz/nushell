@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use thiserror::Error;
 
 /// Represents a specific location in the Rust code.
@@ -8,10 +10,10 @@ use thiserror::Error;
 /// code, some originate from the underlying Rust implementation.
 /// With this type, we can pinpoint the exact location of such errors, improving debugging
 /// and error reporting.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
 #[error("{file}:{line}:{column}")]
 pub struct Location {
-    file: &'static str,
+    file: Cow<'static, str>,
     line: u32,
     column: u32,
 }
@@ -25,8 +27,12 @@ impl Location {
     #[deprecated(
         note = "This function is not meant to be called directly. Use `nu_protocol::location` instead."
     )]
-    pub fn new(file: &'static str, line: u32, column: u32) -> Self {
-        Location { file, line, column }
+    pub const fn new(file: &'static str, line: u32, column: u32) -> Self {
+        Location {
+            file: Cow::Borrowed(file),
+            line,
+            column,
+        }
     }
 }
 
