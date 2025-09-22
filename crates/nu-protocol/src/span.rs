@@ -52,6 +52,17 @@ impl<T> Spanned<T> {
             span: self.span,
         }
     }
+
+    /// Map the spanned item via its [`Into`] impl.
+    pub fn map_into<U>(self) -> Spanned<U>
+    where
+        T: Into<U>,
+    {
+        Spanned {
+            item: self.item.into(),
+            span: self.span,
+        }
+    }
 }
 
 impl<T, E> Spanned<Result<T, E>> {
