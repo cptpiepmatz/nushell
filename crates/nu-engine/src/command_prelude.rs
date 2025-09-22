@@ -1,6 +1,6 @@
 pub use crate::CallExt;
 pub use nu_protocol::{
-    ByteStream, ByteStreamType, Category, Completion, ErrSpan, Example, Flag,
+    ByteStream, ByteStreamType, Category, Completion, ErrSpan, Example, Flag, FromValue,
     IntoInterruptiblePipelineData, IntoPipelineData, IntoSpanned, IntoValue, PipelineData,
     PositionalArg, Record, ShellError, ShellWarning, Signature, Span, Spanned, SyntaxShape, Type,
     Value,
