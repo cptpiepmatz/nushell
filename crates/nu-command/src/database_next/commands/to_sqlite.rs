@@ -1,8 +1,7 @@
-
 use nu_engine::command_prelude::*;
 use nu_protocol::FromValue;
 
-use crate::database_next::{plumbing::connection::DatabaseConnection, value::DatabaseValue};
+use crate::database_next::{plumbing::connection::DatabaseConnection, value::DatabaseSystemValue};
 
 #[derive(Debug, Clone)]
 pub struct ToSqlite;
@@ -22,7 +21,7 @@ impl Command for ToSqlite {
                     .collect(),
             )
             .category(Category::Database)
-            .input_output_type(Type::Any, DatabaseValue::expected_type())
+            .input_output_type(Type::Any, DatabaseSystemValue::expected_type())
     }
 
     fn description(&self) -> &str {
@@ -41,7 +40,9 @@ impl Command for ToSqlite {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let input = input.into_value(call.head)?;
-        if DatabaseValue::is(&input) { return Ok(PipelineData::value(input, None)) }
+        if DatabaseSystemValue::is(&input) {
+            return Ok(PipelineData::value(input, None));
+        }
         todo!()
     }
 }

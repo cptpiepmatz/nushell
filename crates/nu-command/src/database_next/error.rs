@@ -11,7 +11,8 @@ use nu_protocol::{
 };
 
 use crate::database_next::plumbing::{
-    decl_type::DatabaseDeclType, sql::SqlString, storage::DatabaseStorage,
+    decl_type::DatabaseDeclType, list::DatabaseList, name::DatabaseName, sql::SqlString,
+    storage::DatabaseStorage,
 };
 
 #[derive(Debug)]
@@ -29,6 +30,12 @@ pub enum DatabaseError {
         storage: DatabaseStorage,
         location: Location,
         error: rusqlite::Error,
+    },
+
+    DatabaseNotFound {
+        name: DatabaseName,
+        database_list: DatabaseList,
+        span: Span,
     },
 
     Promote {
@@ -150,6 +157,45 @@ impl From<DatabaseError> for ShellError {
                 None,
                 error,
             ),
+            DatabaseError::DatabaseNotFound {
+                name:
+                    name @ DatabaseName::UserProvided {
+                        span: name_span, ..
+                    },
+                database_list,
+                span: value_span,
+            } => ShellError::GenericError {
+                error: "Database system does not contain expected database".into(),
+                msg: format!("Could not find {:?} in database system", name.name()),
+                span: Some(value_span),
+                help: None,
+                inner: vec![match nu_protocol::did_you_mean(
+                    database_list.iter().map(|entry| &entry.name),
+                    name.name(),
+                ) {
+                    Some(suggestion) => ShellError::DidYouMeanCustom {
+                        msg: format!("Could not find {:?} in database system", name.name()),
+                        suggestion,
+                        span: name_span,
+                    },
+                    None => ShellError::GenericError {
+                        error: "Database not found".into(),
+                        msg: format!("Could not find {:?} in database system", name.name()),
+                        span: Some(name_span),
+                        help: None,
+                        inner: vec![],
+                    },
+                }],
+            },
+            DatabaseError::DatabaseNotFound {
+                name: DatabaseName::Internal { .. },
+                span,
+                ..
+            } => DatabaseError::Todo {
+                msg: "Provide database not found error for locations".into(),
+                span,
+            }
+            .into(),
             DatabaseError::Promote { path, span, error } => generic_error(
                 "Promoting database connection failed",
                 format!(

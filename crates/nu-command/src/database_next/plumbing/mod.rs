@@ -6,6 +6,8 @@ use rusqlite::types::Value as RusqliteValue;
 pub mod column;
 pub mod connection;
 pub mod decl_type;
+pub mod list;
+pub mod name;
 pub mod params;
 pub mod row;
 pub mod sql;

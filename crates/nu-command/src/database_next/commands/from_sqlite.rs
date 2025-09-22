@@ -1,7 +1,10 @@
 use nu_engine::command_prelude::*;
 use nu_protocol::FromValue;
 
-use crate::database_next::{plumbing::connection::DatabaseConnection, value::DatabaseValue};
+use crate::database_next::{
+    plumbing::{connection::DatabaseConnection, name::DatabaseName},
+    value::{DatabaseSystemValue, DatabaseValue},
+};
 
 #[derive(Debug, Clone)]
 pub struct FromSqlite;
@@ -22,7 +25,11 @@ impl Command for FromSqlite {
                     .collect(),
             )
             .category(Category::Database)
-            .input_output_type(Type::Binary, DatabaseValue::expected_type())
+            .input_output_types(vec![
+                (Type::Binary, Type::custom(DatabaseValue::TYPE_NAME)),
+                (Type::Binary, DatabaseSystemValue::expected_type()), // if `--all` is used
+            ])
+            .switch("all", "Include all attached databases", None)
             .switch("promote", "Immediately promote database into memory", None)
     }
 
@@ -50,8 +57,13 @@ impl Command for FromSqlite {
             true => conn.promote()?,
             false => conn,
         };
-        let value = DatabaseValue::new(conn);
-        let value = value.into_value(call.head);
+        let value = DatabaseSystemValue::new(conn);
+        let value = match call.has_flag(engine_state, stack, "all")? {
+            true => value.into_value(call.head),
+            false => value
+                .database(DatabaseName::MAIN, call.head)?
+                .into_value(call.head),
+        };
         Ok(PipelineData::value(value, None))
     }
 }

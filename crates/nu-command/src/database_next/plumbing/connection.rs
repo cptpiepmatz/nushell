@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use nu_protocol::{
     DataSource, FromValue, PipelineData, Record, Span, Spanned, Value, location,
     shell_error::location::Location,
@@ -7,7 +9,11 @@ use rusqlite::{Connection, backup::Progress};
 use crate::database_next::{
     error::DatabaseError,
     plumbing::{
-        params::DatabaseParams, sql::SqlString, statement::DatabaseStatement,
+        list::{DatabaseList, DatabaseListEntry},
+        name::DatabaseName,
+        params::DatabaseParams,
+        sql::SqlString,
+        statement::DatabaseStatement,
         storage::DatabaseStorage,
     },
 };
@@ -140,9 +146,16 @@ impl DatabaseConnection {
         self.prepare(sql, span)?.query(params, span)
     }
 
-    pub fn read_all(&self, span: Span) -> Result<Value, DatabaseError> {
+    pub fn database_list(&self, span: Span) -> Result<DatabaseList, DatabaseError> {
+        let sql = SqlString::new_internal("PRAGMA database_list", location!());
+        let values = self.query(sql, DatabaseParams::new_empty(), span)?;
+        DatabaseList::from_value(values).map_err(DatabaseError::Shell)
+    }
+
+    pub fn read_database(&self, name: &DatabaseName, span: Span) -> Result<Value, DatabaseError> {
+        let db_name = name;
         let tables_sql = SqlString::new_internal(
-            "SELECT name FROM sqlite_master WHERE type='table'",
+            format!("SELECT name FROM {db_name}.sqlite_master WHERE type='table'"),
             location!(),
         );
         let tables = self.query(tables_sql, DatabaseParams::new_empty(), span)?;
@@ -155,13 +168,29 @@ impl DatabaseConnection {
         let table_names = Vec::<TableName>::from_value(tables).map_err(DatabaseError::Shell)?;
 
         let mut record = Record::new();
-        for TableName { name } in table_names {
-            let values_sql = SqlString::new_internal(format!("SELECT * FROM {name}"), location!());
+        for TableName { name: table_name } in table_names {
+            let values_sql = SqlString::new_internal(
+                format!("SELECT * FROM {db_name}.{table_name}"),
+                location!(),
+            );
             let values = self.query(values_sql, DatabaseParams::new_empty(), span)?;
-            record.push(name, values);
+            record.push(table_name, values);
         }
 
         Ok(Value::record(record, span))
+    }
+
+    pub fn read_all(&self, span: Span) -> Result<Value, DatabaseError> {
+        let mut record = Record::with_capacity(1); // often only "main"
+
+        let database_list = self.database_list(span)?;
+        for DatabaseListEntry { name, .. } in database_list {
+            let schema = DatabaseName::new_internal(name.clone(), location!());
+            let value = self.read_database(&schema, span)?;
+            record.push(name, value);
+        }
+
+        return Ok(Value::record(record, span));
     }
 
     pub fn storage(&self) -> &DatabaseStorage {

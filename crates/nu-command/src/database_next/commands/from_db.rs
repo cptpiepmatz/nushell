@@ -1,5 +1,5 @@
-use nu_engine::command_prelude::*;
 use crate::database_next::commands::FromSqlite;
+use nu_engine::command_prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct FromDb;
