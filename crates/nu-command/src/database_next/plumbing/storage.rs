@@ -1,18 +1,15 @@
 use std::{
-    borrow::Cow,
     hash::{BuildHasher, Hash, Hasher, RandomState},
-    path::{Path, PathBuf},
+    path::Path,
     sync::LazyLock,
 };
 
-use http::Uri;
 use nu_path::AbsolutePath;
 use nu_protocol::Span;
-use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use rusqlite::OpenFlags;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-use crate::database_next::{error::DatabaseError, plumbing::uri::DatabaseUri};
+use crate::database_next::plumbing::uri::DatabaseUri;
 
 /// Process local deterministic ID hasher.
 ///
@@ -21,8 +18,10 @@ use crate::database_next::{error::DatabaseError, plumbing::uri::DatabaseUri};
 /// Not stable across different runs or binaries.
 static RANDOM_STATE: LazyLock<RandomState> = LazyLock::new(RandomState::new);
 
-static STOR_URI: LazyLock<DatabaseUri> = LazyLock::new(|| DatabaseUri::new("", "memory", [] as [(&str, &str); 0]));
-static HISTORY_URI: LazyLock<DatabaseUri> = LazyLock::new(|| DatabaseUri::new("file", "memdb1", [("mode", "memory"), ("cache", "shared")]));
+static STOR_URI: LazyLock<DatabaseUri> =
+    LazyLock::new(|| DatabaseUri::new("", "memory", [] as [(&str, &str); 0]));
+static HISTORY_URI: LazyLock<DatabaseUri> =
+    LazyLock::new(|| DatabaseUri::new("file", "memdb1", [("mode", "memory"), ("cache", "shared")]));
 
 /// Storage location and access mode for a SQLite database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,19 +30,13 @@ pub enum DatabaseStorage {
     ///
     /// We run queries directly on the file so the OS only reads pages we touch.
     /// Good for big DBs and read-heavy work.
-    ReadonlyFile {
-        path: DatabaseUri,
-        span: Span,
-    },
+    ReadonlyFile { path: DatabaseUri, span: Span },
 
     /// Writable named in-memory database.
     ///
     /// All connections opened with the same address share the same DB.
     /// This can be created by promoting a `ReadonlyFile` or by loading from raw bytes.
-    WritableMemory {
-        path: DatabaseUri,
-        span: Span,
-    },
+    WritableMemory { path: DatabaseUri, span: Span },
 
     /// Ephemeral in-memory DB for `stor` commands.
     InMemoryStor { span: Span },
@@ -63,7 +56,11 @@ impl DatabaseStorage {
         id.hash(&mut hasher);
         let id = hasher.finish();
 
-        let path = DatabaseUri::new("file", format!("nu-sqlite-{id:016x}"), [("mode", "memory"), ("cache", "shared")]);
+        let path = DatabaseUri::new(
+            "file",
+            format!("nu-sqlite-{id:016x}"),
+            [("mode", "memory"), ("cache", "shared")],
+        );
         Self::WritableMemory { path, span }
     }
 

@@ -1,10 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow,
     fmt::Write,
-    ops::Range,
     path::{Path, PathBuf},
 };
-use serde::{Serialize, Deserialize};
 
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -50,7 +48,10 @@ impl DatabaseUri {
             }
         }
 
-        Self {raw_path, encoded_path}
+        Self {
+            raw_path,
+            encoded_path,
+        }
     }
 
     pub fn uri(&self) -> &Path {

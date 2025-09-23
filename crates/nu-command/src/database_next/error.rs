@@ -1,11 +1,5 @@
-use std::{
-    borrow::Cow,
-    fmt::{Debug, Display},
-    path::PathBuf,
-    string::FromUtf8Error,
-};
+use std::{borrow::Cow, fmt::Debug, path::PathBuf, string::FromUtf8Error};
 
-use nu_path::AbsolutePathBuf;
 use nu_protocol::{
     ShellError, Span, Type,
     shell_error::{io::IoError, location::Location},
