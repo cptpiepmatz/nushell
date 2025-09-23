@@ -1,12 +1,9 @@
 use nu_protocol::{Record, Span, Value};
-use rusqlite::{Column, Row};
+use rusqlite::Row;
 
 use crate::database_next::{
     error::DatabaseError,
-    plumbing::{
-        column::DatabaseColumn, decl_type::DatabaseDeclType, rusqlite_value_to_nu_value,
-        sql::SqlString,
-    },
+    plumbing::{column::DatabaseColumn, rusqlite_value_to_nu_value, sql::SqlString},
 };
 
 #[derive(Debug)]

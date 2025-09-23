@@ -1,13 +1,18 @@
 use std::{
+    borrow::Cow,
     hash::{BuildHasher, Hash, Hasher, RandomState},
-    path::Path,
+    path::{Path, PathBuf},
     sync::LazyLock,
 };
 
-use nu_path::AbsolutePathBuf;
+use http::Uri;
+use nu_path::AbsolutePath;
 use nu_protocol::Span;
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use rusqlite::OpenFlags;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::database_next::{error::DatabaseError, plumbing::uri::DatabaseUri};
 
 /// Process local deterministic ID hasher.
 ///
@@ -16,6 +21,9 @@ use serde::{Deserialize, Serialize};
 /// Not stable across different runs or binaries.
 static RANDOM_STATE: LazyLock<RandomState> = LazyLock::new(RandomState::new);
 
+static STOR_URI: LazyLock<DatabaseUri> = LazyLock::new(|| DatabaseUri::new("", "memory", [] as [(&str, &str); 0]));
+static HISTORY_URI: LazyLock<DatabaseUri> = LazyLock::new(|| DatabaseUri::new("file", "memdb1", [("mode", "memory"), ("cache", "shared")]));
+
 /// Storage location and access mode for a SQLite database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DatabaseStorage {
@@ -23,16 +31,19 @@ pub enum DatabaseStorage {
     ///
     /// We run queries directly on the file so the OS only reads pages we touch.
     /// Good for big DBs and read-heavy work.
-    ReadonlyFile { path: AbsolutePathBuf, span: Span },
+    ReadonlyFile {
+        path: DatabaseUri,
+        span: Span,
+    },
 
     /// Writable named in-memory database.
     ///
-    /// `address` should be a SQLite memory URI like:
-    /// `file:<id>?mode=memory&cache=shared`
-    ///
     /// All connections opened with the same address share the same DB.
     /// This can be created by promoting a `ReadonlyFile` or by loading from raw bytes.
-    WritableMemory { address: String, span: Span },
+    WritableMemory {
+        path: DatabaseUri,
+        span: Span,
+    },
 
     /// Ephemeral in-memory DB for `stor` commands.
     InMemoryStor { span: Span },
@@ -42,13 +53,18 @@ pub enum DatabaseStorage {
 }
 
 impl DatabaseStorage {
+    pub fn new_readonly_file(path: &AbsolutePath, span: Span) -> Self {
+        let path = DatabaseUri::new("file", path, [("mode", "ro"), ("immutable", "1")]);
+        Self::ReadonlyFile { path, span }
+    }
+
     pub fn new_writable_memory(id: impl Hash, span: Span) -> Self {
         let mut hasher = RANDOM_STATE.build_hasher();
         id.hash(&mut hasher);
         let id = hasher.finish();
 
-        let address = format!("file:nu-sqlite-{id:016x}?mode=memory&cache=shared");
-        Self::WritableMemory { address, span }
+        let path = DatabaseUri::new("file", format!("nu-sqlite-{id:016x}"), [("mode", "memory"), ("cache", "shared")]);
+        Self::WritableMemory { path, span }
     }
 
     /// Get storage path for the database.
@@ -56,12 +72,21 @@ impl DatabaseStorage {
     /// The return is marked as a [`Path`] as [`Connection::open`](rusqlite::Connection::open) asks
     /// for an [`AsRef<Path>`](AsRef) even though this might contain in memory values like
     /// ":memory:".
-    pub fn as_path(&self) -> &Path {
+    pub fn connection_path(&self) -> &Path {
         match self {
-            Self::ReadonlyFile { path, .. } => path.as_std_path(),
-            Self::WritableMemory { address, .. } => Path::new(address),
-            Self::InMemoryStor { .. } => Path::new(":memory:"),
-            Self::InMemoryHistory => Path::new("file:memdb1?mode=memory&cache=shared"),
+            Self::ReadonlyFile { path, .. } => path.uri(),
+            Self::WritableMemory { path, .. } => path.uri(),
+            Self::InMemoryStor { .. } => STOR_URI.uri(),
+            Self::InMemoryHistory => HISTORY_URI.uri(),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::ReadonlyFile { path, .. } => path.path(),
+            Self::WritableMemory { path, .. } => path.path(),
+            Self::InMemoryStor { .. } => STOR_URI.path(),
+            Self::InMemoryHistory => HISTORY_URI.path(),
         }
     }
 

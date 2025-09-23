@@ -5,6 +5,7 @@ use std::{
     string::FromUtf8Error,
 };
 
+use nu_path::AbsolutePathBuf;
 use nu_protocol::{
     ShellError, Span, Type,
     shell_error::{io::IoError, location::Location},
@@ -150,7 +151,7 @@ impl From<DatabaseError> for ShellError {
                 error,
             } => generic_error(
                 "Open connection to database failed",
-                format!("Failed to open to {}", storage.as_path().display()),
+                format!("Failed to open to {}", storage.connection_path().display()),
                 span,
                 error,
             ),
@@ -160,7 +161,7 @@ impl From<DatabaseError> for ShellError {
                 error,
             } => generic_error(
                 "Open internal connection to database failed",
-                format!("Failed to open to {}", storage.as_path().display()),
+                format!("Failed to open to {}", storage.connection_path().display()),
                 None,
                 error,
             ),

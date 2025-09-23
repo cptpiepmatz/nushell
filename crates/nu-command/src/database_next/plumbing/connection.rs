@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use nu_protocol::{
     DataSource, FromValue, PipelineData, Record, Span, Spanned, Value, location,
     shell_error::location::Location,
@@ -32,7 +30,7 @@ pub struct DatabaseConnection {
 
 impl DatabaseConnection {
     fn open_raw(storage: DatabaseStorage) -> Result<Self, (rusqlite::Error, DatabaseStorage)> {
-        let conn = match Connection::open_with_flags(storage.as_path(), storage.flags()) {
+        let conn = match Connection::open_with_flags(storage.connection_path(), storage.flags()) {
             Ok(conn) => conn,
             Err(err) => return Err((err, storage)),
         };
@@ -91,7 +89,7 @@ impl DatabaseConnection {
                     msg: "Handle non absolute paths from pipeline".into(),
                     span,
                 })?;
-            let storage = DatabaseStorage::ReadonlyFile { path, span };
+            let storage = DatabaseStorage::new_readonly_file(&path, span);
             return Self::open(storage, span);
         }
 
@@ -102,12 +100,12 @@ impl DatabaseConnection {
     pub fn promote(self) -> Result<Self, DatabaseError> {
         if let DatabaseStorage::ReadonlyFile { path, span } = &self.storage {
             let span = *span;
-            let storage = DatabaseStorage::new_writable_memory(path, span);
+            let storage = DatabaseStorage::new_writable_memory(path.path(), span);
             let mut conn = Self::open(storage, span)?;
             conn.inner
-                .restore(DATABASE_NAME, path, None::<fn(Progress)>)
+                .restore(DATABASE_NAME, path.path(), None::<fn(Progress)>)
                 .map_err(|error| DatabaseError::Promote {
-                    path: path.into(),
+                    path: path.path().into(),
                     span,
                     error,
                 })?;
