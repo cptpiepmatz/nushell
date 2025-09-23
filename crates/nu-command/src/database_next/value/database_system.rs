@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nu_engine::command_prelude::*;
-use nu_protocol::{CustomValue, location};
+use nu_protocol::{CustomValue, casing::Casing, location};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,8 @@ impl CustomValue for DatabaseSystemValue {
         self_span: Span,
         column_name: String,
         path_span: Span,
+        _optional: bool,
+        _casing: Casing,
     ) -> Result<Value, ShellError> {
         let name = DatabaseName::UserProvided {
             name: column_name,
