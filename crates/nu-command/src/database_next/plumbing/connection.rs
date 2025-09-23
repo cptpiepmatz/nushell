@@ -15,6 +15,7 @@ use crate::database_next::{
         sql::SqlString,
         statement::DatabaseStatement,
         storage::DatabaseStorage,
+        table::DatabaseTable,
     },
 };
 
@@ -152,10 +153,13 @@ impl DatabaseConnection {
         DatabaseList::from_value(values).map_err(DatabaseError::Shell)
     }
 
-    pub fn read_database(&self, name: &DatabaseName, span: Span) -> Result<Value, DatabaseError> {
-        let db_name = name;
+    pub fn database_tables(
+        &self,
+        name: &DatabaseName,
+        span: Span,
+    ) -> Result<Vec<DatabaseTable>, DatabaseError> {
         let tables_sql = SqlString::new_internal(
-            format!("SELECT name FROM {db_name}.sqlite_master WHERE type='table'"),
+            format!("SELECT name FROM {name}.sqlite_master WHERE type='table'"),
             location!(),
         );
         let tables = self.query(tables_sql, DatabaseParams::new_empty(), span)?;
@@ -165,16 +169,37 @@ impl DatabaseConnection {
             name: String,
         }
 
-        let table_names = Vec::<TableName>::from_value(tables).map_err(DatabaseError::Shell)?;
+        Vec::<TableName>::from_value(tables)
+            .map_err(DatabaseError::Shell)
+            .map(|tables| {
+                tables
+                    .into_iter()
+                    .map(|table| DatabaseTable::UserProvided {
+                        name: table.name,
+                        span,
+                    })
+                    .collect()
+            })
+    }
+
+    pub fn read_table(
+        &self,
+        name: &DatabaseName,
+        table: &DatabaseTable,
+        span: Span,
+    ) -> Result<Value, DatabaseError> {
+        let sql = SqlString::new_internal(format!("SELECT * FROM {name}.{table}"), location!());
+        self.query(sql, DatabaseParams::new_empty(), span)
+    }
+
+    pub fn read_database(&self, name: &DatabaseName, span: Span) -> Result<Value, DatabaseError> {
+        let db_name = name;
+        let table_names = self.database_tables(db_name, span)?;
 
         let mut record = Record::new();
-        for TableName { name: table_name } in table_names {
-            let values_sql = SqlString::new_internal(
-                format!("SELECT * FROM {db_name}.{table_name}"),
-                location!(),
-            );
-            let values = self.query(values_sql, DatabaseParams::new_empty(), span)?;
-            record.push(table_name, values);
+        for table in table_names {
+            let values = self.read_table(db_name, &table, span)?;
+            record.push(table.to_string(), values);
         }
 
         Ok(Value::record(record, span))

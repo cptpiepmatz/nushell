@@ -4,7 +4,7 @@ use crate::database_next::{
         connection::DatabaseConnection, name::DatabaseName, storage::DatabaseStorage,
         table::DatabaseTable,
     },
-    value::DatabaseTableValue,
+    value::DatabaseValue,
 };
 use nu_engine::command_prelude::*;
 use nu_protocol::{CustomValue, location};
@@ -13,35 +13,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct DatabaseValue {
+pub struct DatabaseTableValue {
     pub(super) conn: Arc<Mutex<DatabaseConnection>>,
     pub(super) name: DatabaseName,
+    pub(super) table: DatabaseTable,
 }
 
-impl DatabaseValue {
-    pub const TYPE_NAME: &'static str = "database";
-
-    pub fn new(
-        conn: Arc<Mutex<DatabaseConnection>>,
-        name: DatabaseName,
-        span: Span,
-    ) -> Result<Self, ShellError> {
-        let db_name = name.name();
-        if db_name == "main" {
-            return Ok(Self { conn, name });
-        }
-
-        let database_list = { conn.lock().database_list(span)? };
-        if database_list.has_database(db_name) {
-            return Ok(Self { conn, name });
-        }
-
-        Err(ShellError::from(DatabaseError::DatabaseNotFound {
-            name,
-            database_list,
-            span,
-        }))
-    }
+impl DatabaseTableValue {
+    pub const TYPE_NAME: &'static str = "database-table";
 
     pub fn is(value: &Value) -> bool {
         let Value::Custom { val, .. } = value else {
@@ -50,17 +29,31 @@ impl DatabaseValue {
         val.as_any().is::<Self>()
     }
 
-    pub fn with_table(
-        self,
+    pub fn from_database(
+        value: DatabaseValue,
         table: DatabaseTable,
         span: Span,
-    ) -> Result<DatabaseTableValue, DatabaseError> {
-        DatabaseTableValue::from_database(self, table, span)
+    ) -> Result<Self, DatabaseError> {
+        let database_tables = { value.conn.lock().database_tables(&value.name, span)? };
+        if database_tables.contains(&table) {
+            return Ok(Self {
+                conn: value.conn,
+                name: value.name,
+                table,
+            });
+        }
+
+        Err(DatabaseError::TableNotFound {
+            name: value.name,
+            table: table,
+            tables: database_tables,
+            span: span,
+        })
     }
 }
 
 #[typetag::serde]
-impl CustomValue for DatabaseValue {
+impl CustomValue for DatabaseTableValue {
     fn clone_value(&self, span: Span) -> Value {
         self.clone().into_value(span)
     }
@@ -71,7 +64,7 @@ impl CustomValue for DatabaseValue {
 
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
         let conn = self.conn.lock();
-        Ok(conn.read_database(&self.name, span)?)
+        Ok(conn.read_table(&self.name, &self.table, span)?)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -88,16 +81,12 @@ impl CustomValue for DatabaseValue {
         column_name: String,
         path_span: Span,
     ) -> Result<Value, ShellError> {
-        let table = DatabaseTable::UserProvided {
-            name: column_name,
-            span: path_span,
-        };
-        let value = self.clone().with_table(table, self_span)?;
-        Ok(Value::custom(Box::new(value), self_span))
+        let _ = (self_span, column_name, path_span);
+        todo!()
     }
 }
 
-impl IntoValue for DatabaseValue {
+impl IntoValue for DatabaseTableValue {
     fn into_value(self, span: Span) -> Value {
         Value::custom(Box::new(self), span)
     }
@@ -107,9 +96,10 @@ impl IntoValue for DatabaseValue {
 struct DatabaseTableValueDto {
     storage: DatabaseStorage,
     schema: DatabaseName,
+    table: DatabaseTable,
 }
 
-impl Serialize for DatabaseValue {
+impl Serialize for DatabaseTableValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -117,11 +107,17 @@ impl Serialize for DatabaseValue {
         let conn = self.conn.lock();
         let storage = conn.storage().clone();
         let schema = self.name.clone();
-        DatabaseTableValueDto { storage, schema }.serialize(serializer)
+        let table = self.table.clone();
+        DatabaseTableValueDto {
+            storage,
+            schema,
+            table,
+        }
+        .serialize(serializer)
     }
 }
 
-impl<'de> Deserialize<'de> for DatabaseValue {
+impl<'de> Deserialize<'de> for DatabaseTableValue {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -132,6 +128,7 @@ impl<'de> Deserialize<'de> for DatabaseValue {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             name: dto.schema,
+            table: dto.table,
         })
     }
 }

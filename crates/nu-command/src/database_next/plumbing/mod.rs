@@ -13,6 +13,7 @@ pub mod row;
 pub mod sql;
 pub mod statement;
 pub mod storage;
+pub mod table;
 
 fn nu_value_to_rusqlite_value(
     value: NuValue,

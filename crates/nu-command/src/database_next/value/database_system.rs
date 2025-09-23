@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use nu_engine::command_prelude::*;
 use nu_protocol::{CustomValue, location};
@@ -12,7 +12,7 @@ use crate::database_next::{
 
 #[derive(Debug, Clone)]
 pub struct DatabaseSystemValue {
-    conn: Arc<Mutex<DatabaseConnection>>,
+    pub(super) conn: Arc<Mutex<DatabaseConnection>>,
 }
 
 impl DatabaseSystemValue {

@@ -12,7 +12,7 @@ use nu_protocol::{
 
 use crate::database_next::plumbing::{
     decl_type::DatabaseDeclType, list::DatabaseList, name::DatabaseName, sql::SqlString,
-    storage::DatabaseStorage,
+    storage::DatabaseStorage, table::DatabaseTable,
 };
 
 #[derive(Debug)]
@@ -35,6 +35,13 @@ pub enum DatabaseError {
     DatabaseNotFound {
         name: DatabaseName,
         database_list: DatabaseList,
+        span: Span,
+    },
+
+    TableNotFound {
+        name: DatabaseName,
+        table: DatabaseTable,
+        tables: Vec<DatabaseTable>,
         span: Span,
     },
 
@@ -193,6 +200,58 @@ impl From<DatabaseError> for ShellError {
                 ..
             } => DatabaseError::Todo {
                 msg: "Provide database not found error for locations".into(),
+                span,
+            }
+            .into(),
+            DatabaseError::TableNotFound {
+                name:
+                    name @ DatabaseName::UserProvided {
+                        span: name_span, ..
+                    },
+                table,
+                tables,
+                span: value_span,
+            } => ShellError::GenericError {
+                error: "Database does not contain expected table".into(),
+                msg: format!(
+                    "Could not find {:?}.{:?} in database",
+                    name.name(),
+                    table.as_str()
+                ),
+                span: Some(value_span),
+                help: None,
+                inner: vec![match nu_protocol::did_you_mean(
+                    tables.iter().map(|entry| entry.as_str()),
+                    table.as_str(),
+                ) {
+                    Some(suggestion) => ShellError::DidYouMeanCustom {
+                        msg: format!(
+                            "Could not find {:?}.{:?} in database",
+                            name.name(),
+                            table.as_str()
+                        ),
+                        suggestion,
+                        span: name_span,
+                    },
+                    None => ShellError::GenericError {
+                        error: "Table not found".into(),
+                        msg: format!(
+                            "Could not find {:?}.{:?} in database",
+                            name.name(),
+                            table.as_str()
+                        ),
+                        span: Some(name_span),
+                        help: None,
+                        inner: vec![],
+                    },
+                }],
+            },
+            DatabaseError::TableNotFound {
+                name: DatabaseName::Internal { .. },
+                span,
+                ..
+            } => DatabaseError::Todo {
+                msg: "Provide table not found error for locations".into(),
                 span,
             }
             .into(),
