@@ -1,0 +1,3 @@
+[[disallowed-types]]
+path = "rusqlite::types::Value"
+reason = "ValueRef into Value may panic, use `plumbing::SqlValue` instead"

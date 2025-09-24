@@ -69,6 +69,7 @@ anyhow = "1.0.82"
 base64 = "0.22.1"
 bracoxide = "0.1.6"
 brotli = "7.0"
+bytemuck = "1.23"
 byteorder = "1.5"
 bytes = "1"
 bytesize = "2.1.0"
@@ -208,6 +209,7 @@ webpki-roots = "1.0"
 unchecked_duration_subtraction = "warn"
 used_underscore_binding = "warn"
 result_large_err = "allow"
+disallowed_types = "deny"
 
 [lints]
 workspace = true

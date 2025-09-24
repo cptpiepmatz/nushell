@@ -1,8 +1,8 @@
-use crate::database_next::{error::DatabaseError, plumbing::nu_value_to_rusqlite_value};
+use crate::database_next::{error::DatabaseError, plumbing::{nu_value_to_sql_value, value::SqlValue}};
 
 pub enum DatabaseParams {
-    Unnamed(Vec<rusqlite::types::Value>),
-    Named(Vec<(String, rusqlite::types::Value)>),
+    Unnamed(Vec<SqlValue>),
+    Named(Vec<(String, SqlValue)>),
 }
 
 impl DatabaseParams {
@@ -15,7 +15,7 @@ impl DatabaseParams {
     ) -> Result<Self, DatabaseError> {
         let mut values = Vec::with_capacity(iter.len());
         for value in iter {
-            let value = nu_value_to_rusqlite_value(value, false)?;
+            let value = nu_value_to_sql_value(value, false)?;
             values.push(value);
         }
         Ok(Self::Unnamed(values))
@@ -26,7 +26,7 @@ impl DatabaseParams {
     ) -> Result<Self, DatabaseError> {
         let mut values = Vec::with_capacity(iter.len());
         for (key, value) in iter {
-            let value = nu_value_to_rusqlite_value(value, false)?;
+            let value = nu_value_to_sql_value(value, false)?;
             values.push((key, value));
         }
         Ok(Self::Named(values))

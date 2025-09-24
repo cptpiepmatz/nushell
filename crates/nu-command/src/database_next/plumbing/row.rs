@@ -3,7 +3,7 @@ use rusqlite::Row;
 
 use crate::database_next::{
     error::DatabaseError,
-    plumbing::{column::DatabaseColumn, rusqlite_value_to_nu_value, sql::SqlString},
+    plumbing::{column::DatabaseColumn, sql_value_to_nu_value, sql::SqlString, value::SqlValue},
 };
 
 #[derive(Debug)]
@@ -22,7 +22,7 @@ impl<'stmt, 'sql> DatabaseRow<'stmt, 'sql> {
         for column in columns {
             let index = column.name.as_str();
             let stmt = self.inner.as_ref();
-            let value: rusqlite::types::Value =
+            let value: SqlValue =
                 self.inner.get(index).map_err(|error| DatabaseError::Get {
                     sql: self.sql.expanded(stmt),
                     index: index.into(),
@@ -31,7 +31,7 @@ impl<'stmt, 'sql> DatabaseRow<'stmt, 'sql> {
                 })?;
 
             let decl_type = column.decl_type;
-            let value = rusqlite_value_to_nu_value(value, decl_type, span)?;
+            let value = sql_value_to_nu_value(value, decl_type, span)?;
             record.push(index, value);
         }
 

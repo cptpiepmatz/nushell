@@ -38,7 +38,9 @@ base64 = { workspace = true }
 bracoxide = { workspace = true }
 brotli = { workspace = true }
 byteorder = { workspace = true }
+bytes = { workspace = true }
 bytesize = { workspace = true }
+bytemuck = { workspace = true }
 calamine = { workspace = true, features = ["dates"] }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = [
