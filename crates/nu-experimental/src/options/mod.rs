@@ -71,10 +71,10 @@ pub use reorder_cell_paths::REORDER_CELL_PATHS;
 /// Use this to show users every experimental option, including their descriptions,
 /// identifiers, and current state.
 pub static ALL: &[&ExperimentalOption] = &[
-    &EXAMPLE,
-    &REORDER_CELL_PATHS,
-    &PIPE_FAIL,
     &DATABASE_CMD_NEXT,
+    &EXAMPLE,
+    &PIPE_FAIL,
+    &REORDER_CELL_PATHS,
 ];
 
 #[cfg(test)]
