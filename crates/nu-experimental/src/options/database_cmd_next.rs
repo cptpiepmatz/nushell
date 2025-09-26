@@ -28,4 +28,6 @@ impl ExperimentalOptionMarker for DatabaseCmdNext {
         "May contain breaking changes."
     );
     const STATUS: Status = Status::OptIn;
+    const SINCE: Version = (0, 107, 1);
+    const ISSUE: u32 = 0;
 }
