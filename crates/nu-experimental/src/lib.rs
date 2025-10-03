@@ -49,15 +49,41 @@
 //! Since options are expected to stay stable during runtime, make sure to do this early.
 //!
 //! You can also call [`ExperimentalOption::set`] manually, but be careful with that.
+//!
+//! # Test Support
+//!
+//! Since experimental options are stored as global statics, testing them can be tricky.
+//! Tests running in parallel may interfere with each other by changing the same global value,
+//! leading to unstable or flaky results.
+//!
+//! To make experimental options testable, this crate provides the `test-support` feature.
+//! When enabled, it changes how options store their values:
+//! instead of using a single global static, each option reads from a
+//! [thread-local](std::thread_local) hash map that keeps values isolated per thread.
+//!
+//! In this mode, the usual setter methods are disabled.
+//! Instead, you can use `nu_experimental::test_support::ExperimentalOptionsGuard` to control
+//! option values in tests. 
+//! The guard allows you to set specific options, and when it’s dropped, all values are 
+//! automatically reset.
 
-use crate::util::AtomicMaybe;
-use std::{fmt::Debug, sync::atomic::Ordering};
+use std::fmt::Debug;
+
+#[cfg(not(feature = "test-support"))]
+use std::sync::atomic::Ordering;
 
 mod options;
-mod parse;
+pub use options::*;
+
+#[cfg(not(feature = "test-support"))]
 mod util;
 
-pub use options::*;
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
+#[cfg(not(feature = "test-support"))]
+mod parse;
+#[cfg(not(feature = "test-support"))]
 pub use parse::*;
 
 /// The status of an experimental option.
@@ -96,7 +122,8 @@ pub enum Status {
 /// To also include the description in the output, use the
 /// [plus sign](std::fmt::Formatter::sign_plus), e.g. `format!("{OPTION:+#?}")`.
 pub struct ExperimentalOption {
-    value: AtomicMaybe,
+    #[cfg(not(feature = "test-support"))]
+    value: crate::util::AtomicMaybe,
     marker: &'static (dyn DynExperimentalOptionMarker + Send + Sync),
 }
 
@@ -108,7 +135,8 @@ impl ExperimentalOption {
         marker: &'static (dyn DynExperimentalOptionMarker + Send + Sync),
     ) -> Self {
         Self {
-            value: AtomicMaybe::new(None),
+            #[cfg(not(feature = "test-support"))]
+            value: crate::util::AtomicMaybe::new(None),
             marker,
         }
     }
@@ -140,6 +168,7 @@ impl ExperimentalOption {
         )
     }
 
+    #[cfg(not(feature = "test-support"))]
     pub fn get(&self) -> bool {
         self.value
             .load(Ordering::Relaxed)
@@ -159,6 +188,7 @@ impl ExperimentalOption {
     /// Changing their state at arbitrary points can lead to inconsistent behavior.
     /// You should set experimental options only during initialization, before the application fully
     /// starts.
+    #[cfg(not(feature = "test-support"))]
     pub unsafe fn set(&self, value: bool) {
         self.value.store(value, Ordering::Relaxed);
     }
@@ -169,6 +199,7 @@ impl ExperimentalOption {
     /// Like [`set`](Self::set), this method is unsafe to highlight that experimental options should
     /// remain stable during runtime.
     /// Only unset options in controlled, initialization contexts to avoid unpredictable behavior.
+    #[cfg(not(feature = "test-support"))]
     pub unsafe fn unset(&self) {
         self.value.store(None, Ordering::Relaxed);
     }
@@ -180,7 +211,7 @@ impl Debug for ExperimentalOption {
         let mut debug_struct = f.debug_struct("ExperimentalOption");
         debug_struct.field("identifier", &self.identifier());
         debug_struct.field("value", &self.get());
-        debug_struct.field("stability", &self.status());
+        debug_struct.field("status", &self.status());
         if add_description {
             debug_struct.field("description", &self.description());
         }
@@ -190,8 +221,7 @@ impl Debug for ExperimentalOption {
 
 impl PartialEq for ExperimentalOption {
     fn eq(&self, other: &Self) -> bool {
-        // if both underlying atomics point to the same value, we talk about the same option
-        self.value.as_ptr() == other.value.as_ptr()
+        self.identifier() == other.identifier()
     }
 }
 
@@ -205,6 +235,7 @@ impl Eq for ExperimentalOption {}
 /// Changing their state at arbitrary points can lead to inconsistent behavior.
 /// You should set experimental options only during initialization, before the application fully
 /// starts.
+#[cfg(not(feature = "test-support"))]
 pub unsafe fn set_all(value: bool) {
     for option in ALL {
         match option.status() {

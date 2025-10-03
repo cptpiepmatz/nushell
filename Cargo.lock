@@ -4546,6 +4546,7 @@ dependencies = [
 name = "nu-test-support"
 version = "0.107.1"
 dependencies = [
+ "nu-experimental",
  "nu-glob",
  "nu-path",
  "nu-utils",
