@@ -4546,8 +4546,12 @@ dependencies = [
 name = "nu-test-support"
 version = "0.107.1"
 dependencies = [
+ "nu-cmd-lang",
+ "nu-command",
+ "nu-experimental",
  "nu-glob",
  "nu-path",
+ "nu-protocol",
  "nu-utils",
  "num-format",
  "tempfile",

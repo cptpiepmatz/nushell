@@ -5,6 +5,7 @@ pub mod locale_override;
 pub mod macros;
 pub mod playground;
 use std::process::ExitStatus;
+mod builder;
 
 // Needs to be reexported for `nu!` macro
 pub use nu_path;
