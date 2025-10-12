@@ -58,6 +58,7 @@ members = [
   "crates/nu-table",
   "crates/nu-term-grid",
   "crates/nu-test-support",
+  "crates/nu-test-support-macros",
   "crates/nu-utils",
   "crates/nuon",
   "crates/nu-mcp",
@@ -105,12 +106,14 @@ itertools = "0.14"
 lean_string = { version = "0.5", features = ["serde"] }
 libc = "0.2"
 libproc = "0.14"
+libtest-mimic = "0.8"
+linkme = "0.3"
 log = "0.4"
 lru = "0.12"
 lscolors = { version = "0.20", default-features = false }
 lsp-server = "0.7.8"
-lsp-types = { version = "0.97.0", features = ["proposed"] }
 lsp-textdocument = "0.4.2"
+lsp-types = { version = "0.97.0", features = ["proposed"] }
 mach2 = "0.4"
 md5 = { version = "0.10", package = "md-5" }
 miette = "7.6"
