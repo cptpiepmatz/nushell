@@ -10,7 +10,6 @@ pub mod playground;
 
 // Expose macros to be used for the test harness.
 pub use harness::macros::*;
-pub use harness::macros::test;
 
 // Needs to be reexported for `nu!` macro
 pub use nu_path;

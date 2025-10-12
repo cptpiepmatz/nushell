@@ -3,21 +3,19 @@
     reason = "We use deprecation warnings to document that manual construction is not allowed."
 )]
 
-use std::{fmt::Debug, ops::Deref, sync::{LazyLock, OnceLock}};
+use std::{fmt::Debug, ops::Deref, sync::LazyLock};
 
-use crate as nu_test_support;
+use crate::{self as nu_test_support, harness::output_capture::Output};
 
-use libtest_mimic::{Arguments, Failed, Trial};
+use libtest_mimic::{Arguments, Trial};
 #[doc(hidden)]
 pub use linkme;
 
+pub mod output_capture;
 pub mod macros {
     pub use linkme::distributed_slice as collect_test;
     pub use nu_test_support_macros::test;
 }
-
-pub static NO_CAPTURE: OnceLock<bool> = OnceLock::new();
-pub static SHOW_OUTPUT: OnceLock<bool> = OnceLock::new();
 
 // generate data types for `TestMetadata`
 nu_test_support_macros::make_metadata!();
@@ -60,17 +58,32 @@ impl Debug for TestMetadata {
 
 pub fn run() {
     let args = Arguments::from_args();
-    NO_CAPTURE.set(args.nocapture).expect("should not be set already");
-    SHOW_OUTPUT.set(args.show_output).expect("should not be set already");
+    output_capture::NO_CAPTURE
+        .set(args.nocapture)
+        .expect("should not be set already");
 
-    let tests = TESTS.into_iter().map(|test| {
-        Trial::test(test.name.deref().to_string(), || {
-            (test.function)()?;
-            Ok(())
+    let tests = TESTS
+        .into_iter()
+        .map(|test| {
+            Trial::test(test.name.deref().to_string(), move || {
+                output_capture::OUTPUT.with_borrow_mut(|output| output.clear());
+                (test.function)()?;
+                if args.show_output {
+                    output_capture::OUTPUT.with_borrow(|output| {
+                        for output in output {
+                            if let Output::Stdout(output) = output {
+                                print!("{output}");
+                            }
+                        }
+                    });
+                }
+                // TODO: on error, show output
+                Ok(())
+            })
+            .with_ignored_flag(test.ignored.0)
+            .with_kind(test.experimental_options.to_string())
         })
-        .with_ignored_flag(test.ignored.0)
-        .with_kind(test.experimental_options.to_string())
-    }).collect();
+        .collect();
 
     libtest_mimic::run(&args, tests).exit()
 }
