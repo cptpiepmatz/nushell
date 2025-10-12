@@ -19,7 +19,10 @@ pub fn test(item_fn: ItemFn) -> proc_macro2::TokenStream {
     };
 
     let experimental_options = nu_experimental::ALL.into_iter().map(|option| {
-        let field_ident = proc_macro2::Ident::new(option.identifier().to_snake_case().as_str(), proc_macro2::Span::call_site());
+        let field_ident = proc_macro2::Ident::new(
+            option.identifier().to_snake_case().as_str(),
+            proc_macro2::Span::call_site(),
+        );
         quote!(#field_ident: ::std::option::Option::None)
     });
 
@@ -29,16 +32,16 @@ pub fn test(item_fn: ItemFn) -> proc_macro2::TokenStream {
         #[allow(deprecated, reason = "constructed in macro")]
         #[::nu_test_support::collect_test(nu_test_support::harness::TESTS)]
         #[linkme(crate = ::nu_test_support::harness::linkme)]
-        static #static_ident: ::nu_test_support::harness::TestMetadata = 
-            ::nu_test_support::harness::TestMetadata { 
-                function: #wrapper_ident, 
-                name: ::std::sync::LazyLock::new(|| ::std::any::type_name_of_val(&#fn_ident)), 
+        static #static_ident: ::nu_test_support::harness::TestMetadata =
+            ::nu_test_support::harness::TestMetadata {
+                function: #wrapper_ident,
+                name: ::std::sync::LazyLock::new(|| ::std::any::type_name_of_val(&#fn_ident)),
                 // TODO: parse these fields
                 ignored: (false, ::std::option::Option::None),
                 should_panic: (false, ::std::option::Option::None),
-                experimental_options: ::nu_test_support::harness::RequestedExperimentalOptions { 
-                    #(#experimental_options,)* 
-                } 
+                experimental_options: ::nu_test_support::harness::RequestedExperimentalOptions {
+                    #(#experimental_options,)*
+                }
             };
 
         #item_fn
