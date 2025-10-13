@@ -51,12 +51,7 @@
 //! You can also call [`ExperimentalOption::set`] manually, but be careful with that.
 
 use crate::util::AtomicMaybe;
-use std::{
-    any::{self, TypeId},
-    fmt::Debug,
-    hash::Hash,
-    sync::atomic::Ordering,
-};
+use std::{any::TypeId, fmt::Debug, hash::Hash, sync::atomic::Ordering};
 
 mod options;
 mod parse;

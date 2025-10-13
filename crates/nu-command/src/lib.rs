@@ -78,6 +78,7 @@ mod database;
 pub use database::*;
 
 #[cfg(test)]
-fn main() {
-    // TODO: actually test here
-}
+#[macro_use]
+extern crate nu_test_support;
+#[cfg(test)]
+use nu_test_support::harness::main;

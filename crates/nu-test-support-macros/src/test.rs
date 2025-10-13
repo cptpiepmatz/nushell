@@ -3,9 +3,8 @@ use std::mem;
 use heck::ToShoutySnakeCase;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Expr, Ident, ItemFn, Lit, LitBool, LitStr, Meta, MetaNameValue, PatLit, Path,
-    ReturnType, Token,
-    parse::{ParseStream, Parser},
+    Attribute, Expr, Ident, ItemFn, Lit, LitBool, LitStr, Meta, MetaNameValue, Path, ReturnType,
+    Token, parse::ParseStream,
 };
 
 pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
@@ -104,7 +103,7 @@ impl TryFrom<Vec<Attribute>> for TestAttributes {
                         },
                         _ => todo!("error"),
                     },
-                    Meta::List(meta_list) => todo!("error"),
+                    Meta::List(_meta_list) => todo!("error"),
                 },
 
                 "should_panic" => match attr.meta {
@@ -134,7 +133,7 @@ impl TryFrom<Vec<Attribute>> for TestAttributes {
                                     };
                                     let _: Token![=] = input.parse()?;
                                     let value: LitBool = input.parse()?;
-                                    return Ok((path, Some(value)));
+                                    Ok((path, Some(value)))
                                 },
                                 Token![,],
                             )?
@@ -154,7 +153,7 @@ impl TryFrom<Vec<Attribute>> for TestAttributes {
                                     let key: Ident = input.parse()?;
                                     let _: Token![=] = input.parse()?;
                                     let value: Expr = input.parse()?;
-                                    return Ok((key, value));
+                                    Ok((key, value))
                                 },
                                 Token![,],
                             )?
