@@ -1211,7 +1211,7 @@ fn test_cp_to_customized_home_directory() {
     Playground::setup("cp_to_home", |dirs, sandbox| {
         sandbox.with_files(&[EmptyFile("test_file.txt")]);
         let actual = nu!(
-            cwd: dirs.test(), 
+            cwd: dirs.test(),
             envs: vec![("HOME".to_string(), dirs.test().to_string_lossy().to_string())],
             "mkdir test; cp test_file.txt ~/test/"
         );

@@ -40,6 +40,11 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
         (value, Some(msg)) => quote!((#value, ::std::option::Option::Some(#msg))),
     };
 
+    let experimental_options = attrs.experimental_options.into_iter().map(|(path, lit)| {
+        let lit = lit.map(|lit| lit.value).unwrap_or(true);
+        quote!((&#path, #lit))
+    });
+
     quote! {
         #wrapper
 
@@ -52,8 +57,8 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
                 name: ::std::sync::LazyLock::new(|| ::std::any::type_name_of_val(&#fn_ident)),
                 ignored: #ignored,
                 should_panic: #should_panic,
+                experimental_options: &[#(#experimental_options),*],
                 // TODO: parse these fields
-                experimental_options: &[],
                 environment_variables: &[],
             };
 
@@ -66,7 +71,7 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
 pub struct TestAttributes {
     pub ignore: (bool, Option<LitStr>),
     pub should_panic: (bool, Option<LitStr>),
-    pub experimental_options: Vec<(Path, LitBool)>,
+    pub experimental_options: Vec<(Path, Option<LitBool>)>,
     pub environment_variables: Vec<(Ident, LitStr)>,
     pub rest: Vec<Attribute>,
 }
@@ -114,8 +119,31 @@ impl TryFrom<Vec<Attribute>> for TestAttributes {
                     Meta::NameValue(_) => todo!("error"),
                 },
 
-                "experimental_option" => todo!(),
+                "experimental_options" => {
+                    fn parse(input: ParseStream) -> syn::Result<Vec<(Path, Option<LitBool>)>> {
+                        Ok(input
+                            .parse_terminated(
+                                |input| {
+                                    let path: Path = input.parse()?;
+                                    if !input.peek(Token![=]) {
+                                        return Ok((path, None));
+                                    };
+                                    let _: Token![=] = input.parse()?;
+                                    let value: LitBool = input.parse()?;
+                                    return Ok((path, Some(value)));
+                                },
+                                Token![,],
+                            )?
+                            .into_iter()
+                            .collect())
+                    }
+
+                    let options = attr.parse_args_with(parse)?;
+                    test_attrs.experimental_options.extend(options);
+                }
+
                 "env" => todo!(),
+
                 _ => test_attrs.rest.push(attr),
             }
         }
