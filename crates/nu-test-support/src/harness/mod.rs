@@ -7,6 +7,7 @@ use std::{
     borrow::Cow,
     fmt::{self, Debug, Write},
     ops::Deref,
+    panic,
     sync::LazyLock,
 };
 
@@ -112,7 +113,12 @@ pub fn run() {
         .map(|test| {
             Trial::test(test.name.deref().to_string(), move || {
                 output_capture::OUTPUT.with_borrow_mut(|output| output.clear());
-                (test.function)()?;
+                let test_run = panic::catch_unwind(test.function);
+                match (test.should_panic.0, test_run) {
+                    (true, Err(_)) => (),
+                    (false, Ok(_)) => (),
+                    _ => todo!(),
+                }
                 if args.show_output {
                     output_capture::OUTPUT.with_borrow(|output| {
                         for output in output {
