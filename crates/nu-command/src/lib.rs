@@ -76,3 +76,8 @@ mod database;
 
 #[cfg(feature = "sqlite")]
 pub use database::*;
+
+#[cfg(test)]
+fn main() {
+    // TODO: actually test here
+}
