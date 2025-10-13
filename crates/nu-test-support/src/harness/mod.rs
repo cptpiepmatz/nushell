@@ -1,11 +1,6 @@
-#![allow(
-    deprecated,
-    reason = "We use deprecation warnings to document that manual construction is not allowed."
-)]
-
 use std::{
     borrow::Cow,
-    fmt::{self, Debug, Write},
+    fmt::{Debug, Write},
     ops::Deref,
     panic,
     sync::LazyLock,
@@ -117,7 +112,8 @@ pub fn main() {
                 match (test.should_panic.0, test_run) {
                     (true, Err(_)) => (),
                     (false, Ok(_)) => (),
-                    _ => todo!(),
+                    (_, Err(err)) => todo!("handle unexpected panic: {}", panic_message(err)),
+                    (true, Ok(_)) => todo!("handle expected panic"),
                 }
                 if args.show_output {
                     output_capture::OUTPUT.with_borrow(|output| {
@@ -137,4 +133,14 @@ pub fn main() {
         .collect();
 
     libtest_with::run(&args, tests).exit()
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        format!("<non-string panic payload: {:?}>", payload.type_id())
+    }
 }
