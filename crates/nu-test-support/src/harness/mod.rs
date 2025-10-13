@@ -102,7 +102,7 @@ impl Debug for TestMetadata {
     }
 }
 
-pub fn run() {
+pub fn main() {
     let args = Arguments::from_args();
     output_capture::NO_CAPTURE
         .set(args.nocapture)
