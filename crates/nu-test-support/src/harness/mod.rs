@@ -40,7 +40,7 @@ pub struct TestMetadata {
     /// Requested experimental options.
     pub experimental_options: &'static [(&'static ExperimentalOption, bool)],
     /// Configured environment variables to run test with.
-    pub environment_variables: &'static [(&'static str, Cow<'static, str>)],
+    pub environment_variables: &'static [(&'static str, &'static str)],
 }
 
 impl TestMetadata {
@@ -53,9 +53,9 @@ impl TestMetadata {
             let mut first = true;
             for (option, value) in self.experimental_options.iter() {
                 if !first {
-                    write!(out, ", ").unwrap();
-                    first = false;
-                }
+                    write!(out, ", ").unwrap()
+                };
+                first = false;
                 write!(
                     out,
                     "{identifier}={value}",
@@ -74,10 +74,10 @@ impl TestMetadata {
             let mut first = true;
             for (key, value) in self.environment_variables.iter() {
                 if !first {
-                    write!(out, ", ").unwrap();
-                    first = false;
-                }
-                write!(out, "{key}={value}").unwrap();
+                    write!(out, ", ").unwrap()
+                };
+                first = false;
+                write!(out, "{key}={value:?}").unwrap();
             }
         }
 

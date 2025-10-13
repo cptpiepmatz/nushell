@@ -45,6 +45,11 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
         quote!((&#path, #lit))
     });
 
+    let environment_variables = attrs.environment_variables.into_iter().map(|(key, value)| {
+        let key = key.to_string();
+        quote!((#key, #value))
+    });
+
     quote! {
         #wrapper
 
@@ -58,8 +63,7 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
                 ignored: #ignored,
                 should_panic: #should_panic,
                 experimental_options: &[#(#experimental_options),*],
-                // TODO: parse these fields
-                environment_variables: &[],
+                environment_variables: &[#(#environment_variables),*],
             };
 
         #(#attr_rest)*
@@ -72,7 +76,7 @@ pub struct TestAttributes {
     pub ignore: (bool, Option<LitStr>),
     pub should_panic: (bool, Option<LitStr>),
     pub experimental_options: Vec<(Path, Option<LitBool>)>,
-    pub environment_variables: Vec<(Ident, LitStr)>,
+    pub environment_variables: Vec<(Ident, Expr)>,
     pub rest: Vec<Attribute>,
 }
 
@@ -142,7 +146,25 @@ impl TryFrom<Vec<Attribute>> for TestAttributes {
                     test_attrs.experimental_options.extend(options);
                 }
 
-                "env" => todo!(),
+                "env" => {
+                    fn parse(input: ParseStream) -> syn::Result<Vec<(Ident, Expr)>> {
+                        Ok(input
+                            .parse_terminated(
+                                |input| {
+                                    let key: Ident = input.parse()?;
+                                    let _: Token![=] = input.parse()?;
+                                    let value: Expr = input.parse()?;
+                                    return Ok((key, value));
+                                },
+                                Token![,],
+                            )?
+                            .into_iter()
+                            .collect())
+                    }
+
+                    let envs = attr.parse_args_with(parse)?;
+                    test_attrs.environment_variables.extend(envs);
+                }
 
                 _ => test_attrs.rest.push(attr),
             }
