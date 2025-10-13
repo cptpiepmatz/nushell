@@ -53,9 +53,9 @@ impl TestMetadata {
             let opts = self
                 .experimental_options
                 .iter()
-                .map(|(option, _value)| format!("{}={}", option.identifier(), _value))
+                .map(|(option, value)| format!("{}={}", option.identifier(), value))
                 .join(", ");
-            write!(out, "exp: {}", opts).unwrap();
+            write!(out, "exp: {opts}").unwrap();
         }
 
         if !self.experimental_options.is_empty() && !self.environment_variables.is_empty() {
@@ -68,7 +68,7 @@ impl TestMetadata {
                 .iter()
                 .map(|(key, value)| format!("{key}={value:?}"))
                 .join(", ");
-            write!(out, "env: {}", envs).unwrap();
+            write!(out, "env: {envs}").unwrap();
         }
 
         out
@@ -143,8 +143,8 @@ pub fn main() {
         .map(|(group, tests)| {
             let old_env_vars = group
                 .1
-                .iter()
-                .map(|(key, _)| (key, env::var_os(key)))
+                .keys()
+                .map(|key| (key, env::var_os(key)))
                 .collect_vec();
             group.1.iter().for_each(|(key, value)| unsafe {
                 env::set_var(key, value);

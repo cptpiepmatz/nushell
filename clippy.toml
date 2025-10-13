@@ -1,0 +1,3 @@
+# The hash impl of `ExperimentalOption` ignores the value, so no actual interior 
+# mutability for keys here.
+ignore-interior-mutability = ["nu_experimental::ExperimentalOption"]

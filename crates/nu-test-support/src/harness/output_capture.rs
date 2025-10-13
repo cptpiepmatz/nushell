@@ -4,7 +4,7 @@ pub static NO_CAPTURE: OnceLock<bool> = OnceLock::new();
 pub static SHOW_OUTPUT: OnceLock<bool> = OnceLock::new();
 
 thread_local! {
-    pub static OUTPUT: RefCell<Vec<Output>> = RefCell::new(Vec::new());
+    pub static OUTPUT: RefCell<Vec<Output>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Debug, Clone)]
