@@ -3,22 +3,20 @@
     reason = "We use deprecation warnings to document that manual construction is not allowed."
 )]
 
-use std::{fmt::Debug, ops::Deref, sync::LazyLock};
+use std::{borrow::Cow, fmt::{self, Debug, Write}, ops::Deref, sync::LazyLock};
 
 use crate::{self as nu_test_support, harness::output_capture::Output};
 
 use libtest_mimic::{Arguments, Trial};
 #[doc(hidden)]
 pub use linkme;
+use nu_experimental::ExperimentalOption;
 
 pub mod output_capture;
 pub mod macros {
     pub use linkme::distributed_slice as collect_test;
     pub use nu_test_support_macros::test;
 }
-
-// generate data types for `TestMetadata`
-nu_test_support_macros::make_metadata!();
 
 /// All collected tests.
 #[linkme::distributed_slice]
@@ -39,9 +37,46 @@ pub struct TestMetadata {
     /// Whether the test should panic and what is expected.
     pub should_panic: (bool, Option<&'static str>),
     /// Requested experimental options.
-    ///
-    /// The type is generated from [`nu_experimental::ALL`].
-    pub experimental_options: RequestedExperimentalOptions,
+    pub experimental_options: &'static [(&'static ExperimentalOption, bool)],
+    /// Configured environment variables to run test with.
+    pub environment_variables: &'static [(&'static str, Cow<'static, str>)],
+}
+
+impl TestMetadata {
+    fn kind(&self) -> String {
+        // calling fmt::Write on a String is infallible
+        let mut out = String::new();
+        
+        if !self.experimental_options.is_empty() {
+            write!(out, "exp: ").unwrap();
+            let mut first = true;
+            for (option, value) in self.experimental_options.iter() {
+                if !first {
+                    write!(out, ", ").unwrap();
+                    first = false;
+                }
+                write!(out, "{identifier}={value}", identifier = option.identifier()).unwrap();
+            }
+        }
+
+        if !self.experimental_options.is_empty() && !self.environment_variables.is_empty() {
+            write!(out, "; ").unwrap();
+        }
+
+        if !self.environment_variables.is_empty() {
+            write!(out, "env: ").unwrap();
+            let mut first = true;
+            for (key, value) in self.environment_variables.iter() {
+                if !first {
+                    write!(out, ", ").unwrap();
+                    first = false;
+                }
+                write!(out, "{key}={value}").unwrap();
+            }
+        }
+        
+        out
+    }
 }
 
 impl Debug for TestMetadata {
@@ -81,7 +116,7 @@ pub fn run() {
                 Ok(())
             })
             .with_ignored_flag(test.ignored.0)
-            .with_kind(test.experimental_options.to_string())
+            .with_kind(test.kind())
         })
         .collect();
 

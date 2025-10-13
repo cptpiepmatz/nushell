@@ -1,4 +1,4 @@
-use heck::{ToShoutySnakeCase, ToSnakeCase};
+use heck::ToShoutySnakeCase;
 use quote::{format_ident, quote};
 use syn::{ItemFn, ReturnType};
 
@@ -18,14 +18,6 @@ pub fn test(item_fn: ItemFn) -> proc_macro2::TokenStream {
         }
     };
 
-    let experimental_options = nu_experimental::ALL.into_iter().map(|option| {
-        let field_ident = proc_macro2::Ident::new(
-            option.identifier().to_snake_case().as_str(),
-            proc_macro2::Span::call_site(),
-        );
-        quote!(#field_ident: ::std::option::Option::None)
-    });
-
     quote! {
         #wrapper
 
@@ -39,9 +31,8 @@ pub fn test(item_fn: ItemFn) -> proc_macro2::TokenStream {
                 // TODO: parse these fields
                 ignored: (false, ::std::option::Option::None),
                 should_panic: (false, ::std::option::Option::None),
-                experimental_options: ::nu_test_support::harness::RequestedExperimentalOptions {
-                    #(#experimental_options,)*
-                }
+                experimental_options: &[],
+                environment_variables: &[],
             };
 
         #item_fn
