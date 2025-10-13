@@ -97,6 +97,18 @@ impl DatabaseConnection {
         Self::open_from_value(value, span)
     }
 
+    pub fn new_empty(span: Span) -> Result<Self, DatabaseError> {
+        let storage = DatabaseStorage::new_writable_memory_counted(span);
+        Self::open(storage, span)
+    }
+
+    pub fn new_from_value<'t>(value: Value, table_name: impl AsRef<Spanned<&'t str>>, span: Span) -> Result<Self, DatabaseError> {
+        let connection = Self::new_empty(span)?;
+
+        
+        todo!()
+    }
+
     pub fn promote(self) -> Result<Self, DatabaseError> {
         if let DatabaseStorage::ReadonlyFile { path, span } = &self.storage {
             let span = *span;

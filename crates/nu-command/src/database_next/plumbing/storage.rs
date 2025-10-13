@@ -1,7 +1,10 @@
 use std::{
     hash::{BuildHasher, Hash, Hasher, RandomState},
     path::Path,
-    sync::LazyLock,
+    sync::{
+        LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use nu_path::AbsolutePath;
@@ -62,6 +65,11 @@ impl DatabaseStorage {
             [("mode", "memory"), ("cache", "shared")],
         );
         Self::WritableMemory { path, span }
+    }
+
+    pub fn new_writable_memory_counted(span: Span) -> Self {
+        static MEMORY_INDEX: AtomicUsize = AtomicUsize::new(0);
+        Self::new_writable_memory(MEMORY_INDEX.fetch_add(1, Ordering::Relaxed), span)
     }
 
     /// Get storage path for the database.
