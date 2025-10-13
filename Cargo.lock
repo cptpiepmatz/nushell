@@ -4585,6 +4585,7 @@ dependencies = [
 name = "nu-test-support"
 version = "0.107.1"
 dependencies = [
+ "itertools 0.14.0",
  "libtest-with",
  "linkme",
  "nu-experimental",

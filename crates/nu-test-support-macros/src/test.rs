@@ -71,7 +71,7 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct TestAttributes {
     pub ignore: (bool, Option<LitStr>),
     pub should_panic: (bool, Option<LitStr>),
