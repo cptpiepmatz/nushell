@@ -106,7 +106,7 @@ itertools = "0.14"
 lean_string = { version = "0.5", features = ["serde"] }
 libc = "0.2"
 libproc = "0.14"
-libtest-mimic = "0.8"
+libtest-with = "0.8.1-10"
 linkme = "0.3"
 log = "0.4"
 lru = "0.12"

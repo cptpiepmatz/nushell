@@ -3387,10 +3387,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "libtest-mimic"
-version = "0.8.1"
+name = "libtest-with"
+version = "0.8.1-10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5297962ef19edda4ce33aaa484386e0a5b3d7f2f4e037cbeee00503ef6b29d33"
+checksum = "9ed87a72c2def30dd0a66f14299187ece1d7a3667ecd6ee76ef249842d0c7858"
 dependencies = [
  "anstream",
  "anstyle",
@@ -4585,7 +4585,7 @@ dependencies = [
 name = "nu-test-support"
 version = "0.107.1"
 dependencies = [
- "libtest-mimic",
+ "libtest-with",
  "linkme",
  "nu-experimental",
  "nu-glob",

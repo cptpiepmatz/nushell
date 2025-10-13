@@ -3,11 +3,16 @@
     reason = "We use deprecation warnings to document that manual construction is not allowed."
 )]
 
-use std::{borrow::Cow, fmt::{self, Debug, Write}, ops::Deref, sync::LazyLock};
+use std::{
+    borrow::Cow,
+    fmt::{self, Debug, Write},
+    ops::Deref,
+    sync::LazyLock,
+};
 
 use crate::{self as nu_test_support, harness::output_capture::Output};
 
-use libtest_mimic::{Arguments, Trial};
+use libtest_with::{Arguments, Trial};
 #[doc(hidden)]
 pub use linkme;
 use nu_experimental::ExperimentalOption;
@@ -46,7 +51,7 @@ impl TestMetadata {
     fn kind(&self) -> String {
         // calling fmt::Write on a String is infallible
         let mut out = String::new();
-        
+
         if !self.experimental_options.is_empty() {
             write!(out, "exp: ").unwrap();
             let mut first = true;
@@ -55,7 +60,12 @@ impl TestMetadata {
                     write!(out, ", ").unwrap();
                     first = false;
                 }
-                write!(out, "{identifier}={value}", identifier = option.identifier()).unwrap();
+                write!(
+                    out,
+                    "{identifier}={value}",
+                    identifier = option.identifier()
+                )
+                .unwrap();
             }
         }
 
@@ -74,7 +84,7 @@ impl TestMetadata {
                 write!(out, "{key}={value}").unwrap();
             }
         }
-        
+
         out
     }
 }
@@ -115,10 +125,10 @@ pub fn run() {
                 // TODO: on error, show output
                 Ok(())
             })
-            .with_ignored_flag(test.ignored.0)
+            .with_ignored_flag(test.ignored.0, test.ignored.1.map(String::from))
             .with_kind(test.kind())
         })
         .collect();
 
-    libtest_mimic::run(&args, tests).exit()
+    libtest_with::run(&args, tests).exit()
 }
