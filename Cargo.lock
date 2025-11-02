@@ -3246,6 +3246,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kitest"
+version = "0.0.0"
+dependencies = [
+ "crossbeam-channel",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4586,6 +4593,7 @@ name = "nu-test-support"
 version = "0.107.1"
 dependencies = [
  "itertools 0.14.0",
+ "kitest",
  "libtest-with",
  "linkme",
  "nu-experimental",

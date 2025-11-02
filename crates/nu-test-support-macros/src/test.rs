@@ -15,28 +15,18 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
     let attr_rest = attrs.rest;
 
     let fn_ident = &item_fn.sig.ident;
-    let wrapper_ident = format_ident!("nu_test_{fn_ident}");
-    let static_ident = format_ident!("NU_TEST_{}", fn_ident.to_string().to_shouty_snake_case());
+    let fn_name = fn_ident.to_string();
 
-    let wrapper_call = match &item_fn.sig.output {
-        ReturnType::Default => quote!(#fn_ident()),
-        ReturnType::Type(..) => quote!(#fn_ident()?),
-    };
-    let wrapper = quote! {
-        fn #wrapper_ident() -> ::std::result::Result<(), ::std::boxed::Box<dyn ::std::error::Error>> {
-            #wrapper_call;
-            ::std::result::Result::Ok(())
-        }
+    let ignore_status = match attrs.ignore {
+        (false, _) => quote!(nu_test_support::harness::kitest::ignore::IgnoreStatus::Run),
+        (true, None) => quote!(nu_test_support::harness::kitest::ignore::IgnoreStatus::Ignore),
+        (true, Some(msg)) => quote!(nu_test_support::harness::kitest::ignore::IgnoreStatus::IgnoreWithReason(std::borrow::Cow::Borrowed(#msg))),
     };
 
-    let ignored = match attrs.ignore {
-        (value, None) => quote!((#value, ::std::option::Option::None)),
-        (value, Some(msg)) => quote!((#value, ::std::option::Option::Some(#msg))),
-    };
-
-    let should_panic = match attrs.should_panic {
-        (value, None) => quote!((#value, ::std::option::Option::None)),
-        (value, Some(msg)) => quote!((#value, ::std::option::Option::Some(#msg))),
+    let panic_expectation = match attrs.should_panic {
+        (false, _) => quote!(nu_test_support::harness::kitest::panic::PanicExpectation::ShouldNotPanic),
+        (true, None) => quote!(nu_test_support::harness::kitest::panic::PanicExpectation::ShouldPanic),
+        (true, Some(msg)) => quote!(nu_test_support::harness::kitest::panic::PanicExpectation::ShouldPanicWithExpected(std::borrow::Cow::Borrowed(#msg))),
     };
 
     let experimental_options = attrs.experimental_options.into_iter().map(|(path, lit)| {
@@ -50,20 +40,29 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
     });
 
     quote! {
-        #wrapper
+        mod #fn_ident {
+            use super::*;
 
-        #[allow(deprecated, reason = "constructed in macro")]
-        #[::nu_test_support::collect_test(nu_test_support::harness::TESTS)]
-        #[linkme(crate = ::nu_test_support::harness::linkme)]
-        static #static_ident: ::nu_test_support::harness::TestMetadata =
-            ::nu_test_support::harness::TestMetadata {
-                function: #wrapper_ident,
-                name: ::std::sync::LazyLock::new(|| ::std::any::type_name_of_val(&#fn_ident)),
-                ignored: #ignored,
-                should_panic: #should_panic,
-                experimental_options: &[#(#experimental_options),*],
-                environment_variables: &[#(#environment_variables),*],
-            };
+            fn wrapper() -> nu_test_support::harness::kitest::test::TestResult {
+                #fn_ident().into()
+            }
+
+            #[::nu_test_support::collect_test(nu_test_support::harness::TESTS)]
+            #[linkme(crate = ::nu_test_support::harness::linkme)]
+            static TEST: nu_test_support::harness::kitest::test::Test<nu_test_support::harness::TestMetaExtra> = 
+                nu_test_support::harness::kitest::test::Test::new(
+                    nu_test_support::harness::kitest::test::TestFnHandle::from_const_fn(wrapper),
+                    nu_test_support::harness::kitest::test::TestMeta {
+                        name: std::borrow::Cow::Borrowed(#fn_name),
+                        ignore: #ignore_status,
+                        should_panic: #panic_expectation,
+                        extra: nu_test_support::harness::TestMetaExtra {
+                            experimental_options: &[#(#experimental_options),*],
+                            environment_variables: &[#(#environment_variables),*],
+                        }
+                    }
+                );
+        }
 
         #(#attr_rest)*
         #item_fn
