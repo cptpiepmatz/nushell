@@ -1,17 +1,18 @@
 use std::{
-    collections::BTreeMap, env, fmt::{Debug, Write}, ops::Deref, panic, process::Termination, sync::LazyLock
+    fmt::Debug,
+    hash::{DefaultHasher, Hash, Hasher},
+    ops::Deref,
+    process::Termination,
 };
 
 use crate::{self as nu_test_support, harness::output_capture::Output};
 
-use itertools::Itertools;
-use libtest_with::{Arguments, Conclusion, Trial};
 #[doc(hidden)]
 pub use linkme;
 use nu_experimental::ExperimentalOption;
 
 #[doc(hidden)]
-pub use kitest;
+pub use kitest::prelude::*;
 
 pub mod output_capture;
 pub mod macros {
@@ -29,7 +30,29 @@ pub struct TestMetaExtra {
     pub environment_variables: &'static [(&'static str, &'static str)],
 }
 
-pub fn main() {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct GroupKey(u64);
 
+impl From<&TestMetaExtra> for GroupKey {
+    fn from(extra: &TestMetaExtra) -> Self {
+        let mut hasher = DefaultHasher::new();
+        extra
+            .experimental_options
+            .iter()
+            .map(|(opt, val)| (opt.identifier(), val))
+            .for_each(|item| item.hash(&mut hasher));
+        extra
+            .environment_variables
+            .iter()
+            .for_each(|item| item.hash(&mut hasher));
+        GroupKey(hasher.finish())
+    }
 }
 
+fn grouper(meta: &TestMeta<TestMetaExtra>) -> GroupKey {
+    GroupKey::from(&meta.extra)
+}
+
+pub fn main() -> impl Termination {
+    kitest::harness(TESTS.deref()).with_grouper(grouper).run()
+}

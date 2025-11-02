@@ -18,15 +18,15 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
     let fn_name = fn_ident.to_string();
 
     let ignore_status = match attrs.ignore {
-        (false, _) => quote!(nu_test_support::harness::kitest::ignore::IgnoreStatus::Run),
-        (true, None) => quote!(nu_test_support::harness::kitest::ignore::IgnoreStatus::Ignore),
-        (true, Some(msg)) => quote!(nu_test_support::harness::kitest::ignore::IgnoreStatus::IgnoreWithReason(std::borrow::Cow::Borrowed(#msg))),
+        (false, _) => quote!(IgnoreStatus::Run),
+        (true, None) => quote!(IgnoreStatus::Ignore),
+        (true, Some(msg)) => quote!(IgnoreStatus::IgnoreWithReason(Cow::Borrowed(#msg))),
     };
 
     let panic_expectation = match attrs.should_panic {
-        (false, _) => quote!(nu_test_support::harness::kitest::panic::PanicExpectation::ShouldNotPanic),
-        (true, None) => quote!(nu_test_support::harness::kitest::panic::PanicExpectation::ShouldPanic),
-        (true, Some(msg)) => quote!(nu_test_support::harness::kitest::panic::PanicExpectation::ShouldPanicWithExpected(std::borrow::Cow::Borrowed(#msg))),
+        (false, _) => quote!(PanicExpectation::ShouldNotPanic),
+        (true, None) => quote!(PanicExpectation::ShouldPanic),
+        (true, Some(msg)) => quote!(PanicExpectation::ShouldPanicWithExpected(Cow::Borrowed(#msg))),
     };
 
     let experimental_options = attrs.experimental_options.into_iter().map(|(path, lit)| {
@@ -42,21 +42,22 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
     quote! {
         mod #fn_ident {
             use super::*;
+            use nu_test_support::harness::*;
 
-            fn wrapper() -> nu_test_support::harness::kitest::test::TestResult {
+            fn wrapper() -> TestResult {
                 #fn_ident().into()
             }
 
             #[::nu_test_support::collect_test(nu_test_support::harness::TESTS)]
             #[linkme(crate = ::nu_test_support::harness::linkme)]
-            static TEST: nu_test_support::harness::kitest::test::Test<nu_test_support::harness::TestMetaExtra> = 
-                nu_test_support::harness::kitest::test::Test::new(
-                    nu_test_support::harness::kitest::test::TestFnHandle::from_const_fn(wrapper),
-                    nu_test_support::harness::kitest::test::TestMeta {
-                        name: std::borrow::Cow::Borrowed(#fn_name),
+            static TEST: Test<TestMetaExtra> = 
+                Test::new(
+                    TestFnHandle::from_const_fn(wrapper),
+                    TestMeta {
+                        name: Cow::Borrowed(#fn_name),
                         ignore: #ignore_status,
                         should_panic: #panic_expectation,
-                        extra: nu_test_support::harness::TestMetaExtra {
+                        extra: TestMetaExtra {
                             experimental_options: &[#(#experimental_options),*],
                             environment_variables: &[#(#environment_variables),*],
                         }
