@@ -74,27 +74,25 @@ struct GroupCtx {
 
 impl Display for GroupCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if !self.experimental_options.is_empty() {
+        let mut experimental_options = self.experimental_options.iter();
+        if let Some(first) = experimental_options.next() {
             write!(f, "exp[")?;
-            let mut iter = self.experimental_options.iter();
-            let first = iter.next().expect("not empty");
             write!(f, "{}={}", first.0.identifier(), first.1)?;
-            for item in iter {
+            for item in experimental_options {
                 write!(f, ", {}={}", item.0.identifier(), item.1)?;
             }
             write!(f, "]")?;
         }
 
-        if !self.experimental_options.is_empty() && !self.environment_variables.is_empty() {
-            write!(f, ", ")?;
-        }
+        let mut environment_variables = self.environment_variables.iter();
+        if let Some(first) = environment_variables.next() {
+            if self.experimental_options.is_empty() {
+                write!(f, ", ")?;
+            }
 
-        if !self.environment_variables.is_empty() {
             write!(f, "env[")?;
-            let mut iter = self.environment_variables.iter();
-            let first = iter.next().expect("not empty");
             write!(f, "{}={}", first.0, first.1)?;
-            for item in iter {
+            for item in environment_variables {
                 write!(f, ", {}={}", item.0, item.1)?;
             }
             write!(f, "]")?;
