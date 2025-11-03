@@ -15,7 +15,6 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
     let attr_rest = attrs.rest;
 
     let fn_ident = &item_fn.sig.ident;
-    let fn_name = fn_ident.to_string();
 
     let ignore_status = match attrs.ignore {
         (false, _) => quote!(IgnoreStatus::Run),
@@ -50,11 +49,11 @@ pub fn test(mut item_fn: ItemFn) -> proc_macro2::TokenStream {
 
             #[::nu_test_support::collect_test(nu_test_support::harness::TESTS)]
             #[linkme(crate = ::nu_test_support::harness::linkme)]
-            static TEST: Test<TestMetaExtra> = 
+            static TEST: Test<TestMetaExtra> =
                 Test::new(
                     TestFnHandle::from_const_fn(wrapper),
                     TestMeta {
-                        name: Cow::Borrowed(#fn_name),
+                        name: Cow::Borrowed(module_path!()),
                         ignore: #ignore_status,
                         should_panic: #panic_expectation,
                         extra: TestMetaExtra {
