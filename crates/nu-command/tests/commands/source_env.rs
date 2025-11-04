@@ -2,8 +2,8 @@ use nu_test_support::fs::Stub::{EmptyFile, FileWithContent, FileWithContentToBeT
 use nu_test_support::nu;
 use nu_test_support::playground::Playground;
 
-#[should_panic]
 #[test]
+#[should_panic]
 fn sources_also_files_under_custom_lib_dirs_path() {
     Playground::setup("source_test_1", |dirs, nu| {
         let file = dirs.test().join("config.toml");

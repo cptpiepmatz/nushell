@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use crate::println;
+
 static CARGO_BUILD_LOCK: Mutex<()> = Mutex::new(());
 static PLUGINS_BUILT: AtomicBool = AtomicBool::new(false);
 

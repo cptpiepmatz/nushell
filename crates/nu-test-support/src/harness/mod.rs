@@ -1,13 +1,13 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    fmt::{self, Debug, Display},
+    env,
+    fmt::{Debug, Display},
     hash::{DefaultHasher, Hash, Hasher},
-    io,
     ops::{ControlFlow, Deref},
     process::Termination,
 };
 
-use crate::{self as nu_test_support, harness::output_capture::Output};
+use crate::{self as nu_test_support};
 
 use itertools::Itertools;
 use kitest::{
@@ -23,10 +23,10 @@ use nu_experimental::ExperimentalOption;
 #[doc(hidden)]
 pub use kitest::prelude::*;
 
-pub mod output_capture;
 pub mod macros {
     pub use linkme::distributed_slice as collect_test;
     pub use nu_test_support_macros::test;
+    pub use kitest::{print, println, eprint, eprintln, dbg};
 }
 
 /// All collected tests.
@@ -154,11 +154,32 @@ impl<'t> TestGroupRunner<'t, TestMetaExtra, GroupKey, GroupCtx> for GroupRunner 
                 .for_each(|(exp, value)| unsafe { exp.set(*value) });
         }
 
-        // TODO: add env updates
+        let old_envs: Vec<_> = ctx
+            .iter()
+            .map(|ctx| ctx.environment_variables.iter().map(|(key, _)| key))
+            .flatten()
+            .map(|key| (key, env::var_os(key)))
+            .collect();
+        ctx.iter()
+            .map(|ctx| ctx.environment_variables.iter())
+            .flatten()
+            .for_each(|(key, value)| unsafe { env::set_var(key, value) });
 
-        <SimpleGroupRunner as TestGroupRunner<'t, TestMetaExtra, GroupKey, GroupCtx>>::run_group::<F>(
-            &self.0, f, key, ctx,
-        )
+        let outcomes = <SimpleGroupRunner as TestGroupRunner<
+            't,
+            TestMetaExtra,
+            GroupKey,
+            GroupCtx,
+        >>::run_group::<F>(&self.0, f, key, ctx);
+
+        old_envs.into_iter().for_each(|(key, value)| unsafe {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        });
+
+        outcomes
     }
 }
 
