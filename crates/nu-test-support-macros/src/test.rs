@@ -1,9 +1,7 @@
 use std::mem;
-
-use heck::ToShoutySnakeCase;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{
-    Attribute, Expr, Ident, ItemFn, Lit, LitBool, LitStr, Meta, MetaNameValue, Path, ReturnType,
+    Attribute, Expr, Ident, ItemFn, Lit, LitBool, LitStr, Meta, MetaNameValue, Path,
     Token, parse::ParseStream,
 };
 
