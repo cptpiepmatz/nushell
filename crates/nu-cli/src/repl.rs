@@ -208,12 +208,23 @@ pub fn evaluate_repl(
             )
         }));
         match iteration_panic_state {
-            Ok((continue_loop, es, s, le)) => {
+            Ok((continue_loop, mut es, s, le)) => {
+                // We apply the changes from the updated stack back onto our previous stack
+                let mut merged_stack = Stack::with_changes_from_child(previous_stack_arc, s);
+
+                // Check if new variables were created (indicating potential variable shadowing)
+                let prev_total_vars = previous_engine_state.num_vars();
+                let curr_total_vars = es.num_vars();
+                let new_variables_created = curr_total_vars > prev_total_vars;
+
+                if new_variables_created {
+                    // New variables created, clean up stack to prevent memory leaks
+                    es.cleanup_stack_variables(&mut merged_stack);
+                }
+
+                previous_stack_arc = Arc::new(merged_stack);
                 // setup state for the next iteration of the repl loop
                 previous_engine_state = es;
-                // we apply the changes from the updated stack back onto our previous stack
-                previous_stack_arc =
-                    Arc::new(Stack::with_changes_from_child(previous_stack_arc, s));
                 line_editor = le;
                 if !continue_loop {
                     break;
@@ -1235,6 +1246,14 @@ fn update_line_editor_history(
             FileBackedHistory::with_file(history.max_size as usize, history_path)
                 .into_diagnostic()?,
         ),
+        // this path should not happen as the config setting is captured by `nu-protocol` already
+        #[cfg(not(feature = "sqlite"))]
+        HistoryFileFormat::Sqlite => {
+            return Err(miette::miette!(
+                help = "compile Nushell with the `sqlite` feature to use this",
+                "Unsupported history file format",
+            ));
+        }
         #[cfg(feature = "sqlite")]
         HistoryFileFormat::Sqlite => Box::new(
             SqliteBackedHistory::with_file(
