@@ -7,6 +7,8 @@ pub use to::ToNuonConfig;
 pub use to::ToStyle;
 pub use to::to_nuon;
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;

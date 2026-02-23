@@ -40,6 +40,7 @@ members = [
   "crates/nu_plugin_query",
   "crates/nu_plugin_stress_internals",
   "crates/nu-cli",
+  "crates/nu-clip",
   "crates/nu-cmd-base",
   "crates/nu-cmd-extra",
   "crates/nu-cmd-lang",
@@ -88,6 +89,7 @@ chrono-humanize = "0.2.3"
 chrono-tz = "0.10"
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
+const_format = "0.2"
 csv = "1.4"
 ctrlc = "3.5"
 devicons = "0.6.12"

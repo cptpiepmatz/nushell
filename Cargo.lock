@@ -4130,6 +4130,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nu-clip"
+version = "0.110.1"
+dependencies = [
+ "chrono",
+ "const_format",
+ "nu-protocol",
+ "nuon",
+ "windows 0.62.1",
+]
+
+[[package]]
 name = "nu-cmd-base"
 version = "0.110.1"
 dependencies = [
