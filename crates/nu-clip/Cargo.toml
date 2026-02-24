@@ -8,7 +8,7 @@ name = "nu-clip"
 version = "0.110.1"
 
 [dependencies]
-nu-protocol = { version = "0.110.1", path = "../nu-protocol" }
+nu-protocol = { version = "0.110.1", path = "../nu-protocol", default-features = false }
 nuon = { version = "0.110.1", path = "../nuon" }
 
 chrono = { workspace = true }
@@ -16,4 +16,9 @@ const_format = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
 workspace = true
-features = ["Win32_System_DataExchange"]
+features = [
+  "Win32_System_Console",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+]
