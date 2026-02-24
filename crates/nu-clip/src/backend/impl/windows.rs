@@ -71,12 +71,15 @@ enum ClipboardWindow {
 
 impl ClipboardWindow {
     // TODO: work with real error type here
-    fn create() -> Result<Self, ()> {
+    fn create() -> Result<Self, windows::core::Error> {
         let console_hwnd = unsafe { GetConsoleWindow() };
         if !console_hwnd.is_invalid() {
             return Ok(Self::Console(console_hwnd));
         }
 
+        let app_module = unsafe { GetModuleHandleA(PCSTR::null()) }
+            .expect("null always returns valid module")
+            .into();
         let owned_hwnd = unsafe {
             CreateWindowExA(
                 WINDOW_EX_STYLE(0),
@@ -89,15 +92,10 @@ impl ClipboardWindow {
                 0,
                 Some(HWND_MESSAGE),
                 None,
-                Some(
-                    GetModuleHandleA(PCSTR::null())
-                        .expect("null always returns valid module")
-                        .into(),
-                ),
+                Some(app_module),
                 None,
             )
-        }
-        .map_err(|_| todo!())?;
+        }?;
 
         Ok(Self::Owned(owned_hwnd))
     }
@@ -128,20 +126,18 @@ struct Clipboard {
 
 impl Clipboard {
     // TODO: use proper error
-    fn open() -> Result<Self, ()> {
+    fn open() -> Result<Self, windows::core::Error> {
         let window = ClipboardWindow::create()?;
         let window_handle = window.window_handle();
-        match unsafe { OpenClipboard(Some(window_handle)) } {
-            Ok(()) => Ok(Clipboard { window }),
-            Err(_) => todo!(),
-        }
+        unsafe { OpenClipboard(Some(window_handle)) }?;
+        Ok(Clipboard { window })
     }
 
-    fn set(&self, set: ClipSet) -> SetReport {
-        let empty = unsafe { EmptyClipboard() };
-        if empty.is_err() {
-            todo!()
-        }
+    fn set(
+        &self,
+        set: ClipSet,
+    ) -> Result<SetReport<windows::core::Error>, SetError<windows::core::Error>> {
+        unsafe { EmptyClipboard() }.map_err(SetError::Setup)?;
 
         if let Some(text) = set.text {
             let utf16_chars: Vec<_> = text.encode_utf16().chain(iter::once(0)).collect();
@@ -314,12 +310,12 @@ impl Clipboard {
             }
         }
 
-        SetReport {
+        Ok(SetReport {
             text: SetStatus::Set,
             nuon: SetStatus::Set,
             bytes_nu: SetStatus::Set,
             bytes_file: SetStatus::Set,
-        }
+        })
     }
 }
 
@@ -352,33 +348,34 @@ impl Drop for Clipboard {
 pub struct Backend;
 
 impl ClipProvider for Backend {
-    fn set(&self, set: ClipSet) -> SetReport {
+    type Error = windows::core::Error;
+    fn set(&self, set: ClipSet) -> Result<SetReport<Self::Error>, SetError<Self::Error>> {
         todo!()
     }
 
-    fn get_text(&self) -> Result<String, crate::GetError> {
+    fn get_text(&self) -> Result<String, GetError> {
         todo!()
     }
 
-    fn get_bytes_from_files(&self) -> Result<Vec<Vec<u8>>, crate::GetError> {
+    fn get_bytes_from_files(&self) -> Result<Vec<Vec<u8>>, GetError> {
         todo!()
     }
 
-    fn get_bytes_via_nu(&self) -> Result<Vec<u8>, crate::GetError> {
+    fn get_bytes_via_nu(&self) -> Result<Vec<u8>, GetError> {
         todo!()
     }
 
-    fn get_nuon(&self, span: nu_protocol::Span) -> Result<nu_protocol::Value, crate::GetError> {
+    fn get_nuon(&self, span: nu_protocol::Span) -> Result<nu_protocol::Value, GetError> {
         todo!()
     }
 }
 
 impl ClipServe for Backend {
-    fn needs_helper(&self, set: &crate::ClipSet) -> bool {
+    fn needs_helper(&self, _: &ClipSet) -> bool {
         false
     }
 
-    fn serve(&mut self, set: crate::ClipSet) -> std::process::ExitCode {
+    fn serve(&mut self, _: ClipSet) -> std::process::ExitCode {
         unimplemented!("not needed")
     }
 }

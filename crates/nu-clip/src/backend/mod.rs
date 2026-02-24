@@ -1,6 +1,6 @@
-use crate::{ClipSet, GetError, SetReport};
+use crate::{ClipSet, GetError, SetError, SetReport};
 use nu_protocol::{Span, Value};
-use std::process::ExitCode;
+use std::{error::Error, process::ExitCode};
 
 #[cfg(target_os = "android")]
 #[path = "impl/android.rs"]
@@ -30,7 +30,9 @@ mod clip_impl;
 pub use clip_impl::Backend;
 
 pub trait ClipProvider {
-    fn set(&self, set: ClipSet) -> SetReport;
+    type Error: Error + Clone;
+    
+    fn set(&self, set: ClipSet) -> Result<SetReport<Self::Error>, SetError<Self::Error>>;
 
     // get plain text from clipboard
     fn get_text(&self) -> Result<String, GetError>;

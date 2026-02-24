@@ -84,22 +84,57 @@ impl EmptyClipSet {
 
 #[non_exhaustive]
 #[must_use]
-pub struct SetReport {
-    pub text: SetStatus,
-    pub nuon: SetStatus,
-    pub bytes_nu: SetStatus,
-    pub bytes_file: SetStatus,
+pub struct SetReport<BE> {
+    pub text: SetStatus<BE>,
+    pub nuon: SetStatus<BE>,
+    pub bytes_nu: SetStatus<BE>,
+    pub bytes_file: SetStatus<BE>,
+}
+
+impl<BE> SetReport<BE> {
+    pub fn any_ok(self) -> Result<(), Vec<SetError<BE>>> {
+        let mut errors = Vec::new();
+        for status in [self.text, self.nuon, self.bytes_nu, self.bytes_file] {
+            match status {
+                SetStatus::NotRequested => continue,
+                SetStatus::Set => return Ok(()),
+                SetStatus::Failed(set_error) => errors.push(set_error),
+            }
+        }
+
+        debug_assert!(
+            errors.is_empty(),
+            "a report should never have only not requested fields"
+        );
+        Err(errors)
+    }
+
+    pub fn all_ok(self) -> Result<(), Vec<SetError<BE>>> {
+        let errors: Vec<_> = [self.text, self.nuon, self.bytes_nu, self.bytes_file]
+            .into_iter()
+            .filter_map(|status| match status {
+                SetStatus::NotRequested | SetStatus::Set => None,
+                SetStatus::Failed(set_error) => Some(set_error),
+            })
+            .collect();
+
+        match errors.is_empty() {
+            true => Ok(()),
+            false => Err(errors),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub enum SetStatus {
+pub enum SetStatus<BE> {
     NotRequested,
     Set,
-    Failed(SetError),
+    Failed(SetError<BE>),
 }
 
 #[derive(Debug, Clone)]
-pub enum SetError {
+pub enum SetError<BE> {
+    Setup(BE),
     // relevant errors when setting the clipboard
 }
 
