@@ -29,11 +29,11 @@ use windows::{
 };
 
 use crate::{
-    ClipSet, SetReport, SetStatus,
+    ClipSet, GetError, SetError, SetReport, SetStatus,
     backend::{ClipProvider, ClipServe},
 };
 
-/// Null-terminated ansi string.
+/// Nuon format name as null-terminated ansi string.
 static NUON_FORMAT_NAME: &[u8] = formatcp!("nushell.nuon.v{}\0", nuon::VERSION).as_bytes();
 const _: () = assert!(NUON_FORMAT_NAME.is_ascii()); // valid ascii is also valid ansi
 const _: () = assert!(CStr::from_bytes_with_nul(NUON_FORMAT_NAME).is_ok()); // only terminating null
@@ -48,12 +48,15 @@ static NUON_FORMAT: LazyLock<u32> = LazyLock::new(|| {
 
 static NUON_MAGIC: &str = "NUON";
 
+/// Raw bytes format name as null-terminated ansi string.
 static RAW_BYTES_FORMAT_NAME: &[u8] =
     formatcp!("nushell.bytes.v{}\0", env!("CARGO_PKG_VERSION")).as_bytes();
 const _: () = assert!(RAW_BYTES_FORMAT_NAME.is_ascii());
 const _: () = assert!(CStr::from_bytes_with_nul(RAW_BYTES_FORMAT_NAME).is_ok());
 
+/// Clipboard format registration ID for raw bytes format.
 static RAW_BYTES_FORMAT: LazyLock<u32> = LazyLock::new(|| {
+    // SAFETY: pointer to a valid null-terminated ansi string
     let id = unsafe { RegisterClipboardFormatA(PCSTR(RAW_BYTES_FORMAT_NAME.as_ptr())) };
     debug_assert_ne!(id, 0, "registering raw bytes clipboard format failed");
     id
@@ -72,14 +75,22 @@ enum ClipboardWindow {
 impl ClipboardWindow {
     // TODO: work with real error type here
     fn create() -> Result<Self, windows::core::Error> {
+        // SAFETY: using Rust on Windows targets always higher than _WIN32_WINNT,
+        //         we also verify that the handle is not null
         let console_hwnd = unsafe { GetConsoleWindow() };
         if !console_hwnd.is_invalid() {
             return Ok(Self::Console(console_hwnd));
         }
 
+        // SAFETY: by passing null, we get the app itself, that should never fail, also this code 
+        //         is not called using LOAD_LIBRARY_AS_DATAFILE
         let app_module = unsafe { GetModuleHandleA(PCSTR::null()) }
             .expect("null always returns valid module")
             .into();
+        // SAFETY: - class/title are null-terminated static strings from `s!(...)`
+        //         - `app_module` is a valid HINSTANCE from `GetModuleHandleA(null)`
+        //         - mesage-only "STATIC" window does not require a custom WndProc
+        //         - `lpParam` may be null
         let owned_hwnd = unsafe {
             CreateWindowExA(
                 WINDOW_EX_STYLE(0),
@@ -125,10 +136,11 @@ struct Clipboard {
 }
 
 impl Clipboard {
-    // TODO: use proper error
     fn open() -> Result<Self, windows::core::Error> {
         let window = ClipboardWindow::create()?;
         let window_handle = window.window_handle();
+        // SAFETY: we pass a valid window handle and we're closing the clipboard again after a 
+        //         successful open via the `Drop` impl
         unsafe { OpenClipboard(Some(window_handle)) }?;
         Ok(Clipboard { window })
     }
@@ -349,6 +361,7 @@ pub struct Backend;
 
 impl ClipProvider for Backend {
     type Error = windows::core::Error;
+
     fn set(&self, set: ClipSet) -> Result<SetReport<Self::Error>, SetError<Self::Error>> {
         todo!()
     }
