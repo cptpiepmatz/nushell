@@ -1,3 +1,5 @@
+use std::io;
+
 use chrono::Utc;
 use nu_protocol::{ShellError, Value, engine::EngineState};
 use nuon::ToNuonConfig;
@@ -125,20 +127,22 @@ impl<BE> SetReport<BE> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum SetStatus<BE> {
     NotRequested,
     Set,
     Failed(SetError<BE>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum SetError<BE> {
     Setup(BE),
+    Io(io::Error),
+    Other(BE),
     // relevant errors when setting the clipboard
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum GetError {
     // relevant errors when getting the clipboard
 }

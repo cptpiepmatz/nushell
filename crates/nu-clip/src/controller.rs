@@ -1,4 +1,7 @@
-use crate::{ClipSet, SetError, SetReport, SetStatus, backend::{Backend, ClipProvider}};
+use crate::{
+    ClipSet, SetError, SetReport, SetStatus,
+    backend::{Backend, ClipProvider},
+};
 
 pub type BackendError = <Backend as ClipProvider>::Error;
 

@@ -30,8 +30,8 @@ mod clip_impl;
 pub use clip_impl::Backend;
 
 pub trait ClipProvider {
-    type Error: Error + Clone;
-    
+    type Error: Error;
+
     fn set(&self, set: ClipSet) -> Result<SetReport<Self::Error>, SetError<Self::Error>>;
 
     // get plain text from clipboard
