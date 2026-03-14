@@ -1,5 +1,5 @@
 use calamine::*;
-use chrono::{Local, LocalResult, Offset, TimeZone, Utc};
+use chrono::{FixedOffset, Local, LocalResult, Offset, TimeZone, Utc};
 use indexmap::IndexMap;
 use nu_engine::command_prelude::*;
 
@@ -141,58 +141,88 @@ fn from_xlsx(
         _ => Utc.fix(),
     };
 
+    // welp, cool idea but formula is actually only formula
+    // we cannot read v values from calamine yet
     for sheet_name in sheet_names {
-        let mut sheet_output = vec![];
-
-        if let Ok(current_sheet) = xlsx.worksheet_range(&sheet_name) {
-            for row in current_sheet.rows() {
-                let record = row
-                    .iter()
-                    .enumerate()
-                    .map(|(i, cell)| {
-                        let value = if no_infer {
-                            Value::string(cell.as_string().unwrap_or_default(), head)
-                        } else {
-                            match cell {
-                                Data::Empty => Value::nothing(head),
-                                Data::String(s) => Value::string(s, head),
-                                Data::Float(f) => Value::float(*f, head),
-                                Data::Int(i) => Value::int(*i, head),
-                                Data::Bool(b) => Value::bool(*b, head),
-                                Data::DateTime(d) => d
-                                    .as_datetime()
-                                    .and_then(|d| match tz.from_local_datetime(&d) {
-                                        LocalResult::Single(d) => Some(d),
-                                        _ => None,
-                                    })
-                                    .map(|d| Value::date(d, head))
-                                    .unwrap_or(Value::nothing(head)),
-                                _ => Value::nothing(head),
-                            }
-                        };
-
-                        (format!("column{i}"), value)
-                    })
-                    .collect();
-
-                sheet_output.push(Value::record(record, head));
-            }
-
-            dict.insert(sheet_name, Value::list(sheet_output, head));
-        } else {
-            return Err(ShellError::UnsupportedInput {
-                msg: "Could not load sheet".to_string(),
-                input: "value originates from here".into(),
-                msg_span: head,
-                input_span: span.unwrap_or(head),
-            });
+        let sheet_output = match no_infer {
+            false => convert_worksheet(
+                || xlsx.worksheet_range(&sheet_name).map(|range| dbg!(range)),
+                data_cell_to_value,
+                tz,
+                head,
+            ),
+            true => convert_worksheet(
+                || xlsx.worksheet_formula(&sheet_name).map(|range| dbg!(range)),
+                formula_cell_to_value,
+                tz,
+                head,
+            ),
         }
+        .map_err(|_| ShellError::UnsupportedInput {
+            msg: format!("Could not load sheet {sheet_name:?}"),
+            input: "value originates from here".into(),
+            msg_span: head,
+            input_span: span.unwrap_or(head),
+        })?;
+        dict.insert(sheet_name, sheet_output);
     }
 
     Ok(PipelineData::value(
         Value::record(dict.into_iter().collect(), head),
         None,
     ))
+}
+
+fn convert_worksheet<C: CellType>(
+    mut current_sheet: impl FnMut() -> Result<calamine::Range<C>, XlsxError>,
+    cell_to_value: impl Fn(&C, FixedOffset, Span) -> Value,
+    tz: FixedOffset,
+    span: Span,
+) -> Result<Value, XlsxError> {
+    let current_sheet = match current_sheet() {
+        Ok(current_sheet) => current_sheet,
+        Err(err) => return Err(err),
+    };
+
+    let rows = current_sheet
+        .rows()
+        .map(|row| {
+            let record: Record = row
+                .iter()
+                .enumerate()
+                .map(|(i, cell)| {
+                    let value = cell_to_value(cell, tz, span);
+                    (format!("column{i}"), value)
+                })
+                .collect();
+            Value::record(record, span)
+        })
+        .collect();
+
+    Ok(Value::list(rows, span))
+}
+
+fn data_cell_to_value(cell: &calamine::Data, tz: FixedOffset, span: Span) -> Value {
+    match cell {
+        Data::Empty => Value::nothing(span),
+        Data::String(s) => Value::string(s, span),
+        Data::Float(f) => Value::float(*f, span),
+        Data::Int(i) => Value::int(*i, span),
+        Data::Bool(b) => Value::bool(*b, span),
+        Data::DateTime(d) => d
+            .as_datetime()
+            .and_then(|d| match tz.from_local_datetime(&d) {
+                LocalResult::Single(d) => Some(d),
+                _ => None,
+            })
+            .map(|d| Value::date(d, span))
+            .unwrap_or(Value::nothing(span)),
+        _ => Value::nothing(span),
+    }
+}
+
+fn formula_cell_to_value(cell: &String, _: FixedOffset, span: Span) -> Value {
+    Value::string(cell, span)
 }
 
 #[cfg(test)]
