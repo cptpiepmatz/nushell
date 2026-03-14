@@ -1,9 +1,9 @@
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct DateFormat;
 
-impl Command for SubCommand {
+impl Command for DateFormat {
     fn name(&self) -> &str {
         "date format"
     }
@@ -15,7 +15,7 @@ impl Command for SubCommand {
                 (Type::String, Type::String),
             ])
             .allow_variants_without_examples(true) // https://github.com/nushell/nushell/issues/7032
-            .switch("list", "lists strftime cheatsheet", Some('l'))
+            .switch("list", "Lists strftime cheatsheet.", Some('l'))
             .optional(
                 "format string",
                 SyntaxShape::String,

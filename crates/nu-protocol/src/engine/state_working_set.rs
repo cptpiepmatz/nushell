@@ -1,11 +1,12 @@
 use crate::{
+    BlockId, Category, CompileError, Config, DeclId, FileId, GetSpan, Module, ModuleId, OverlayId,
+    ParseError, ParseWarning, ResolvedImportPattern, Signature, Span, SpanId, Type, Value, VarId,
+    VirtualPathId,
     ast::Block,
     engine::{
-        description::build_desc, CachedFile, Command, CommandType, EngineState, OverlayFrame,
-        StateDelta, Variable, VirtualPath, Visibility,
+        CachedFile, Command, CommandType, EngineState, OverlayFrame, StateDelta, Variable,
+        VirtualPath, Visibility, description::build_desc,
     },
-    BlockId, Category, CompileError, Config, DeclId, FileId, GetSpan, Module, ModuleId, OverlayId,
-    ParseError, ParseWarning, Signature, Span, SpanId, Type, Value, VarId, VirtualPathId,
 };
 use core::panic;
 use std::{
@@ -71,6 +72,10 @@ impl<'a> StateWorkingSet<'a> {
 
     pub fn num_virtual_paths(&self) -> usize {
         self.delta.num_virtual_paths() + self.permanent_state.num_virtual_paths()
+    }
+
+    pub fn num_vars(&self) -> usize {
+        self.delta.num_vars() + self.permanent_state.num_vars()
     }
 
     pub fn num_decls(&self) -> usize {
@@ -189,7 +194,7 @@ impl<'a> StateWorkingSet<'a> {
     }
 
     pub fn merge_predecl(&mut self, name: &[u8]) -> Option<DeclId> {
-        self.move_predecls_to_overlay();
+        self.move_one_predecl_to_overlay(name);
 
         let overlay_frame = self.last_overlay_mut();
 
@@ -202,11 +207,12 @@ impl<'a> StateWorkingSet<'a> {
         None
     }
 
-    pub fn move_predecls_to_overlay(&mut self) {
-        let predecls: HashMap<Vec<u8>, DeclId> =
-            self.delta.last_scope_frame_mut().predecls.drain().collect();
-
-        self.last_overlay_mut().predecls.extend(predecls);
+    fn move_one_predecl_to_overlay(&mut self, name: &[u8]) {
+        self.delta
+            .last_scope_frame_mut()
+            .predecls
+            .remove_entry(name)
+            .map(|(name, decl_id)| self.last_overlay_mut().predecls.insert(name, decl_id));
     }
 
     pub fn hide_decl(&mut self, name: &[u8]) -> Option<DeclId> {
@@ -224,12 +230,12 @@ impl<'a> StateWorkingSet<'a> {
 
                 visibility.append(&overlay_frame.visibility);
 
-                if let Some(decl_id) = overlay_frame.get_decl(name) {
-                    if visibility.is_decl_id_visible(&decl_id) {
-                        // Hide decl only if it's not already hidden
-                        overlay_frame.visibility.hide_decl_id(&decl_id);
-                        return Some(decl_id);
-                    }
+                if let Some(decl_id) = overlay_frame.get_decl(name)
+                    && visibility.is_decl_id_visible(&decl_id)
+                {
+                    // Hide decl only if it's not already hidden
+                    overlay_frame.visibility.hide_decl_id(&decl_id);
+                    return Some(decl_id);
                 }
             }
         }
@@ -243,12 +249,12 @@ impl<'a> StateWorkingSet<'a> {
         {
             visibility.append(&overlay_frame.visibility);
 
-            if let Some(decl_id) = overlay_frame.get_decl(name) {
-                if visibility.is_decl_id_visible(&decl_id) {
-                    // Hide decl only if it's not already hidden
-                    self.last_overlay_mut().visibility.hide_decl_id(&decl_id);
-                    return Some(decl_id);
-                }
+            if let Some(decl_id) = overlay_frame.get_decl(name)
+                && visibility.is_decl_id_visible(&decl_id)
+            {
+                // Hide decl only if it's not already hidden
+                self.last_overlay_mut().visibility.hide_decl_id(&decl_id);
+                return Some(decl_id);
             }
         }
 
@@ -308,10 +314,6 @@ impl<'a> StateWorkingSet<'a> {
         }
     }
 
-    pub fn global_span_offset(&self) -> usize {
-        self.permanent_state.next_span_start()
-    }
-
     pub fn files(&self) -> impl Iterator<Item = &CachedFile> {
         self.permanent_state.files().chain(self.delta.files.iter())
     }
@@ -364,7 +366,15 @@ impl<'a> StateWorkingSet<'a> {
     }
 
     pub fn get_span_for_filename(&self, filename: &str) -> Option<Span> {
-        let file_id = self.files().position(|file| &*file.name == filename)?;
+        let predicate = |file: &CachedFile| &*file.name == filename;
+        // search from end to start, in case there're duplicated files with the same name
+        let file_id = self
+            .delta
+            .files
+            .iter()
+            .rposition(predicate)
+            .map(|idx| idx + self.permanent_state.num_files())
+            .or_else(|| self.permanent_state.files().rposition(predicate))?;
         let file_id = FileId::new(file_id);
 
         Some(self.get_span_for_file(file_id))
@@ -395,7 +405,7 @@ impl<'a> StateWorkingSet<'a> {
         }
 
         // if no files with span were found, fall back on permanent ones
-        return self.permanent_state.get_span_contents(span);
+        self.permanent_state.get_span_contents(span)
     }
 
     pub fn enter_scope(&mut self) {
@@ -406,6 +416,7 @@ impl<'a> StateWorkingSet<'a> {
         self.delta.exit_scope();
     }
 
+    /// Find the [`DeclId`](crate::DeclId) corresponding to a predeclaration with `name`.
     pub fn find_predecl(&self, name: &[u8]) -> Option<DeclId> {
         let mut removed_overlays = vec![];
 
@@ -424,36 +435,39 @@ impl<'a> StateWorkingSet<'a> {
         None
     }
 
+    /// Find the [`DeclId`](crate::DeclId) corresponding to a declaration with `name`.
+    ///
+    /// Extends [`EngineState::find_decl`] to also search for predeclarations
+    /// (if [`StateWorkingSet::search_predecls`] is set), and declarations from scopes existing
+    /// only in [`StateDelta`].
     pub fn find_decl(&self, name: &[u8]) -> Option<DeclId> {
         let mut removed_overlays = vec![];
 
         let mut visibility: Visibility = Visibility::new();
 
         for scope_frame in self.delta.scope.iter().rev() {
-            if self.search_predecls {
-                if let Some(decl_id) = scope_frame.predecls.get(name) {
-                    if visibility.is_decl_id_visible(decl_id) {
-                        return Some(*decl_id);
-                    }
-                }
+            if self.search_predecls
+                && let Some(decl_id) = scope_frame.predecls.get(name)
+                && visibility.is_decl_id_visible(decl_id)
+            {
+                return Some(*decl_id);
             }
 
             // check overlay in delta
             for overlay_frame in scope_frame.active_overlays(&mut removed_overlays).rev() {
                 visibility.append(&overlay_frame.visibility);
 
-                if self.search_predecls {
-                    if let Some(decl_id) = overlay_frame.predecls.get(name) {
-                        if visibility.is_decl_id_visible(decl_id) {
-                            return Some(*decl_id);
-                        }
-                    }
+                if self.search_predecls
+                    && let Some(decl_id) = overlay_frame.predecls.get(name)
+                    && visibility.is_decl_id_visible(decl_id)
+                {
+                    return Some(*decl_id);
                 }
 
-                if let Some(decl_id) = overlay_frame.get_decl(name) {
-                    if visibility.is_decl_id_visible(&decl_id) {
-                        return Some(decl_id);
-                    }
+                if let Some(decl_id) = overlay_frame.get_decl(name)
+                    && visibility.is_decl_id_visible(&decl_id)
+                {
+                    return Some(decl_id);
                 }
             }
         }
@@ -462,6 +476,10 @@ impl<'a> StateWorkingSet<'a> {
         self.permanent_state.find_decl(name, &removed_overlays)
     }
 
+    /// Find the name of the declaration corresponding to `decl_id`.
+    ///
+    /// Extends [`EngineState::find_decl_name`] to also search for predeclarations (if [`StateWorkingSet::search_predecls`] is set),
+    /// and declarations from scopes existing only in [`StateDelta`].
     pub fn find_decl_name(&self, decl_id: DeclId) -> Option<&[u8]> {
         let mut removed_overlays = vec![];
 
@@ -503,6 +521,10 @@ impl<'a> StateWorkingSet<'a> {
             .find_decl_name(decl_id, &removed_overlays)
     }
 
+    /// Find the [`ModuleId`](crate::ModuleId) corresponding to `name`.
+    ///
+    /// Extends [`EngineState::find_module`] to also search for ,
+    /// and declarations from scopes existing only in [`StateDelta`].
     pub fn find_module(&self, name: &[u8]) -> Option<ModuleId> {
         let mut removed_overlays = vec![];
 
@@ -525,34 +547,6 @@ impl<'a> StateWorkingSet<'a> {
         }
 
         None
-    }
-
-    pub fn contains_decl_partial_match(&self, name: &[u8]) -> bool {
-        let mut removed_overlays = vec![];
-
-        for scope_frame in self.delta.scope.iter().rev() {
-            for overlay_frame in scope_frame.active_overlays(&mut removed_overlays).rev() {
-                for decl in &overlay_frame.decls {
-                    if decl.0.starts_with(name) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        for overlay_frame in self
-            .permanent_state
-            .active_overlays(&removed_overlays)
-            .rev()
-        {
-            for decl in &overlay_frame.decls {
-                if decl.0.starts_with(name) {
-                    return true;
-                }
-            }
-        }
-
-        false
     }
 
     pub fn next_var_id(&self) -> VarId {
@@ -620,24 +614,29 @@ impl<'a> StateWorkingSet<'a> {
         None
     }
 
-    pub fn add_variable(
-        &mut self,
-        mut name: Vec<u8>,
-        span: Span,
-        ty: Type,
-        mutable: bool,
-    ) -> VarId {
+    pub fn add_variable(&mut self, name: Vec<u8>, span: Span, ty: Type, mutable: bool) -> VarId {
+        let var_id = self.add_variable_without_scope(span, ty, mutable);
+        self.insert_variable_into_scope(name, var_id);
+        var_id
+    }
+
+    /// Like [`add_variable`](Self::add_variable) but does **not** insert the
+    /// name→VarId mapping into the current overlay scope. The caller must
+    /// later call [`insert_variable_into_scope`](Self::insert_variable_into_scope)
+    /// to make the variable visible by name.
+    pub fn add_variable_without_scope(&mut self, span: Span, ty: Type, mutable: bool) -> VarId {
         let next_id = self.next_var_id();
-        // correct name if necessary
+        self.delta.vars.push(Variable::new(span, ty, mutable));
+        next_id
+    }
+
+    /// Insert a previously created variable into the current overlay's scope.
+    /// The `name` will have a `$` prefix prepended if it doesn't already have one.
+    pub fn insert_variable_into_scope(&mut self, mut name: Vec<u8>, var_id: VarId) {
         if !name.starts_with(b"$") {
             name.insert(0, b'$');
         }
-
-        self.last_overlay_mut().vars.insert(name, next_id);
-
-        self.delta.vars.push(Variable::new(span, ty, mutable));
-
-        next_id
+        self.last_overlay_mut().insert_variable(name, var_id);
     }
 
     /// Returns the current working directory as a String, which is guaranteed to be canonicalized.
@@ -749,38 +748,45 @@ impl<'a> StateWorkingSet<'a> {
         }
     }
 
-    pub fn find_commands_by_predicate(
-        &self,
-        mut predicate: impl FnMut(&[u8]) -> bool,
-        ignore_deprecated: bool,
-    ) -> Vec<(Vec<u8>, Option<String>, CommandType)> {
-        let mut output = vec![];
-
+    /// Apply a function to all commands. The function accepts a command name and its DeclId
+    pub fn traverse_commands(&self, mut f: impl FnMut(&[u8], DeclId)) {
         for scope_frame in self.delta.scope.iter().rev() {
             for overlay_id in scope_frame.active_overlays.iter().rev() {
                 let overlay_frame = scope_frame.get_overlay(*overlay_id);
 
-                for decl in &overlay_frame.decls {
-                    if overlay_frame.visibility.is_decl_id_visible(decl.1) && predicate(decl.0) {
-                        let command = self.get_decl(*decl.1);
-                        if ignore_deprecated && command.signature().category == Category::Removed {
-                            continue;
-                        }
-                        output.push((
-                            decl.0.clone(),
-                            Some(command.description().to_string()),
-                            command.command_type(),
-                        ));
+                for (name, decl_id) in &overlay_frame.decls {
+                    if overlay_frame.visibility.is_decl_id_visible(decl_id) {
+                        f(name, *decl_id);
                     }
                 }
             }
         }
 
-        let mut permanent = self
-            .permanent_state
-            .find_commands_by_predicate(predicate, ignore_deprecated);
+        self.permanent_state.traverse_commands(f);
+    }
 
-        output.append(&mut permanent);
+    pub fn find_commands_by_predicate(
+        &self,
+        mut predicate: impl FnMut(&[u8]) -> bool,
+        ignore_deprecated: bool,
+    ) -> Vec<(DeclId, Vec<u8>, Option<String>, CommandType)> {
+        let mut output = vec![];
+
+        self.traverse_commands(|name, decl_id| {
+            if !predicate(name) {
+                return;
+            }
+            let command = self.get_decl(decl_id);
+            if ignore_deprecated && command.signature().category == Category::Removed {
+                return;
+            }
+            output.push((
+                decl_id,
+                name.to_vec(),
+                Some(command.description().to_string()),
+                command.command_type(),
+            ));
+        });
 
         output
     }
@@ -822,20 +828,7 @@ impl<'a> StateWorkingSet<'a> {
         }
     }
 
-    pub fn has_overlay(&self, name: &[u8]) -> bool {
-        for scope_frame in self.delta.scope.iter().rev() {
-            if scope_frame
-                .overlays
-                .iter()
-                .any(|(overlay_name, _)| name == overlay_name)
-            {
-                return true;
-            }
-        }
-
-        self.permanent_state.has_overlay(name)
-    }
-
+    /// Find the overlay corresponding to `name`.
     pub fn find_overlay(&self, name: &[u8]) -> Option<&OverlayFrame> {
         for scope_frame in self.delta.scope.iter().rev() {
             if let Some(overlay_id) = scope_frame.find_overlay(name) {
@@ -856,7 +849,7 @@ impl<'a> StateWorkingSet<'a> {
                 .active_overlay_names(&mut removed_overlays)
                 .iter()
                 .rev()
-                .last()
+                .next_back()
             {
                 return last_name;
             }
@@ -872,7 +865,7 @@ impl<'a> StateWorkingSet<'a> {
             if let Some(last_overlay) = scope_frame
                 .active_overlays(&mut removed_overlays)
                 .rev()
-                .last()
+                .next_back()
             {
                 return last_overlay;
             }
@@ -888,7 +881,12 @@ impl<'a> StateWorkingSet<'a> {
             let name = self.last_overlay_name().to_vec();
             let origin = overlay_frame.origin;
             let prefixed = overlay_frame.prefixed;
-            self.add_overlay(name, origin, vec![], vec![], prefixed);
+            self.add_overlay(
+                name,
+                origin,
+                ResolvedImportPattern::new(vec![], vec![], vec![], vec![]),
+                prefixed,
+            );
         }
 
         self.delta
@@ -925,8 +923,7 @@ impl<'a> StateWorkingSet<'a> {
         &mut self,
         name: Vec<u8>,
         origin: ModuleId,
-        decls: Vec<(Vec<u8>, DeclId)>,
-        modules: Vec<(Vec<u8>, ModuleId)>,
+        definitions: ResolvedImportPattern,
         prefixed: bool,
     ) {
         let last_scope_frame = self.delta.last_scope_frame_mut();
@@ -951,10 +948,22 @@ impl<'a> StateWorkingSet<'a> {
             .retain(|id| id != &overlay_id);
         last_scope_frame.active_overlays.push(overlay_id);
 
-        self.move_predecls_to_overlay();
+        self.use_decls(definitions.decls);
+        self.use_modules(definitions.modules);
 
-        self.use_decls(decls);
-        self.use_modules(modules);
+        let mut constants = vec![];
+
+        for (name, const_vid) in definitions.constants {
+            constants.push((name, const_vid));
+        }
+
+        for (name, const_val) in definitions.constant_values {
+            let const_var_id =
+                self.add_variable(name.clone(), Span::unknown(), const_val.get_type(), false);
+            self.set_variable_const_val(const_var_id, const_val);
+            constants.push((name, const_var_id));
+        }
+        self.use_variables(constants);
     }
 
     pub fn remove_overlay(&mut self, name: &[u8], keep_custom: bool) {
@@ -1086,13 +1095,13 @@ impl<'a> GetSpan for &'a StateWorkingSet<'a> {
     }
 }
 
-impl<'a> miette::SourceCode for &StateWorkingSet<'a> {
+impl miette::SourceCode for &StateWorkingSet<'_> {
     fn read_span<'b>(
         &'b self,
         span: &miette::SourceSpan,
         context_lines_before: usize,
         context_lines_after: usize,
-    ) -> Result<Box<dyn miette::SpanContents + 'b>, miette::MietteError> {
+    ) -> Result<Box<dyn miette::SpanContents<'b> + 'b>, miette::MietteError> {
         let debugging = std::env::var("MIETTE_DEBUG").is_ok();
         if debugging {
             let finding_span = "Finding span in StateWorkingSet";

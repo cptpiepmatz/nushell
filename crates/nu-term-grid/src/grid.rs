@@ -39,15 +39,15 @@
 //! that dictate how the grid is formatted:
 //!
 //! - `filling`: what to put in between two columns — either a number of
-//!    spaces, or a text string;
+//!   spaces, or a text string;
 //! - `direction`, which specifies whether the cells should go along
-//!    rows, or columns:
+//!   rows, or columns:
 //!     - `Direction::LeftToRight` starts them in the top left and
-//!        moves *rightwards*, going to the start of a new row after reaching the
-//!        final column;
+//!       moves *rightwards*, going to the start of a new row after reaching the
+//!       final column;
 //!     - `Direction::TopToBottom` starts them in the top left and moves
-//!        *downwards*, going to the top of a new column after reaching the final
-//!        row.
+//!       *downwards*, going to the top of a new column after reaching the final
+//!       row.
 //!
 //!
 //! ## Displaying a grid
@@ -93,7 +93,7 @@
 
 use std::cmp::max;
 use std::fmt;
-use std::iter::repeat;
+use std::iter::repeat_n;
 use unicode_width::UnicodeWidthStr;
 
 fn unicode_width_strip_ansi(astring: &str) -> usize {
@@ -282,7 +282,7 @@ impl Grid {
 
     fn columns_dimensions(&self, num_columns: usize) -> Dimensions {
         let mut num_lines = self.cells.len() / num_columns;
-        if self.cells.len() % num_columns != 0 {
+        if !self.cells.len().is_multiple_of(num_columns) {
             num_lines += 1;
         }
 
@@ -290,7 +290,7 @@ impl Grid {
     }
 
     fn column_widths(&self, num_lines: usize, num_columns: usize) -> Dimensions {
-        let mut widths: Vec<Width> = repeat(0).take(num_columns).collect();
+        let mut widths: Vec<Width> = repeat_n(0, num_columns).collect();
         for (index, cell) in self.cells.iter().enumerate() {
             let index = match self.options.direction {
                 Direction::LeftToRight => index % num_columns,
@@ -315,7 +315,7 @@ impl Grid {
                 col_total_width_so_far += cell.width;
             } else {
                 let mut theoretical_max_num_lines = self.cell_count / theoretical_min_num_cols;
-                if self.cell_count % theoretical_min_num_cols != 0 {
+                if !self.cell_count.is_multiple_of(theoretical_min_num_cols) {
                     theoretical_max_num_lines += 1;
                 }
                 return theoretical_max_num_lines;
@@ -374,7 +374,7 @@ impl Grid {
             // The number of columns is the number of cells divided by the number
             // of lines, *rounded up*.
             let mut num_columns = self.cell_count / num_lines;
-            if self.cell_count % num_lines != 0 {
+            if !self.cell_count.is_multiple_of(num_lines) {
                 num_columns += 1;
             }
             // Early abort: if there are so many columns that the width of the
@@ -492,7 +492,7 @@ impl fmt::Display for Display<'_> {
                                 s
                             )?;
                         }
-                        (Filling::Text(ref t), _) => {
+                        (Filling::Text(t), _) => {
                             let extra_spaces = self.dimensions.widths[x] - cell.width;
                             write!(
                                 f,

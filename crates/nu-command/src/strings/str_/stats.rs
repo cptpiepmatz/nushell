@@ -9,9 +9,9 @@ use unicode_segmentation::UnicodeSegmentation;
 pub type Counted = BTreeMap<Counter, usize>;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct StrStats;
 
-impl Command for SubCommand {
+impl Command for StrStats {
     fn name(&self) -> &str {
         "str stats"
     }
@@ -53,10 +53,10 @@ impl Command for SubCommand {
         stats(working_set.permanent(), call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Count the number of words in a string",
+                description: "Count the number of words in a string.",
                 example: r#""There are seven words in this sentence" | str stats"#,
                 result: Some(Value::test_record(record! {
                         "lines" =>     Value::test_int(1),
@@ -68,7 +68,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "Counts unicode characters",
+                description: "Counts unicode characters.",
                 example: r#"'今天天气真好' | str stats"#,
                 result: Some(Value::test_record(record! {
                         "lines" =>     Value::test_int(1),
@@ -80,7 +80,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "Counts Unicode characters correctly in a string",
+                description: "Counts Unicode characters correctly in a string.",
                 example: r#""Amélie Amelie" | str stats"#,
                 result: Some(Value::test_record(record! {
                         "lines" =>     Value::test_int(1),
@@ -102,12 +102,13 @@ fn stats(
 ) -> Result<PipelineData, ShellError> {
     let span = call.head;
     // This doesn't match explicit nulls
-    if matches!(input, PipelineData::Empty) {
+    if let PipelineData::Empty = input {
         return Err(ShellError::PipelineEmpty { dst_span: span });
     }
     input.map(
         move |v| {
             let value_span = v.span();
+            let type_ = v.get_type();
             // First, obtain the span. If this fails, propagate the error that results.
             if let Value::Error { error, .. } = v {
                 return Value::error(*error, span);
@@ -116,8 +117,9 @@ fn stats(
             match v.coerce_into_string() {
                 Ok(s) => counter(&s, span),
                 Err(_) => Value::error(
-                    ShellError::PipelineMismatch {
+                    ShellError::OnlySupportsThisInputType {
                         exp_input_type: "string".into(),
+                        wrong_type: type_.to_string(),
                         dst_span: span,
                         src_span: value_span,
                     },
@@ -148,7 +150,7 @@ fn counter(contents: &str, span: Span) -> Value {
     Value::record(record, span)
 }
 
-/// Take all the counts in `other_counts` and sum them into `accum`.
+// /// Take all the counts in `other_counts` and sum them into `accum`.
 // pub fn sum_counts(accum: &mut Counted, other_counts: &Counted) {
 //     for (counter, count) in other_counts {
 //         let entry = accum.entry(*counter).or_insert(0);
@@ -156,7 +158,7 @@ fn counter(contents: &str, span: Span) -> Value {
 //     }
 // }
 
-/// Sums all the `Counted` instances into a new one.
+// /// Sums all the `Counted` instances into a new one.
 // pub fn sum_all_counts<'a, I>(counts: I) -> Counted
 // where
 //     I: IntoIterator<Item = &'a Counted>,
@@ -290,10 +292,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StrStats)
     }
 }
 

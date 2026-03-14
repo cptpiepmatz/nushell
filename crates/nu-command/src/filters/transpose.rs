@@ -25,27 +25,27 @@ impl Command for Transpose {
             ])
             .switch(
                 "header-row",
-                "use the first input column as the table header-row (or keynames when combined with --as-record)",
+                "Use the first input column as the table header-row (or keynames when combined with --as-record).",
                 Some('r'),
             )
             .switch(
                 "ignore-titles",
-                "don't transpose the column names into values",
+                "Don't transpose the column names into values.",
                 Some('i'),
             )
             .switch(
                 "as-record",
-                "transfer to record if the result is a table and contains only one row",
+                "Transfer to record if the result is a table and contains only one row.",
                 Some('d'),
             )
             .switch(
                 "keep-last",
-                "on repetition of record fields due to `header-row`, keep the last value obtained",
+                "On repetition of record fields due to `header-row`, keep the last value obtained.",
                 Some('l'),
             )
             .switch(
                 "keep-all",
-                "on repetition of record fields due to `header-row`, keep all the values obtained",
+                "On repetition of record fields due to `header-row`, keep all the values obtained.",
                 Some('a'),
             )
             .allow_variants_without_examples(true)
@@ -75,10 +75,10 @@ impl Command for Transpose {
         transpose(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Transposes the table contents with default column names",
+                description: "Transposes the table contents with default column names.",
                 example: "[[c1 c2]; [1 2]] | transpose",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -92,7 +92,7 @@ impl Command for Transpose {
                 ])),
             },
             Example {
-                description: "Transposes the table contents with specified column names",
+                description: "Transposes the table contents with specified column names.",
                 example: "[[c1 c2]; [1 2]] | transpose key val",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -106,8 +106,7 @@ impl Command for Transpose {
                 ])),
             },
             Example {
-                description:
-                    "Transposes the table without column names and specify a new column name",
+                description: "Transposes the table without column names and specify a new column name.",
                 example: "[[c1 c2]; [1 2]] | transpose --ignore-titles val",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -119,7 +118,7 @@ impl Command for Transpose {
                 ])),
             },
             Example {
-                description: "Transfer back to record with -d flag",
+                description: "Transfer back to record with -d flag.",
                 example: "{c1: 1, c2: 2} | transpose | transpose --ignore-titles -r -d",
                 result: Some(Value::test_record(record! {
                     "c1" =>  Value::test_int(1),
@@ -175,10 +174,22 @@ pub fn transpose(
 
     let metadata = input.metadata();
     let input: Vec<_> = input.into_iter().collect();
-    // Ensure error values are propagated
-    for i in input.iter() {
-        if let Value::Error { .. } = i {
-            return Ok(i.clone().into_pipeline_data_with_metadata(metadata));
+
+    // Ensure error values are propagated and non-record values are rejected
+    for value in input.iter() {
+        match value {
+            Value::Error { .. } => {
+                return Ok(value.clone().into_pipeline_data_with_metadata(metadata));
+            }
+            Value::Record { .. } => {} // go on, this is what we're looking for
+            _ => {
+                return Err(ShellError::OnlySupportsThisInputType {
+                    exp_input_type: "table or record".into(),
+                    wrong_type: "list<any>".into(),
+                    dst_span: call.head,
+                    src_span: value.span(),
+                });
+            }
         }
     }
 
@@ -282,7 +293,7 @@ pub fn transpose(
         })
         .collect::<Vec<Value>>();
     if result_data.len() == 1 && args.as_record {
-        Ok(PipelineData::Value(
+        Ok(PipelineData::value(
             result_data
                 .pop()
                 .expect("already check result only contains one item"),
@@ -302,9 +313,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Transpose {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Transpose)
     }
 }

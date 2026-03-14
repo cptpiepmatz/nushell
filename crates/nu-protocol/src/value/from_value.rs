@@ -1,14 +1,21 @@
 use crate::{
-    ast::{CellPath, PathMember},
-    engine::Closure,
     NuGlob, Range, Record, ShellError, Span, Spanned, Type, Value,
+    ast::{CellPath, PathMember},
+    casing::Casing,
+    engine::Closure,
 };
 use chrono::{DateTime, FixedOffset};
 use std::{
     any,
+    borrow::Cow,
     cmp::Ordering,
     collections::{HashMap, VecDeque},
+    ffi::OsString,
     fmt,
+    num::{
+        NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroIsize, NonZeroU16, NonZeroU32,
+        NonZeroU64, NonZeroUsize,
+    },
     path::PathBuf,
     str::FromStr,
 };
@@ -26,6 +33,8 @@ use std::{
 /// - If `#[nu_value(rename_all = "...")]` is applied on the container (struct) the key of the
 ///   field will be case-converted accordingly.
 /// - If neither attribute is applied, the field name is used as is.
+/// - If `#[nu_value(default)]` is applied to a field, the field type's [`Default`] implementation
+///   will be used if the corresponding record field is missing
 ///
 /// Supported case conversions include those provided by [`heck`], such as
 /// "snake_case", "kebab-case", "PascalCase", and others.
@@ -133,7 +142,7 @@ pub trait FromValue: Sized {
         Type::Custom(
             any::type_name::<Self>()
                 .split(':')
-                .last()
+                .next_back()
                 .expect("str::split returns an iterator with at least one element")
                 .to_string()
                 .into_boxed_str(),
@@ -266,6 +275,65 @@ impl FromValue for i64 {
         Type::Int
     }
 }
+
+/// This implementation supports **positive** durations only.
+impl FromValue for std::time::Duration {
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        match v {
+            Value::Duration { val, .. } => {
+                let nanos = u64::try_from(val)
+                    .map_err(|_| ShellError::NeedsPositiveValue { span: v.span() })?;
+                Ok(Self::from_nanos(nanos))
+            }
+            v => Err(ShellError::CantConvert {
+                to_type: Self::expected_type().to_string(),
+                from_type: v.get_type().to_string(),
+                span: v.span(),
+                help: None,
+            }),
+        }
+    }
+
+    fn expected_type() -> Type {
+        Type::Duration
+    }
+}
+
+//
+// We can not use impl<T: FromValue> FromValue for NonZero<T> as NonZero requires an unstable trait
+// As a result, we use this macro to implement FromValue for each NonZero type.
+//
+
+macro_rules! impl_from_value_for_nonzero {
+    ($nonzero:ty, $base:ty) => {
+        impl FromValue for $nonzero {
+            fn from_value(v: Value) -> Result<Self, ShellError> {
+                let span = v.span();
+                let val = <$base>::from_value(v)?;
+                <$nonzero>::new(val).ok_or_else(|| ShellError::IncorrectValue {
+                    msg: "use a value other than 0".into(),
+                    val_span: span,
+                    call_span: span,
+                })
+            }
+
+            fn expected_type() -> Type {
+                Type::Int
+            }
+        }
+    };
+}
+
+impl_from_value_for_nonzero!(NonZeroU16, u16);
+impl_from_value_for_nonzero!(NonZeroU32, u32);
+impl_from_value_for_nonzero!(NonZeroU64, u64);
+impl_from_value_for_nonzero!(NonZeroUsize, usize);
+
+impl_from_value_for_nonzero!(NonZeroI8, i8);
+impl_from_value_for_nonzero!(NonZeroI16, i16);
+impl_from_value_for_nonzero!(NonZeroI32, i32);
+impl_from_value_for_nonzero!(NonZeroI64, i64);
+impl_from_value_for_nonzero!(NonZeroIsize, isize);
 
 macro_rules! impl_from_value_for_int {
     ($type:ty) => {
@@ -444,6 +512,27 @@ impl FromValue for PathBuf {
     }
 }
 
+// `OsString` is used in flags and other uutils
+impl FromValue for OsString {
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        match v {
+            Value::String { val, .. } => Ok(OsString::from(val)),
+            Value::CellPath { val, .. } => Ok(OsString::from(val.to_string())),
+            v => Err(ShellError::CantConvert {
+                to_type: Self::expected_type().to_string(),
+                from_type: v.get_type().to_string(),
+                span: v.span(),
+                help: None,
+            }),
+        }
+    }
+
+    fn expected_type() -> Type {
+        // Using `String` here because the underlying representation is text.
+        Type::String
+    }
+}
+
 impl FromValue for String {
     fn from_value(v: Value) -> Result<Self, ShellError> {
         // FIXME: we may want to fail a little nicer here
@@ -521,6 +610,43 @@ where
     }
 }
 
+impl<A, B> FromValue for Result<A, B>
+where
+    A: FromValue,
+    B: FromValue,
+{
+    fn from_value(v: Value) -> std::result::Result<Self, ShellError> {
+        match (A::from_value(v.clone()), B::from_value(v.clone())) {
+            (Ok(a), _) => Ok(Ok(a)),
+            (_, Ok(b)) => Ok(Err(b)),
+            (Err(ea), Err(_)) => Err(ea),
+        }
+    }
+
+    fn expected_type() -> Type {
+        Type::OneOf(vec![A::expected_type(), B::expected_type()].into())
+    }
+}
+
+/// This blanket implementation permits the use of [`Cow<'_, B>`] ([`Cow<'_, str>`] etc) based on
+/// the [FromValue] implementation of `B`'s owned form ([str] => [String]).
+///
+/// It's meant to make using the [FromValue] derive macro on types that contain [Cow] fields
+/// possible.
+impl<B> FromValue for Cow<'_, B>
+where
+    B: ?Sized + ToOwned,
+    B::Owned: FromValue,
+{
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        <B::Owned as FromValue>::from_value(v).map(Cow::Owned)
+    }
+
+    fn expected_type() -> Type {
+        <B::Owned as FromValue>::expected_type()
+    }
+}
+
 impl<V> FromValue for HashMap<String, V>
 where
     V: FromValue,
@@ -536,6 +662,18 @@ where
 
     fn expected_type() -> Type {
         Type::Record(vec![].into_boxed_slice())
+    }
+}
+
+impl<T> FromValue for Box<T>
+where
+    T: FromValue,
+{
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        match T::from_value(v) {
+            Ok(val) => Ok(Box::new(val)),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -585,6 +723,7 @@ impl FromValue for CellPath {
                     val,
                     span,
                     optional: false,
+                    casing: Casing::Sensitive,
                 }],
             }),
             Value::Int { val, .. } => {
@@ -771,7 +910,13 @@ fn int_too_large_error(int: impl fmt::Display, max: impl fmt::Display, span: Spa
 
 #[cfg(test)]
 mod tests {
-    use crate::{engine::Closure, FromValue, IntoValue, Record, Span, Type, Value};
+    use crate::{
+        FromValue, IntoValue, Record, Span, Type, Value,
+        ast::{CellPath, PathMember},
+        casing::Casing,
+        engine::Closure,
+    };
+    use std::ffi::OsString;
     use std::ops::Deref;
 
     #[test]
@@ -815,5 +960,32 @@ mod tests {
 
         assert!(Vec::<u8>::from_value(vec![u8::MIN as i32 - 1].into_value(span)).is_err());
         assert!(Vec::<u8>::from_value(vec![u8::MAX as i32 + 1].into_value(span)).is_err());
+    }
+
+    #[test]
+    fn from_value_os_string() {
+        let span = Span::test_data();
+        let expected = OsString::from("hello");
+
+        // simple string
+        assert_eq!(
+            OsString::from_value(Value::test_string("hello".to_string())).unwrap(),
+            expected
+        );
+
+        // cell path is treated as a string via `CellPath::to_string` which includes
+        // the leading `$.`.  This matches the behaviour of `String::from_value`.
+        let cp_val = Value::test_cell_path(CellPath {
+            members: vec![PathMember::String {
+                val: "hello".into(),
+                span,
+                optional: false,
+                casing: Casing::Sensitive,
+            }],
+        });
+        assert_eq!(
+            OsString::from_value(cp_val).unwrap(),
+            OsString::from("$.hello")
+        );
     }
 }

@@ -1,6 +1,6 @@
 use nu_test_support::fs::Stub::{FileWithContent, FileWithContentToBeTrimmed};
 use nu_test_support::playground::Playground;
-use nu_test_support::{nu, nu_repl_code, pipeline};
+use nu_test_support::{nu, nu_repl_code, nu_with_std};
 use pretty_assertions::assert_eq;
 
 mod environment;
@@ -11,32 +11,30 @@ mod repl;
 #[ignore]
 #[test]
 fn plugins_are_declared_with_wix() {
-    let actual = nu!(pipeline(
-        r#"
-            open Cargo.toml
-            | get bin.name
-            | str replace "nu_plugin_(extra|core)_(.*)" "nu_plugin_$2"
-            | drop
+    let actual = nu!(r#"
+        open Cargo.toml
+        | get bin.name
+        | str replace "nu_plugin_(extra|core)_(.*)" "nu_plugin_$2"
+        | drop
+        | sort-by
+        | wrap cargo | merge {
+            open wix/main.wxs --raw | from xml
+            | get Wix.children.Product.children.0.Directory.children.0
+            | where Directory.attributes.Id == "$(var.PlatformProgramFilesFolder)"
+            | get Directory.children.Directory.children.0 | last
+            | get Directory.children.Component.children
+            | each { |it| echo $it | first }
+            | skip
+            | where File.attributes.Name =~ "nu_plugin"
+            | str substring [_, -4] File.attributes.Name
+            | get File.attributes.Name
             | sort-by
-            | wrap cargo | merge {
-                open wix/main.wxs --raw | from xml
-                | get Wix.children.Product.children.0.Directory.children.0
-                | where Directory.attributes.Id == "$(var.PlatformProgramFilesFolder)"
-                | get Directory.children.Directory.children.0 | last
-                | get Directory.children.Component.children
-                | each { |it| echo $it | first }
-                | skip
-                | where File.attributes.Name =~ "nu_plugin"
-                | str substring [_, -4] File.attributes.Name
-                | get File.attributes.Name
-                | sort-by
-                | wrap wix
-            }
-            | default wix _
-            | each { |it| if $it.wix != $it.cargo { 1 } { 0 } }
-            | math sum
-            "#
-    ));
+            | wrap wix
+        }
+        | default wix _
+        | each { |it| if $it.wix != $it.cargo { 1 } { 0 } }
+        | math sum
+        "#);
 
     assert_eq!(actual.out, "0");
 }
@@ -297,7 +295,7 @@ fn main_script_can_have_subcommands1() {
                   }"#,
         )]);
 
-        let actual = nu!(cwd: dirs.test(), pipeline("nu script.nu foo 123"));
+        let actual = nu!(cwd: dirs.test(), "nu script.nu foo 123");
 
         assert_eq!(actual.out, "223");
     })
@@ -318,9 +316,34 @@ fn main_script_can_have_subcommands2() {
                   }"#,
         )]);
 
-        let actual = nu!(cwd: dirs.test(), pipeline("nu script.nu"));
+        let actual = nu!(cwd: dirs.test(), "nu script.nu");
 
         assert!(actual.out.contains("usage: script.nu"));
+    })
+}
+
+// regression test for https://github.com/nushell/nushell/issues/17719
+#[test]
+fn script_help_shows_single_subcommand() {
+    Playground::setup("main_subcommands_help", |dirs, sandbox| {
+        sandbox.mkdir("main_subcommands_help");
+        sandbox.with_files(&[FileWithContent(
+            "script.nu",
+            r#"def "main bar" [] {}
+               def "main" [] { help main }"#,
+        )]);
+
+        let actual = nu!(cwd: dirs.test(), "nu script.nu --help");
+
+        let out = &actual.out;
+        let count_script = out.matches("script.nu bar").count();
+        let count_main = out.matches("main bar").count();
+        assert_eq!(
+            count_script + count_main,
+            1,
+            "help output should list exactly one of 'script.nu bar' or 'main bar', got:\n{}",
+            out
+        );
     })
 }
 
@@ -330,22 +353,67 @@ fn source_empty_file() {
         sandbox.mkdir("source_empty_file");
         sandbox.with_files(&[FileWithContent("empty.nu", "")]);
 
-        let actual = nu!(cwd: dirs.test(), pipeline("nu empty.nu"));
+        let actual = nu!(cwd: dirs.test(), "nu empty.nu");
         assert!(actual.out.is_empty());
+    })
+}
+
+#[test]
+fn source_use_null() {
+    let actual = nu!(r#"source null"#);
+    assert!(actual.out.is_empty());
+    assert!(actual.err.is_empty());
+
+    let actual = nu!(r#"source-env null"#);
+    assert!(actual.out.is_empty());
+    assert!(actual.err.is_empty());
+
+    let actual = nu!(r#"use null"#);
+    assert!(actual.out.is_empty());
+    assert!(actual.err.is_empty());
+
+    let actual = nu!(r#"overlay use null"#);
+    assert!(actual.out.is_empty());
+    assert!(actual.err.is_empty());
+}
+
+#[test]
+fn source_use_file_named_null() {
+    Playground::setup("source_file_named_null", |dirs, sandbox| {
+        sandbox.with_files(&[FileWithContent(
+            "null",
+            r#"export-env { print "hello world" }"#,
+        )]);
+
+        let actual = nu!(cwd: dirs.test(), r#"source "null""#);
+        assert!(actual.out.contains("hello world"));
+        assert!(actual.err.is_empty());
+
+        let actual = nu!(cwd: dirs.test(), r#"source-env "null""#);
+        assert!(actual.out.contains("hello world"));
+        assert!(actual.err.is_empty());
+
+        let actual = nu!(cwd: dirs.test(), r#"use "null""#);
+        assert!(actual.out.contains("hello world"));
+        assert!(actual.err.is_empty());
+
+        let actual = nu!(cwd: dirs.test(), r#"overlay use "null""#);
+        assert!(actual.out.contains("hello world"));
+        assert!(actual.err.is_empty());
     })
 }
 
 #[test]
 fn main_script_help_uses_script_name1() {
     // Note: this test is somewhat fragile and might need to be adapted if the usage help message changes
-    Playground::setup("main_filename", |dirs, sandbox| {
-        sandbox.mkdir("main_filename");
+    Playground::setup("main_filename1", |dirs, sandbox| {
+        sandbox.mkdir("main_filename1");
         sandbox.with_files(&[FileWithContent(
             "script.nu",
             r#"def main [] {}
             "#,
         )]);
-        let actual = nu!(cwd: dirs.test(), pipeline("nu script.nu --help"));
+        let actual = nu!(cwd: dirs.test(), "nu script.nu --help");
         assert!(actual.out.contains("> script.nu"));
         assert!(!actual.out.contains("> main"));
     })
@@ -354,14 +422,14 @@ fn main_script_help_uses_script_name1() {
 #[test]
 fn main_script_help_uses_script_name2() {
     // Note: this test is somewhat fragile and might need to be adapted if the usage help message changes
-    Playground::setup("main_filename", |dirs, sandbox| {
-        sandbox.mkdir("main_filename");
+    Playground::setup("main_filename2", |dirs, sandbox| {
+        sandbox.mkdir("main_filename2");
         sandbox.with_files(&[FileWithContent(
             "script.nu",
             r#"def main [foo: string] {}
             "#,
         )]);
-        let actual = nu!(cwd: dirs.test(), pipeline("nu script.nu"));
+        let actual = nu!(cwd: dirs.test(), "nu script.nu");
         assert!(actual.err.contains("Usage: script.nu"));
         assert!(!actual.err.contains("Usage: main"));
     })
@@ -370,15 +438,15 @@ fn main_script_help_uses_script_name2() {
 #[test]
 fn main_script_subcommand_help_uses_script_name1() {
     // Note: this test is somewhat fragile and might need to be adapted if the usage help message changes
-    Playground::setup("main_filename", |dirs, sandbox| {
-        sandbox.mkdir("main_filename");
+    Playground::setup("main_filename3", |dirs, sandbox| {
+        sandbox.mkdir("main_filename3");
         sandbox.with_files(&[FileWithContent(
             "script.nu",
             r#"def main [] {}
             def 'main foo' [] {}
             "#,
         )]);
-        let actual = nu!(cwd: dirs.test(), pipeline("nu script.nu foo --help"));
+        let actual = nu!(cwd: dirs.test(), "nu script.nu foo --help");
         assert!(actual.out.contains("> script.nu foo"));
         assert!(!actual.out.contains("> main foo"));
     })
@@ -387,16 +455,101 @@ fn main_script_subcommand_help_uses_script_name1() {
 #[test]
 fn main_script_subcommand_help_uses_script_name2() {
     // Note: this test is somewhat fragile and might need to be adapted if the usage help message changes
-    Playground::setup("main_filename", |dirs, sandbox| {
-        sandbox.mkdir("main_filename");
+    Playground::setup("main_filename4", |dirs, sandbox| {
+        sandbox.mkdir("main_filename4");
         sandbox.with_files(&[FileWithContent(
             "script.nu",
             r#"def main [] {}
             def 'main foo' [bar: string] {}
             "#,
         )]);
-        let actual = nu!(cwd: dirs.test(), pipeline("nu script.nu foo"));
+        let actual = nu!(cwd: dirs.test(), "nu script.nu foo");
         assert!(actual.err.contains("Usage: script.nu foo"));
         assert!(!actual.err.contains("Usage: main foo"));
+    })
+}
+
+#[test]
+fn script_file_not_found() {
+    let actual = nu!(r#"nu non-existent-script.nu foo bar"#);
+    assert!(
+        !actual.err.contains(".rs"),
+        "internal rust source was mentioned"
+    );
+    assert!(
+        actual.err.contains("non-existent-script.nu"),
+        "error did not include script name"
+    );
+    assert!(
+        actual.err.contains("commandline"),
+        "source file for the error was not commandline"
+    );
+}
+
+#[test]
+fn main_script_alias_persists() {
+    // Verify that renaming 'main' to the script filename doesn't prevent the
+    // script from running correctly via its filename as the command name.
+    Playground::setup("alias_main", |dirs, sandbox| {
+        sandbox.with_files(&[FileWithContent("script.nu", r#"def main [] { 'ok' }"#)]);
+
+        let actual = nu!(cwd: dirs.test(), "nu script.nu");
+        assert_eq!(actual.out, "ok");
+    })
+}
+
+// This test will have to change once clip copy is removed after deprecation time.
+#[test]
+#[ignore = "run this test only when experimental option native-clip is set"]
+fn builtin_commands_can_be_shadowed_and_extended() {
+    // Demonstrate that importing a module can shadow built-in commands and
+    // add new subcommands, which is the motivating use case for this PR.
+    let actual = nu_with_std!(r#"use std/clip; clip"#);
+
+    assert!(actual.out.contains("clip copy52"));
+    assert!(actual.out.contains("clip prefix"));
+    assert!(actual.out.contains("clip copy "));
+    assert_eq!(actual.out.matches("clip copy ").count(), 1);
+
+    let copy_help = nu_with_std!(r#"use std/clip; clip copy --help"#);
+    assert!(copy_help.out.contains("deprecated"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn nu_env_pwd_symlink() {
+    Playground::setup("nu_env_pwd_symlink", |_, sandbox| {
+        // Test that the value of PWD in the environment takes precedence
+        // over the current working directory when they point to the same directory.
+        let pwd = "linked_current_dir";
+        sandbox.symlink("./", pwd);
+
+        let pwd = sandbox.cwd().join(pwd);
+        let current_dir = std::fs::canonicalize(&pwd).unwrap();
+        let child_output = std::process::Command::new(nu_test_support::fs::executable_path())
+            .args(["-c", "echo $env.PWD"])
+            .current_dir(current_dir)
+            .env("PWD", &pwd)
+            .output()
+            .expect("failed to run nu");
+        let output = String::from_utf8(child_output.stdout).unwrap();
+        assert_eq!(output.trim_end(), pwd.to_str().unwrap());
+
+        // Make sure that the current_dir still takes precedence
+        // if PWD and current_dir point to different directories.
+        let pwd = "linked_current_dir2";
+        sandbox.mkdir("new_current_dir");
+        sandbox.symlink("new_current_dir", pwd);
+
+        let pwd = sandbox.cwd().join(pwd);
+        let current_dir = sandbox.cwd().canonicalize().unwrap();
+        let child_output = std::process::Command::new(nu_test_support::fs::executable_path())
+            .args(["-c", "echo $env.PWD"])
+            .current_dir(&current_dir)
+            .env("PWD", &pwd)
+            .output()
+            .expect("failed to run nu");
+        let output = String::from_utf8(child_output.stdout).unwrap();
+        assert_eq!(output.trim_end(), current_dir.to_str().unwrap());
     })
 }

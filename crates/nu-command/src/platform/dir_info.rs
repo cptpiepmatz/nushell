@@ -1,6 +1,6 @@
 use filesize::file_real_size_fast;
 use nu_glob::Pattern;
-use nu_protocol::{record, ShellError, Signals, Span, Value};
+use nu_protocol::{ShellError, Signals, Span, Value, record, shell_error::io::IoError};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -77,7 +77,7 @@ impl FileInfo {
                     long,
                 })
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(IoError::new(e, tag, path).into()),
         }
     }
 }
@@ -91,6 +91,7 @@ impl DirInfo {
         signals: &Signals,
     ) -> Result<Self, ShellError> {
         let path = path.into();
+        let from_io_error = IoError::factory(span, path.as_path());
 
         let mut s = Self {
             dirs: Vec::new(),
@@ -99,7 +100,7 @@ impl DirInfo {
             size: 0,
             blocks: 0,
             tag: params.tag,
-            path,
+            path: path.clone(),
             long: params.long,
         };
 
@@ -108,13 +109,13 @@ impl DirInfo {
                 s.size = d.len(); // dir entry size
                 s.blocks = file_real_size_fast(&s.path, &d).ok().unwrap_or(0);
             }
-            Err(e) => s = s.add_error(e.into()),
+            Err(e) => s = s.add_error(from_io_error(e).into()),
         };
 
         match std::fs::read_dir(&s.path) {
             Ok(d) => {
                 for f in d {
-                    signals.check(span)?;
+                    signals.check(&span)?;
 
                     match f {
                         Ok(i) => match i.file_type() {
@@ -122,13 +123,13 @@ impl DirInfo {
                                 s = s.add_dir(i.path(), depth, params, span, signals)?
                             }
                             Ok(_t) => s = s.add_file(i.path(), params),
-                            Err(e) => s = s.add_error(e.into()),
+                            Err(e) => s = s.add_error(from_io_error(e).into()),
                         },
-                        Err(e) => s = s.add_error(e.into()),
+                        Err(e) => s = s.add_error(from_io_error(e).into()),
                     }
                 }
             }
-            Err(e) => s = s.add_error(e.into()),
+            Err(e) => s = s.add_error(from_io_error(e).into()),
         }
         Ok(s)
     }
@@ -158,14 +159,11 @@ impl DirInfo {
 
     fn add_file(mut self, f: impl Into<PathBuf>, params: &DirBuilder) -> Self {
         let f = f.into();
-        let include = params
-            .exclude
-            .as_ref()
-            .map_or(true, |x| !x.matches_path(&f));
+        let include = params.exclude.as_ref().is_none_or(|x| !x.matches_path(&f));
         if include {
             match FileInfo::new(f, params.deref, self.tag, self.long) {
                 Ok(file) => {
-                    let inc = params.min.map_or(true, |s| file.size >= s);
+                    let inc = params.min.is_none_or(|s| file.size >= s);
                     if inc {
                         self.size += file.size;
                         self.blocks += file.blocks.unwrap_or(0);

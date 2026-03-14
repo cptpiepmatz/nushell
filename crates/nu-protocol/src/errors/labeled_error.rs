@@ -1,24 +1,23 @@
-use std::fmt;
-
-use miette::Diagnostic;
+use super::{ShellError, shell_error::io::IoError};
+use crate::{FromValue, IntoValue, Span, Type, Value, record};
+use miette::{Diagnostic, LabeledSpan, NamedSource, SourceSpan};
 use serde::{Deserialize, Serialize};
+use std::{fmt, fs};
 
-use crate::Span;
-
-use super::ShellError;
+// # use nu_protocol::{FromValue, Value, ShellError, record, Span};
 
 /// A very generic type of error used for interfacing with external code, such as scripts and
 /// plugins.
 ///
 /// This generally covers most of the interface of [`miette::Diagnostic`], but with types that are
 /// well-defined for our protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LabeledError {
     /// The main message for the error.
     pub msg: String,
     /// Labeled spans attached to the error, demonstrating to the user where the problem is.
     #[serde(default)]
-    pub labels: Vec<ErrorLabel>,
+    pub labels: Box<Vec<ErrorLabel>>,
     /// A unique machine- and search-friendly error code to associate to the error. (e.g.
     /// `nu::shell::missing_config_value`)
     #[serde(default)]
@@ -31,7 +30,7 @@ pub struct LabeledError {
     pub help: Option<String>,
     /// Errors that are related to or caused this error
     #[serde(default)]
-    pub inner: Vec<LabeledError>,
+    pub inner: Box<Vec<ShellError>>,
 }
 
 impl LabeledError {
@@ -47,14 +46,10 @@ impl LabeledError {
     /// let error = LabeledError::new("Something bad happened");
     /// assert_eq!("Something bad happened", error.to_string());
     /// ```
-    pub fn new(msg: impl Into<String>) -> LabeledError {
-        LabeledError {
+    pub fn new(msg: impl Into<String>) -> Self {
+        Self {
             msg: msg.into(),
-            labels: vec![],
-            code: None,
-            url: None,
-            help: None,
-            inner: vec![],
+            ..Default::default()
         }
     }
 
@@ -129,13 +124,15 @@ impl LabeledError {
     /// # Example
     ///
     /// ```rust
-    /// # use nu_protocol::LabeledError;
+    /// # use nu_protocol::{LabeledError, ShellError};
     /// let error = LabeledError::new("An error")
     ///     .with_inner(LabeledError::new("out of coolant"));
-    /// assert_eq!(LabeledError::new("out of coolant"), error.inner[0]);
+    /// let check: ShellError = LabeledError::new("out of coolant").into();
+    /// assert_eq!(check, error.inner[0]);
     /// ```
-    pub fn with_inner(mut self, inner: impl Into<LabeledError>) -> Self {
-        self.inner.push(inner.into());
+    pub fn with_inner(mut self, inner: impl Into<ShellError>) -> Self {
+        let inner_error: ShellError = inner.into();
+        self.inner.push(inner_error);
         self
     }
 
@@ -146,12 +143,20 @@ impl LabeledError {
     /// [`ShellError`] implements `miette::Diagnostic`:
     ///
     /// ```rust
-    /// # use nu_protocol::{ShellError, LabeledError};
-    /// let error = LabeledError::from_diagnostic(&ShellError::IOError { msg: "error".into() });
+    /// # use nu_protocol::{ShellError, LabeledError, shell_error::{self, io::IoError}, Span};
+    /// #
+    /// let error = LabeledError::from_diagnostic(
+    ///     &ShellError::Io(IoError::new_with_additional_context(
+    ///         shell_error::io::ErrorKind::from_std(std::io::ErrorKind::Other),
+    ///         Span::test_data(),
+    ///         None,
+    ///         "some error"
+    ///     ))
+    /// );
     /// assert!(error.to_string().contains("I/O error"));
     /// ```
-    pub fn from_diagnostic(diag: &(impl miette::Diagnostic + ?Sized)) -> LabeledError {
-        LabeledError {
+    pub fn from_diagnostic(diag: &(impl miette::Diagnostic + ?Sized)) -> Self {
+        Self {
             msg: diag.to_string(),
             labels: diag
                 .labels()
@@ -161,7 +166,8 @@ impl LabeledError {
                     text: label.label().unwrap_or("").into(),
                     span: Span::new(label.offset(), label.offset() + label.len()),
                 })
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
             code: diag.code().map(|s| s.to_string()),
             url: diag.url().map(|s| s.to_string()),
             help: diag.help().map(|s| s.to_string()),
@@ -169,19 +175,208 @@ impl LabeledError {
                 .related()
                 .into_iter()
                 .flatten()
-                .map(Self::from_diagnostic)
-                .collect(),
+                .map(|i| Self::from_diagnostic(i).into())
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
 
 /// A labeled span within a [`LabeledError`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorLabel {
     /// Text to show together with the span
     pub text: String,
     /// Span pointing at where the text references in the source
     pub span: Span,
+}
+
+impl From<ErrorLabel> for LabeledSpan {
+    fn from(val: ErrorLabel) -> Self {
+        LabeledSpan::new(
+            (!val.text.is_empty()).then_some(val.text),
+            val.span.start,
+            val.span.end - val.span.start,
+        )
+    }
+}
+
+impl From<ErrorLabel> for SourceSpan {
+    fn from(val: ErrorLabel) -> Self {
+        SourceSpan::new(val.span.start.into(), val.span.end - val.span.start)
+    }
+}
+
+impl FromValue for ErrorLabel {
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        let record = v.clone().into_record()?;
+        let text = String::from_value(match record.get("text") {
+            Some(val) => val.clone(),
+            None => Value::string("", v.span()),
+        })
+        .unwrap_or("originates from here".into());
+        let span = Span::from_value(match record.get("span") {
+            Some(val) => val.clone(),
+            // Maybe there's a better way...
+            None => Value::record(
+                record! {
+                    "start" => Value::int(v.span().start as i64, v.span()),
+                    "end" => Value::int(v.span().end as i64, v.span()),
+                },
+                v.span(),
+            ),
+        });
+
+        match span {
+            Ok(s) => Ok(Self { text, span: s }),
+            Err(e) => Err(e),
+        }
+    }
+    fn expected_type() -> crate::Type {
+        Type::Record(
+            vec![
+                ("text".into(), Type::String),
+                ("span".into(), Type::record()),
+            ]
+            .into(),
+        )
+    }
+}
+
+impl IntoValue for ErrorLabel {
+    fn into_value(self, span: Span) -> Value {
+        record! {
+            "text" => Value::string(self.text, span),
+            "span" => span.into_value(span),
+        }
+        .into_value(span)
+    }
+}
+
+/// Optionally named error source
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorSource {
+    name: Option<String>,
+    text: Option<String>,
+    path: Option<String>,
+}
+
+impl ErrorSource {
+    pub fn new(name: Option<String>, text: String) -> Self {
+        Self {
+            name,
+            text: Some(text),
+            path: None,
+        }
+    }
+}
+
+impl From<ErrorSource> for NamedSource<String> {
+    fn from(value: ErrorSource) -> Self {
+        let name = value.name.unwrap_or_default();
+        match value {
+            ErrorSource {
+                text: Some(text),
+                path: None,
+                ..
+            } => NamedSource::new(name, text),
+            ErrorSource {
+                text: None,
+                path: Some(path),
+                ..
+            } => {
+                let text = fs::read_to_string(&path).unwrap_or_default();
+                NamedSource::new(path, text)
+            }
+            _ => NamedSource::new(name, "".into()),
+        }
+    }
+}
+
+impl FromValue for ErrorSource {
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        let record = v.clone().into_record()?;
+        let name = record
+            .get("name")
+            .and_then(|s| String::from_value(s.clone()).ok());
+        // let name = String::from_value(record.get("name").unwrap().clone()).ok();
+
+        let text = if let Some(text) = record.get("text") {
+            String::from_value(text.clone()).ok()
+        } else {
+            None
+        };
+        let path = if let Some(path) = record.get("path") {
+            String::from_value(path.clone()).ok()
+        } else {
+            None
+        };
+
+        match (text, path) {
+            // Prioritize not reading from a file and using the text raw
+            (text @ Some(_), _) => Ok(ErrorSource {
+                name,
+                text,
+                path: None,
+            }),
+            (_, path @ Some(_)) => Ok(ErrorSource {
+                name: path.clone(),
+                text: None,
+                path,
+            }),
+            _ => Err(ShellError::CantConvert {
+                to_type: Self::expected_type().to_string(),
+                from_type: v.get_type().to_string(),
+                span: v.span(),
+                help: None,
+            }),
+        }
+    }
+    fn expected_type() -> crate::Type {
+        Type::Record(
+            vec![
+                ("name".into(), Type::String),
+                ("text".into(), Type::String),
+                ("path".into(), Type::String),
+            ]
+            .into(),
+        )
+    }
+}
+
+impl IntoValue for ErrorSource {
+    fn into_value(self, span: Span) -> Value {
+        match self {
+            Self {
+                name: Some(name),
+                text: Some(text),
+                ..
+            } => record! {
+                "name" => Value::string(name, span),
+                "text" => Value::string(text, span),
+            },
+            Self {
+                text: Some(text), ..
+            } => record! {
+                "text" => Value::string(text, span)
+            },
+            Self {
+                name: Some(name),
+                path: Some(path),
+                ..
+            } => record! {
+                "name" => Value::string(name, span),
+                "path" => Value::string(path, span),
+            },
+            Self {
+                path: Some(path), ..
+            } => record! {
+                "path" => Value::string(path, span),
+            },
+            _ => record! {},
+        }
+        .into_value(span)
+    }
 }
 
 impl fmt::Display for LabeledError {
@@ -201,10 +396,6 @@ impl Diagnostic for LabeledError {
         self.code.as_ref().map(Box::new).map(|b| b as _)
     }
 
-    fn severity(&self) -> Option<miette::Severity> {
-        None
-    }
-
     fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
         self.help.as_ref().map(Box::new).map(|b| b as _)
     }
@@ -213,30 +404,25 @@ impl Diagnostic for LabeledError {
         self.url.as_ref().map(Box::new).map(|b| b as _)
     }
 
-    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
-        None
-    }
-
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
-        Some(Box::new(self.labels.iter().map(|label| {
-            miette::LabeledSpan::new_with_span(
-                Some(label.text.clone()).filter(|s| !s.is_empty()),
-                label.span,
-            )
-        })))
+        Some(Box::new(
+            self.labels.iter().map(|label| label.clone().into()),
+        ))
     }
 
     fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
         Some(Box::new(self.inner.iter().map(|r| r as _)))
     }
-
-    fn diagnostic_source(&self) -> Option<&dyn Diagnostic> {
-        None
-    }
 }
 
 impl From<ShellError> for LabeledError {
     fn from(err: ShellError) -> Self {
-        LabeledError::from_diagnostic(&err)
+        Self::from_diagnostic(&err)
+    }
+}
+
+impl From<IoError> for LabeledError {
+    fn from(err: IoError) -> Self {
+        Self::from_diagnostic(&err)
     }
 }

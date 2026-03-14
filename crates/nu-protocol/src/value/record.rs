@@ -1,13 +1,263 @@
 //! Our insertion ordered map-type [`Record`]
-use std::{iter::FusedIterator, ops::RangeBounds};
+use std::{
+    iter::FusedIterator,
+    marker::PhantomData,
+    ops::{Deref, DerefMut, RangeBounds},
+};
 
-use crate::{ShellError, Span, Value};
+use crate::{
+    ShellError, Span, Value,
+    casing::{CaseInsensitive, CaseSensitive, CaseSensitivity, Casing, WrapCased},
+};
 
-use serde::{de::Visitor, ser::SerializeMap, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Visitor, ser::SerializeMap};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Record {
     inner: Vec<(String, Value)>,
+}
+
+/// A wrapper around [`Record`] that handles lookups. Whether the keys are compared case sensitively
+/// or not is controlled with the `Sensitivity` parameter.
+///
+/// It is never actually constructed as a value and only used as a reference to an existing [`Record`].
+#[repr(transparent)]
+pub struct CasedRecord<Sensitivity: CaseSensitivity>(Record, PhantomData<Sensitivity>);
+
+impl<Sensitivity: CaseSensitivity> CasedRecord<Sensitivity> {
+    #[inline]
+    const fn from_record(record: &Record) -> &Self {
+        // SAFETY: `CasedRecord` has the same memory layout as `Record`.
+        unsafe { &*(record as *const Record as *const Self) }
+    }
+
+    #[inline]
+    const fn from_record_mut(record: &mut Record) -> &mut Self {
+        // SAFETY: `CasedRecord` has the same memory layout as `Record`.
+        unsafe { &mut *(record as *mut Record as *mut Self) }
+    }
+
+    pub fn index_of(&self, col: impl AsRef<str>) -> Option<usize> {
+        let col = col.as_ref();
+        self.0.columns().rposition(|k| Sensitivity::eq(k, col))
+    }
+
+    pub fn contains(&self, col: impl AsRef<str>) -> bool {
+        self.index_of(col.as_ref()).is_some()
+    }
+
+    pub fn get(&self, col: impl AsRef<str>) -> Option<&Value> {
+        let index = self.index_of(col.as_ref())?;
+        Some(self.0.get_index(index)?.1)
+    }
+
+    pub fn get_mut(&mut self, col: impl AsRef<str>) -> Option<&mut Value> {
+        let index = self.index_of(col.as_ref())?;
+        Some(self.0.get_index_mut(index)?.1)
+    }
+
+    /// Remove single value by key and return it
+    pub fn remove(&mut self, col: impl AsRef<str>) -> Option<Value> {
+        let index = self.index_of(col.as_ref())?;
+        Some(self.0.remove_index(index))
+    }
+
+    /// Insert into the record, replacing preexisting value if found.
+    ///
+    /// Returns `Some(previous_value)` if found. Else `None`
+    pub fn insert<K>(&mut self, col: K, val: Value) -> Option<Value>
+    where
+        K: AsRef<str> + Into<String>,
+    {
+        if let Some(curr_val) = self.get_mut(col.as_ref()) {
+            Some(std::mem::replace(curr_val, val))
+        } else {
+            self.0.push(col, val);
+            None
+        }
+    }
+}
+
+impl<'a> WrapCased for &'a Record {
+    type Wrapper<S: CaseSensitivity> = &'a CasedRecord<S>;
+
+    #[inline]
+    fn case_sensitive(self) -> Self::Wrapper<CaseSensitive> {
+        CasedRecord::<CaseSensitive>::from_record(self)
+    }
+
+    #[inline]
+    fn case_insensitive(self) -> Self::Wrapper<CaseInsensitive> {
+        CasedRecord::<CaseInsensitive>::from_record(self)
+    }
+}
+
+impl<'a> WrapCased for &'a mut Record {
+    type Wrapper<S: CaseSensitivity> = &'a mut CasedRecord<S>;
+
+    #[inline]
+    fn case_sensitive(self) -> Self::Wrapper<CaseSensitive> {
+        CasedRecord::<CaseSensitive>::from_record_mut(self)
+    }
+
+    #[inline]
+    fn case_insensitive(self) -> Self::Wrapper<CaseInsensitive> {
+        CasedRecord::<CaseInsensitive>::from_record_mut(self)
+    }
+}
+
+impl AsRef<Record> for Record {
+    fn as_ref(&self) -> &Record {
+        self
+    }
+}
+
+impl AsMut<Record> for Record {
+    fn as_mut(&mut self) -> &mut Record {
+        self
+    }
+}
+
+impl Deref for Record {
+    type Target = CasedRecord<CaseSensitive>;
+
+    fn deref(&self) -> &Self::Target {
+        self.case_sensitive()
+    }
+}
+
+impl DerefMut for Record {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.case_sensitive()
+    }
+}
+
+/// A wrapper around [`Record`] that affects whether key comparisons are case sensitive or not.
+///
+/// Implements commonly used methods of [`Record`].
+pub struct DynCasedRecord<R> {
+    record: R,
+    casing: Casing,
+}
+
+impl Clone for DynCasedRecord<&Record> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for DynCasedRecord<&Record> {}
+
+impl<'a> DynCasedRecord<&'a Record> {
+    pub fn index_of(self, col: impl AsRef<str>) -> Option<usize> {
+        match self.casing {
+            Casing::Sensitive => self.record.case_sensitive().index_of(col.as_ref()),
+            Casing::Insensitive => self.record.case_insensitive().index_of(col.as_ref()),
+        }
+    }
+
+    pub fn contains(self, col: impl AsRef<str>) -> bool {
+        self.get(col.as_ref()).is_some()
+    }
+
+    pub fn get(self, col: impl AsRef<str>) -> Option<&'a Value> {
+        match self.casing {
+            Casing::Sensitive => self.record.case_sensitive().get(col.as_ref()),
+            Casing::Insensitive => self.record.case_insensitive().get(col.as_ref()),
+        }
+    }
+}
+
+impl<'a> DynCasedRecord<&'a mut Record> {
+    /// Explicit reborrowing. See [Self::reborrow_mut()]
+    pub fn reborrow(&self) -> DynCasedRecord<&Record> {
+        DynCasedRecord {
+            record: &*self.record,
+            casing: self.casing,
+        }
+    }
+
+    /// Explicit reborrowing. Using this before methods that receive `self` is necessary to avoid
+    /// consuming the `DynCasedRecord` instance.
+    ///
+    /// ```
+    /// use nu_protocol::{record, record::{Record, DynCasedRecord}, Value, casing::Casing};
+    ///
+    /// let mut rec = record!{
+    ///     "A" => Value::test_nothing(),
+    ///     "B" => Value::test_int(42),
+    ///     "C" => Value::test_nothing(),
+    ///     "D" => Value::test_int(42),
+    /// };
+    /// let mut cased_rec: DynCasedRecord<&mut Record> = rec.cased_mut(Casing::Insensitive);
+    /// ```
+    ///
+    /// The following will fail to compile:
+    ///
+    /// ```compile_fail
+    /// # use nu_protocol::{record, record::{Record, DynCasedRecord}, Value, casing::Casing};
+    /// # let mut rec = record!{};
+    /// # let mut cased_rec: DynCasedRecord<&mut Record> = rec.cased_mut(Casing::Insensitive);
+    /// let a = cased_rec.get_mut("a");
+    /// let b = cased_rec.get_mut("b");
+    /// ```
+    ///
+    /// This is due to the fact `.get_mut()` receives `self`[^self] _by value_, which limits its use to
+    /// just once, unless we construct a new `DynCasedRecord`.
+    ///
+    /// [^self]: Receiving `&mut self` works, but has an undesirable effect on the return value's
+    /// lifetime. With `Self == &'wrapper mut DynCasedRecord<&'source mut Record>`, return value's
+    /// lifetime will be `'wrapper` rather than `'source`.
+    ///
+    /// We can create a new `DynCasedRecord<&mut Record>` from an existing one even though `&mut T` is
+    /// not [`Copy`]. This is accomplished with [reborrowing] which happens implicitly with native
+    /// references. Reborrowing also happens to be a tragically under documented feature of rust.
+    ///
+    /// Though there isn't a trait for it yet, it's possible and simple to implement, it just has
+    /// to be called explicitly:
+    ///
+    /// ```
+    /// # use nu_protocol::{record, record::{Record, DynCasedRecord}, Value, casing::Casing};
+    /// # let mut rec = record!{};
+    /// # let mut cased_rec: DynCasedRecord<&mut Record> = rec.cased_mut(Casing::Insensitive);
+    /// let a = cased_rec.reborrow_mut().get_mut("a");
+    /// let b = cased_rec.reborrow_mut().get_mut("b");
+    /// ```
+    ///
+    /// [reborrowing]: https://quinedot.github.io/rust-learning/st-reborrow.html
+    pub fn reborrow_mut(&mut self) -> DynCasedRecord<&mut Record> {
+        DynCasedRecord {
+            record: &mut *self.record,
+            casing: self.casing,
+        }
+    }
+
+    pub fn get_mut(self, col: impl AsRef<str>) -> Option<&'a mut Value> {
+        match self.casing {
+            Casing::Sensitive => self.record.case_sensitive().get_mut(col.as_ref()),
+            Casing::Insensitive => self.record.case_insensitive().get_mut(col.as_ref()),
+        }
+    }
+
+    pub fn remove(self, col: impl AsRef<str>) -> Option<Value> {
+        match self.casing {
+            Casing::Sensitive => self.record.case_sensitive().remove(col.as_ref()),
+            Casing::Insensitive => self.record.case_insensitive().remove(col.as_ref()),
+        }
+    }
+
+    /// Insert into the record, replacing preexisting value if found.
+    ///
+    /// Returns `Some(previous_value)` if found. Else `None`
+    pub fn insert<K>(self, col: K, val: Value) -> Option<Value>
+    where
+        K: AsRef<str> + Into<String>,
+    {
+        match self.casing {
+            Casing::Sensitive => self.record.case_sensitive().insert(col.as_ref(), val),
+            Casing::Insensitive => self.record.case_insensitive().insert(col.as_ref(), val),
+        }
+    }
 }
 
 impl Record {
@@ -18,6 +268,30 @@ impl Record {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Returns an estimate of the memory size used by this Record in bytes
+    pub fn memory_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self
+                .inner
+                .iter()
+                .map(|(k, v)| k.capacity() + v.memory_size())
+                .sum::<usize>()
+    }
+
+    pub fn cased(&self, casing: Casing) -> DynCasedRecord<&Record> {
+        DynCasedRecord {
+            record: self,
+            casing,
+        }
+    }
+
+    pub fn cased_mut(&mut self, casing: Casing) -> DynCasedRecord<&mut Record> {
+        DynCasedRecord {
+            record: self,
+            casing,
         }
     }
 
@@ -44,11 +318,11 @@ impl Record {
         }
     }
 
-    pub fn iter(&self) -> Iter {
+    pub fn iter(&self) -> Iter<'_> {
         self.into_iter()
     }
 
-    pub fn iter_mut(&mut self) -> IterMut {
+    pub fn iter_mut(&mut self) -> IterMut<'_> {
         self.into_iter()
     }
 
@@ -62,61 +336,26 @@ impl Record {
 
     /// Naive push to the end of the datastructure.
     ///
+    /// <div class="warning">
     /// May duplicate data!
     ///
-    /// Consider to use [`Record::insert`] instead
+    /// Consider using [`CasedRecord::insert`] or [`DynCasedRecord::insert`] instead.
+    /// </div>
     pub fn push(&mut self, col: impl Into<String>, val: Value) {
         self.inner.push((col.into(), val));
-    }
-
-    /// Insert into the record, replacing preexisting value if found.
-    ///
-    /// Returns `Some(previous_value)` if found. Else `None`
-    pub fn insert<K>(&mut self, col: K, val: Value) -> Option<Value>
-    where
-        K: AsRef<str> + Into<String>,
-    {
-        if let Some(curr_val) = self.get_mut(&col) {
-            Some(std::mem::replace(curr_val, val))
-        } else {
-            self.push(col, val);
-            None
-        }
-    }
-
-    pub fn contains(&self, col: impl AsRef<str>) -> bool {
-        self.columns().any(|k| k == col.as_ref())
-    }
-
-    pub fn index_of(&self, col: impl AsRef<str>) -> Option<usize> {
-        self.columns().position(|k| k == col.as_ref())
-    }
-
-    pub fn get(&self, col: impl AsRef<str>) -> Option<&Value> {
-        self.inner
-            .iter()
-            .find_map(|(k, v)| if k == col.as_ref() { Some(v) } else { None })
-    }
-
-    pub fn get_mut(&mut self, col: impl AsRef<str>) -> Option<&mut Value> {
-        self.inner
-            .iter_mut()
-            .find_map(|(k, v)| if k == col.as_ref() { Some(v) } else { None })
     }
 
     pub fn get_index(&self, idx: usize) -> Option<(&String, &Value)> {
         self.inner.get(idx).map(|(col, val): &(_, _)| (col, val))
     }
 
-    /// Remove single value by key
-    ///
-    /// Returns `None` if key not found
-    ///
-    /// Note: makes strong assumption that keys are unique
-    pub fn remove(&mut self, col: impl AsRef<str>) -> Option<Value> {
-        let idx = self.index_of(col)?;
-        let (_, val) = self.inner.remove(idx);
-        Some(val)
+    pub fn get_index_mut(&mut self, idx: usize) -> Option<(&mut String, &mut Value)> {
+        self.inner.get_mut(idx).map(|(col, val)| (col, val))
+    }
+
+    /// Remove single value by index
+    fn remove_index(&mut self, index: usize) -> Value {
+        self.inner.remove(index).1
     }
 
     /// Remove elements in-place that do not satisfy `keep`
@@ -211,7 +450,15 @@ impl Record {
         self.inner.truncate(len);
     }
 
-    pub fn columns(&self) -> Columns {
+    pub fn truncate_front(&mut self, len: usize) {
+        if self.len() < len {
+            return;
+        }
+        let drop = self.len() - len;
+        self.inner.drain(..drop);
+    }
+
+    pub fn columns(&self) -> Columns<'_> {
         Columns {
             iter: self.inner.iter(),
         }
@@ -223,7 +470,7 @@ impl Record {
         }
     }
 
-    pub fn values(&self) -> Values {
+    pub fn values(&self) -> Values<'_> {
         Values {
             iter: self.inner.iter(),
         }
@@ -256,7 +503,7 @@ impl Record {
     /// assert_eq!(rec_iter.next(), Some(("a".into(), Value::test_nothing())));
     /// assert_eq!(rec_iter.next(), None);
     /// ```
-    pub fn drain<R>(&mut self, range: R) -> Drain
+    pub fn drain<R>(&mut self, range: R) -> Drain<'_>
     where
         R: RangeBounds<usize> + Clone,
     {
@@ -440,13 +687,13 @@ impl<'a> Iterator for Iter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for Iter<'a> {
+impl DoubleEndedIterator for Iter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(col, val): &(_, _)| (col, val))
     }
 }
 
-impl<'a> ExactSizeIterator for Iter<'a> {
+impl ExactSizeIterator for Iter<'_> {
     fn len(&self) -> usize {
         self.iter.len()
     }
@@ -482,13 +729,13 @@ impl<'a> Iterator for IterMut<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for IterMut<'a> {
+impl DoubleEndedIterator for IterMut<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(col, val)| (&*col, val))
     }
 }
 
-impl<'a> ExactSizeIterator for IterMut<'a> {
+impl ExactSizeIterator for IterMut<'_> {
     fn len(&self) -> usize {
         self.iter.len()
     }
@@ -524,13 +771,13 @@ impl<'a> Iterator for Columns<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for Columns<'a> {
+impl DoubleEndedIterator for Columns<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(col, _)| col)
     }
 }
 
-impl<'a> ExactSizeIterator for Columns<'a> {
+impl ExactSizeIterator for Columns<'_> {
     fn len(&self) -> usize {
         self.iter.len()
     }
@@ -584,13 +831,13 @@ impl<'a> Iterator for Values<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for Values<'a> {
+impl DoubleEndedIterator for Values<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(_, val)| val)
     }
 }
 
-impl<'a> ExactSizeIterator for Values<'a> {
+impl ExactSizeIterator for Values<'_> {
     fn len(&self) -> usize {
         self.iter.len()
     }
@@ -672,5 +919,39 @@ macro_rules! record {
     };
     {} => {
         $crate::Record::new()
+    };
+}
+
+/// Helper for constructing [Value::Record] instances for use in tests and
+/// [Example](crate::Example)s
+/// ```
+/// # use nu_protocol::{Value, test_record, record};
+/// let test = test_record! {
+///     "a" => "foo",
+///     "b" => 42,
+///     "c" => [1, 2, 3],
+/// };
+///
+/// let expected = Value::test_record(record! {
+///     "a" => Value::test_string("foo"),
+///     "b" => Value::test_int(42),
+///     "c" => Value::test_list(vec![
+///         Value::test_int(1),
+///         Value::test_int(2),
+///         Value::test_int(3),
+///     ]),
+/// });
+///
+/// assert_eq!(test, expected);
+/// ```
+#[macro_export]
+macro_rules! test_record {
+    {$($col:expr => $val:expr),+ $(,)?} => {
+        $crate::Value::test_record(record! {
+            $($col => $crate::IntoValue::into_value($val, $crate::Span::test_data())),+
+        })
+    };
+    {} => {
+        record! {}
     };
 }

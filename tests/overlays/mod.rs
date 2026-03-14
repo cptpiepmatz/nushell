@@ -1,4 +1,4 @@
-use nu_test_support::fs::Stub::FileWithContentToBeTrimmed;
+use nu_test_support::fs::Stub::{FileWithContent, FileWithContentToBeTrimmed};
 use nu_test_support::playground::Playground;
 use nu_test_support::{nu, nu_repl_code};
 use pretty_assertions::assert_eq;
@@ -130,6 +130,43 @@ fn prefixed_overlay_keeps_custom_decl() {
 }
 
 #[test]
+fn def_before_overlay_use_should_work() {
+    let inp = &[
+        r#"def something [] { "example" }"#,
+        r#"module spam { }"#,
+        "overlay use spam",
+        r#"def bar [] { "bar" }"#,
+        "overlay hide spam",
+        "bar",
+    ];
+
+    let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert!(actual.err.contains("Command `bar` not found"));
+    assert!(actual_repl.err.contains("Command `bar` not found"));
+}
+
+#[test]
+fn define_module_before_overlay_inside_func_should_work() {
+    let inp = &[
+        r#"
+def main [] {
+  module spam { export def foo [] { "foo" } }
+  overlay use spam
+  def bar [] { "bar" }
+  overlay hide spam
+  bar # Returns bar
+};"#,
+        "main",
+    ];
+
+    let actual = nu!(&inp.join("; "));
+
+    assert!(actual.err.contains("Command `bar` not found"));
+}
+
+#[test]
 fn add_overlay_env() {
     let inp = &[
         r#"module spam { export-env { $env.FOO = "foo" } }"#,
@@ -198,7 +235,7 @@ fn new_overlay_from_const_name() {
     let inp = &[
         "const mod = 'spam'",
         "overlay new $mod",
-        "overlay list | last",
+        "overlay list | last | get name",
     ];
 
     let actual = nu!(&inp.join("; "));
@@ -212,7 +249,7 @@ fn hide_overlay_from_const_name() {
         "const mod = 'spam'",
         "overlay new $mod",
         "overlay hide $mod",
-        "overlay list | str join ' '",
+        "overlay list | where active == true | get name | str join ' '",
     ];
 
     let actual = nu!(&inp.join("; "));
@@ -410,7 +447,7 @@ fn hide_overlay_scoped_env() {
 
 #[test]
 fn list_default_overlay() {
-    let inp = &["overlay list | last"];
+    let inp = &["overlay list | last | get name"];
 
     let actual = nu!(&inp.join("; "));
     let actual_repl = nu!(nu_repl_code(inp));
@@ -424,7 +461,7 @@ fn list_last_overlay() {
     let inp = &[
         r#"module spam { export def foo [] { "foo" } }"#,
         "overlay use spam",
-        "overlay list | last",
+        "overlay list | last | get name",
     ];
 
     let actual = nu!(&inp.join("; "));
@@ -439,7 +476,7 @@ fn list_overlay_scoped() {
     let inp = &[
         r#"module spam { export def foo [] { "foo" } }"#,
         "overlay use spam",
-        "do { overlay list | last }",
+        "do { overlay list | last | get name }",
     ];
 
     let actual = nu!(&inp.join("; "));
@@ -695,7 +732,7 @@ fn reset_overrides() {
 
 #[test]
 fn overlay_new() {
-    let inp = &["overlay new spam", "overlay list | last"];
+    let inp = &["overlay new spam", "overlay list | last | get name"];
 
     let actual = nu!(&inp.join("; "));
     let actual_repl = nu!(nu_repl_code(inp));
@@ -718,6 +755,42 @@ fn overlay_keep_pwd() {
 
     assert_eq!(actual.out, "samples");
     assert_eq!(actual_repl.out, "samples");
+}
+
+#[test]
+fn overlay_reactivate_with_nufile_should_not_change_pwd() {
+    let inp = &[
+        "overlay use spam.nu",
+        "cd ..",
+        "overlay hide --keep-env [ PWD ] spam",
+        "cd samples",
+        "overlay use spam.nu",
+        "$env.PWD | path basename",
+    ];
+
+    let actual = nu!(cwd: "tests/overlays/samples", &inp.join("; "));
+    let actual_repl = nu!(cwd: "tests/overlays/samples", nu_repl_code(inp));
+
+    assert_eq!(actual.out, "samples");
+    assert_eq!(actual_repl.out, "samples");
+}
+
+#[test]
+fn overlay_reactivate_with_module_name_should_change_pwd() {
+    let inp = &[
+        "overlay use spam.nu",
+        "cd ..",
+        "overlay hide --keep-env [ PWD ] spam",
+        "cd samples",
+        "overlay use spam",
+        "$env.PWD | path basename",
+    ];
+
+    let actual = nu!(cwd: "tests/overlays/samples", &inp.join("; "));
+    let actual_repl = nu!(cwd: "tests/overlays/samples", nu_repl_code(inp));
+
+    assert_eq!(actual.out, "overlays");
+    assert_eq!(actual_repl.out, "overlays");
 }
 
 #[test]
@@ -821,6 +894,36 @@ fn overlay_hide_renamed_overlay() {
 }
 
 #[test]
+fn overlay_hide_restore_hidden_env() {
+    let inp = &[
+        "$env.foo = 'bar'",
+        "overlay new aa",
+        "hide-env foo",
+        "overlay hide aa",
+        "$env.foo",
+    ];
+
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert_eq!(actual_repl.out, "bar");
+}
+
+#[test]
+fn overlay_hide_dont_restore_hidden_env_which_is_introduce_currently() {
+    let inp = &[
+        "overlay new aa",
+        "$env.foo = 'bar'",
+        "hide-env foo", // hide the env in overlay `aa`
+        "overlay hide aa",
+        "'foo' in $env",
+    ];
+
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert_eq!(actual_repl.out, "false");
+}
+
+#[test]
 fn overlay_hide_and_add_renamed_overlay() {
     let inp = &[
         r#"module spam { export def foo [] { "foo" } }"#,
@@ -850,6 +953,74 @@ fn overlay_use_export_env() {
 
     assert_eq!(actual.out, "foo");
     assert_eq!(actual_repl.out, "foo");
+}
+
+#[test]
+fn overlay_use_export_env_config_affected() {
+    let inp = &[
+        "mut out = []",
+        "$env.config.filesize.unit = 'metric'",
+        "$out ++= [(20MB | into string)]",
+        "module spam { export-env { $env.config.filesize.unit = 'binary' } }",
+        "overlay use spam",
+        "$out ++= [(20MiB | into string)]",
+        r#"$out | to json --raw"#,
+    ];
+
+    let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert_eq!(actual.out, r#"["20.0 MB","20.0 MiB"]"#);
+    assert_eq!(actual_repl.out, r#"["20.0 MB","20.0 MiB"]"#);
+}
+
+#[test]
+fn overlay_hide_config_affected() {
+    let inp = &[
+        "mut out = []",
+        "$env.config.filesize.unit = 'metric'",
+        "$out ++= [(20MB | into string)]",
+        "module spam { export-env { $env.config.filesize.unit = 'binary' } }",
+        "overlay use spam",
+        "$out ++= [(20MiB | into string)]",
+        "overlay hide",
+        "$out ++= [(20MB | into string)]",
+        r#"$out | to json --raw"#,
+    ];
+
+    // Can't hide overlay within the same source file
+    // let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    // assert_eq!(actual.out, r#"["20.0 MB","20.0 MiB","20.0 MB"]"#);
+    assert_eq!(actual_repl.out, r#"["20.0 MB","20.0 MiB","20.0 MB"]"#);
+}
+
+#[test]
+fn overlay_use_after_hide_config_affected() {
+    let inp = &[
+        "mut out = []",
+        "$env.config.filesize.unit = 'metric'",
+        "$out ++= [(20MB | into string)]",
+        "module spam { export-env { $env.config.filesize.unit = 'binary' } }",
+        "overlay use spam",
+        "$out ++= [(20MiB | into string)]",
+        "overlay hide",
+        "$out ++= [(20MB | into string)]",
+        "overlay use spam",
+        "$out ++= [(20MiB | into string)]",
+        r#"$out | to json --raw"#,
+    ];
+
+    // Can't hide overlay within the same source file
+    // let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    // assert_eq!(actual.out, r#"["20.0 MB","20.0 MiB","20.0 MB"]"#);
+    assert_eq!(
+        actual_repl.out,
+        r#"["20.0 MB","20.0 MiB","20.0 MB","20.0 MiB"]"#
+    );
 }
 
 #[test]
@@ -946,7 +1117,7 @@ fn overlay_use_find_scoped_module() {
                     module spam { }
 
                     overlay use spam
-                    overlay list | last
+                    overlay list | last | get name
                 }
             ";
 
@@ -1062,7 +1233,7 @@ fn overlay_trim_single_quote() {
     let inp = &[
         r#"module spam { export def foo [] { "foo" } }"#,
         "overlay use 'spam'",
-        "overlay list | last ",
+        "overlay list | last | get name",
     ];
 
     let actual = nu!(&inp.join("; "));
@@ -1093,7 +1264,7 @@ fn overlay_trim_double_quote() {
     let inp = &[
         r#"module spam { export def foo [] { "foo" } }"#,
         r#"overlay use "spam" "#,
-        "overlay list | last ",
+        "overlay list | last | get name",
     ];
 
     let actual = nu!(&inp.join("; "));
@@ -1288,12 +1459,50 @@ fn alias_overlay_use() {
 }
 
 #[test]
+fn alias_overlay_use_2() {
+    let inp = &[
+        "module inner {}",
+        "module spam { export alias b = overlay use inner }",
+        "use spam",
+        "spam b",
+        "overlay list | get 1.name",
+    ];
+
+    let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert!(actual.err.is_empty());
+    assert!(actual_repl.err.is_empty());
+    assert_eq!(actual.out, "inner");
+    assert_eq!(actual_repl.out, "inner");
+}
+
+#[test]
+fn alias_overlay_use_3() {
+    let inp = &[
+        "module inner {}",
+        "module spam { export alias b = overlay use inner }",
+        "use spam b",
+        "b",
+        "overlay list | get 1.name",
+    ];
+
+    let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert!(actual.err.is_empty());
+    assert!(actual_repl.err.is_empty());
+    assert_eq!(actual.out, "inner");
+    assert_eq!(actual_repl.out, "inner");
+}
+
+#[test]
 fn alias_overlay_new() {
     let inp = &[
         "alias on = overlay new",
         "on spam",
         "on eggs",
-        "overlay list | last",
+        "overlay list | last | get name",
     ];
 
     let actual = nu!(&inp.join("; "));
@@ -1301,6 +1510,23 @@ fn alias_overlay_new() {
 
     assert_eq!(actual.out, "eggs");
     assert_eq!(actual_repl.out, "eggs");
+}
+
+#[test]
+fn overlay_new_with_reload() {
+    let inp = &[
+        "overlay new spam",
+        "$env.foo = 'bar'",
+        "overlay hide spam",
+        "overlay new spam -r",
+        "'foo' in $env",
+    ];
+
+    let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert_eq!(actual.out, "false");
+    assert_eq!(actual_repl.out, "false");
 }
 
 #[test]
@@ -1369,4 +1595,65 @@ fn overlay_help_no_error() {
     assert!(actual.err.is_empty());
     let actual = nu!("overlay use -h");
     assert!(actual.err.is_empty());
+}
+
+#[test]
+fn test_overlay_use_with_printing_file_pwd() {
+    Playground::setup("use_with_printing_file_pwd", |dirs, nu| {
+        let file = dirs.test().join("foo").join("mod.nu");
+        nu.mkdir("foo").with_files(&[FileWithContent(
+            file.as_os_str().to_str().unwrap(),
+            r#"
+                export-env {
+                    print $env.FILE_PWD
+                }
+            "#,
+        )]);
+
+        let actual = nu!(
+            cwd: dirs.test(),
+            "overlay use foo"
+        );
+
+        assert_eq!(actual.out, dirs.test().join("foo").to_string_lossy());
+    });
+}
+
+#[test]
+fn test_overlay_use_with_printing_current_file() {
+    Playground::setup("use_with_printing_current_file", |dirs, nu| {
+        let file = dirs.test().join("foo").join("mod.nu");
+        nu.mkdir("foo").with_files(&[FileWithContent(
+            file.as_os_str().to_str().unwrap(),
+            r#"
+                export-env {
+                    print $env.CURRENT_FILE
+                }
+            "#,
+        )]);
+
+        let actual = nu!(
+            cwd: dirs.test(),
+            "overlay use foo"
+        );
+
+        assert_eq!(
+            actual.out,
+            dirs.test().join("foo").join("mod.nu").to_string_lossy()
+        );
+    });
+}
+
+#[test]
+fn report_errors_in_export_env() {
+    let inp = &[
+        r#"module spam { export-env { error make -u {msg: "reported"} } }"#,
+        "overlay use spam",
+    ];
+
+    let actual = nu!(&inp.join("; "));
+    let actual_repl = nu!(nu_repl_code(inp));
+
+    assert!(actual.err.contains("reported"));
+    assert!(actual_repl.err.contains("reported"));
 }

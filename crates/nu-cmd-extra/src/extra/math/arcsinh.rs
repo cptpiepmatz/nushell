@@ -1,9 +1,9 @@
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathArcSinH;
 
-impl Command for SubCommand {
+impl Command for MathArcSinH {
     fn name(&self) -> &str {
         "math arcsinh"
     }
@@ -38,13 +38,13 @@ impl Command for SubCommand {
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(move |value| operate(value, head), engine_state.signals())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Get the arcsinh of 0",
             example: "0 | math arcsinh",
@@ -85,9 +85,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathArcSinH)
     }
 }

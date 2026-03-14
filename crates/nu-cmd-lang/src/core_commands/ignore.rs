@@ -1,5 +1,5 @@
 use nu_engine::command_prelude::*;
-use nu_protocol::{engine::StateWorkingSet, ByteStreamSource, OutDest};
+use nu_protocol::{ByteStreamSource, OutDest, engine::StateWorkingSet};
 
 #[derive(Clone)]
 pub struct Ignore;
@@ -54,9 +54,9 @@ impl Command for Ignore {
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Ignore the output of an echo command",
+            description: "Ignore the output of an echo command.",
             example: "echo done | ignore",
             result: Some(Value::nothing(Span::test_data())),
         }]
@@ -70,9 +70,8 @@ impl Command for Ignore {
 #[cfg(test)]
 mod test {
     #[test]
-    fn test_examples() {
+    fn test_examples() -> nu_test_support::Result {
         use super::Ignore;
-        use crate::test_examples;
-        test_examples(Ignore {})
+        nu_test_support::test().examples(Ignore)
     }
 }

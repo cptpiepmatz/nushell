@@ -21,7 +21,7 @@ impl Command for Every {
             )
             .switch(
                 "skip",
-                "skip the rows that would be returned, instead of selecting them",
+                "Skip the rows that would be returned, instead of selecting them.",
                 Some('s'),
             )
             .category(Category::Filters)
@@ -31,7 +31,7 @@ impl Command for Every {
         "Show (or skip) every n-th row, starting from the first one."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "[1 2 3 4 5] | every 2",
@@ -87,9 +87,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Every {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Every)
     }
 }

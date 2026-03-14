@@ -1,20 +1,22 @@
 use crate::network::http::client::{
-    check_response_redirection, http_client, http_parse_redirect_mode, http_parse_url,
-    request_add_authorization_header, request_add_custom_headers, request_handle_response,
-    request_set_timeout, send_request, HttpBody, RequestFlags,
+    HttpBody, RedirectMode, RequestFlags, RequestMetadata, add_unix_socket_flag,
+    check_response_redirection, expand_unix_socket_path, http_client, http_client_pool,
+    http_parse_redirect_mode, http_parse_url, request_add_authorization_header,
+    request_add_custom_headers, request_handle_response, request_set_timeout, send_request,
+    send_request_no_body,
 };
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct HttpDelete;
 
-impl Command for SubCommand {
+impl Command for HttpDelete {
     fn name(&self) -> &str {
         "http delete"
     }
 
     fn signature(&self) -> Signature {
-        Signature::build("http delete")
+        let sig = Signature::build("http delete")
             .input_output_types(vec![(Type::Any, Type::Any)])
             .allow_variants_without_examples(true)
             .required(
@@ -25,61 +27,69 @@ impl Command for SubCommand {
             .named(
                 "user",
                 SyntaxShape::Any,
-                "the username when authenticating",
+                "The username when authenticating.",
                 Some('u'),
             )
             .named(
                 "password",
                 SyntaxShape::Any,
-                "the password when authenticating",
+                "The password when authenticating.",
                 Some('p'),
             )
-            .named("data", SyntaxShape::Any, "the content to post", Some('d'))
+            .named("data", SyntaxShape::Any, "The content to post.", Some('d'))
             .named(
                 "content-type",
                 SyntaxShape::Any,
-                "the MIME type of content to post",
+                "The MIME type of content to post.",
                 Some('t'),
             )
             .named(
                 "max-time",
                 SyntaxShape::Duration,
-                "max duration before timeout occurs",
+                "Max duration before timeout occurs.",
                 Some('m'),
             )
             .named(
                 "headers",
                 SyntaxShape::Any,
-                "custom headers you want to add ",
+                "Custom headers you want to add.",
                 Some('H'),
             )
             .switch(
                 "raw",
-                "fetch contents as text rather than a table",
+                "Fetch contents as text rather than a table.",
                 Some('r'),
             )
             .switch(
                 "insecure",
-                "allow insecure server connections when using SSL",
+                "Allow insecure server connections when using SSL.",
                 Some('k'),
             )
             .switch(
                 "full",
-                "returns the full response instead of only the body",
+                "Returns the full response instead of only the body.",
                 Some('f'),
             )
             .switch(
                 "allow-errors",
-                "do not fail if the server returns an error code",
+                "Do not fail if the server returns an error code.",
                 Some('e'),
-            ).named(
-                "redirect-mode",
-                SyntaxShape::String,
-                "What to do when encountering redirects. Default: 'follow'. Valid options: 'follow' ('f'), 'manual' ('m'), 'error' ('e').",
-                Some('R')
+            )
+            .switch("pool", "Using a global pool as a client.", None)
+            .param(
+                Flag::new("redirect-mode")
+                    .short('R')
+                    .arg(SyntaxShape::String)
+                    .desc(
+                        "What to do when encountering redirects. Default: 'follow'. Valid \
+                         options: 'follow' ('f'), 'manual' ('m'), 'error' ('e').",
+                    )
+                    .completion(Completion::new_list(RedirectMode::MODES)),
             )
             .filter()
-            .category(Category::Network)
+            .category(Category::Network);
+
+        add_unix_socket_flag(sig)
     }
 
     fn description(&self) -> &str {
@@ -104,36 +114,40 @@ impl Command for SubCommand {
         run_delete(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "http delete from example.com",
+                description: "HTTP delete from example.com.",
                 example: "http delete https://www.example.com",
                 result: None,
             },
             Example {
-                description: "http delete from example.com, with username and password",
+                description: "HTTP delete from example.com, with username and password.",
                 example: "http delete --user myuser --password mypass https://www.example.com",
                 result: None,
             },
             Example {
-                description: "http delete from example.com, with custom header",
-                example: "http delete --headers [my-header-key my-header-value] https://www.example.com",
+                description: "HTTP delete from example.com, with custom header using a record.",
+                example: "http delete --headers {my-header-key: my-header-value} https://www.example.com",
                 result: None,
             },
             Example {
-                description: "http delete from example.com, with body",
+                description: "HTTP delete from example.com, with custom header using a list.",
+                example: "http delete --headers [my-header-key-A my-header-value-A my-header-key-B my-header-value-B] https://www.example.com",
+                result: None,
+            },
+            Example {
+                description: "HTTP delete from example.com, with body.",
                 example: "http delete --data 'body' https://www.example.com",
                 result: None,
             },
             Example {
-                description: "http delete from example.com, with JSON body",
-                example:
-                    "http delete --content-type application/json --data { field: value } https://www.example.com",
+                description: "HTTP delete from example.com, with JSON body.",
+                example: "http delete --content-type application/json --data { field: value } https://www.example.com",
                 result: None,
             },
             Example {
-                description: "Perform an HTTP delete with JSON content from a pipeline to example.com",
+                description: "Perform an HTTP delete with JSON content from a pipeline to example.com.",
                 example: "open foo.json | http delete https://www.example.com",
                 result: None,
             },
@@ -144,7 +158,7 @@ impl Command for SubCommand {
 struct Arguments {
     url: Value,
     headers: Option<Value>,
-    data: HttpBody,
+    data: Option<HttpBody>,
     content_type: Option<String>,
     raw: bool,
     insecure: bool,
@@ -154,6 +168,8 @@ struct Arguments {
     full: bool,
     allow_errors: bool,
     redirect: Option<Spanned<String>>,
+    unix_socket: Option<Spanned<String>>,
+    pool: bool,
 }
 
 fn run_delete(
@@ -164,13 +180,13 @@ fn run_delete(
 ) -> Result<PipelineData, ShellError> {
     let (data, maybe_metadata) = call
         .get_flag::<Value>(engine_state, stack, "data")?
-        .map(|v| (HttpBody::Value(v), None))
+        .map(|v| (Some(HttpBody::Value(v)), None))
         .unwrap_or_else(|| match input {
-            PipelineData::Value(v, metadata) => (HttpBody::Value(v), metadata),
+            PipelineData::Value(v, metadata) => (Some(HttpBody::Value(v)), metadata),
             PipelineData::ByteStream(byte_stream, metadata) => {
-                (HttpBody::ByteStream(byte_stream), metadata)
+                (Some(HttpBody::ByteStream(byte_stream)), metadata)
             }
-            _ => (HttpBody::None, None),
+            _ => (None, None),
         });
     let content_type = call
         .get_flag(engine_state, stack, "content-type")?
@@ -189,6 +205,8 @@ fn run_delete(
         full: call.has_flag(engine_state, stack, "full")?,
         allow_errors: call.has_flag(engine_state, stack, "allow-errors")?,
         redirect: call.get_flag(engine_state, stack, "redirect-mode")?,
+        unix_socket: call.get_flag(engine_state, stack, "unix-socket")?,
+        pool: call.has_flag(engine_state, stack, "pool")?,
     };
 
     helper(engine_state, stack, call, args)
@@ -203,39 +221,68 @@ fn helper(
     args: Arguments,
 ) -> Result<PipelineData, ShellError> {
     let span = args.url.span();
-    let (requested_url, _) = http_parse_url(call, span, args.url)?;
+    let Spanned {
+        item: (requested_url, _),
+        span: request_span,
+    } = http_parse_url(call, span, args.url)?;
     let redirect_mode = http_parse_redirect_mode(args.redirect)?;
 
-    let client = http_client(args.insecure, redirect_mode, engine_state, stack)?;
-    let mut request = client.delete(&requested_url);
+    let cwd = engine_state.cwd(None)?;
+    let unix_socket_path = expand_unix_socket_path(args.unix_socket, &cwd);
 
+    let mut request = if args.pool {
+        http_client_pool(engine_state, stack)?.delete(&requested_url)
+    } else {
+        let client = http_client(
+            args.insecure,
+            redirect_mode,
+            unix_socket_path,
+            engine_state,
+            stack,
+        )?;
+        client.delete(&requested_url)
+    };
     request = request_set_timeout(args.timeout, request)?;
     request = request_add_authorization_header(args.user, args.password, request);
     request = request_add_custom_headers(args.headers, request)?;
+    let (response, request_headers) = match args.data {
+        None => send_request_no_body(request, request_span, call.head, engine_state.signals()),
 
-    let response = send_request(
-        request.clone(),
-        args.data,
-        args.content_type,
-        call.head,
-        engine_state.signals(),
-    );
+        Some(body) => send_request(
+            engine_state,
+            // Nushell allows sending body via delete method, but not via get.
+            // We should probably unify the behaviour here.
+            //
+            // Sending body with DELETE goes against the spec, but might be useful in some cases,
+            // see [force_send_body] documentation.
+            request.force_send_body(),
+            request_span,
+            body,
+            args.content_type,
+            span,
+            engine_state.signals(),
+        ),
+    };
 
     let request_flags = RequestFlags {
         raw: args.raw,
         full: args.full,
         allow_errors: args.allow_errors,
     };
+    let response = response?;
 
     check_response_redirection(redirect_mode, span, &response)?;
     request_handle_response(
         engine_state,
         stack,
-        span,
-        &requested_url,
-        request_flags,
+        RequestMetadata {
+            requested_url: &requested_url,
+            span,
+            headers: request_headers,
+            redirect_mode,
+            flags: request_flags,
+        },
         response,
-        request,
     )
 }
 
@@ -244,9 +291,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(HttpDelete)
     }
 }

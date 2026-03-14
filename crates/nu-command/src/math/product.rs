@@ -1,13 +1,13 @@
 use crate::math::{
-    reducers::{reducer_for, Reduce},
+    reducers::{Reduce, reducer_for},
     utils::run_with_function,
 };
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathProduct;
 
-impl Command for SubCommand {
+impl Command for MathProduct {
     fn name(&self) -> &str {
         "math product"
     }
@@ -55,15 +55,15 @@ impl Command for SubCommand {
         run_with_function(call, input, product)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Compute the product of a list of numbers",
+                description: "Compute the product of a list of numbers.",
                 example: "[2 3 3 4] | math product",
                 result: Some(Value::test_int(72)),
             },
             Example {
-                description: "Compute the product of each column in a table",
+                description: "Compute the product of each column in a table.",
                 example: "[[a b]; [1 2] [3 4]] | math product",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(3),
@@ -85,9 +85,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathProduct)
     }
 }

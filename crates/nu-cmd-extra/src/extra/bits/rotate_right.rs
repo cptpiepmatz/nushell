@@ -1,5 +1,5 @@
-use super::{get_input_num_type, get_number_bytes, InputNumType, NumberBytes};
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use super::{InputNumType, NumberBytes, get_input_num_type, get_number_bytes};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
 struct Arguments {
@@ -37,16 +37,16 @@ impl Command for BitsRor {
                 ),
             ])
             .allow_variants_without_examples(true)
-            .required("bits", SyntaxShape::Int, "number of bits to rotate right")
+            .required("bits", SyntaxShape::Int, "Number of bits to rotate right.")
             .switch(
                 "signed",
-                "always treat input number as a signed number",
+                "Always treat input number as a signed number.",
                 Some('s'),
             )
             .named(
                 "number-bytes",
                 SyntaxShape::Int,
-                "the word size in number of bytes, it can be 1, 2, 4, 8, auto, default value `8`",
+                "The word size in number of bytes. Must be `1`, `2`, `4`, or `8` (defaults to the smallest of those that fits the input number).",
                 Some('n'),
             )
             .category(Category::Bits)
@@ -75,7 +75,7 @@ impl Command for BitsRor {
         let number_size = get_number_bytes(number_bytes, head)?;
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
 
@@ -88,7 +88,7 @@ impl Command for BitsRor {
         operate(action, args, input, head, engine_state.signals())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "rotate right a number with 2 bits",
@@ -248,9 +248,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(BitsRor {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(BitsRor)
     }
 }

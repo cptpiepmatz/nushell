@@ -1,12 +1,11 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 
 use crate::{
-    values::{Axis, Column, CustomValueSupport, NuDataFrame},
     PolarsPlugin,
+    values::{Axis, Column, CustomValueSupport, NuDataFrame, PolarsPluginType},
 };
 
 #[derive(Clone)]
@@ -17,12 +16,18 @@ impl PluginCommand for AppendDF {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .required("other", SyntaxShape::Any, "other dataframe to append")
-            .switch("col", "append as new columns instead of rows", Some('c'))
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .required("other", SyntaxShape::Any, "Other dataframe to append.")
+            .switch("col", "Append as new columns instead of rows.", Some('c'))
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
@@ -44,7 +49,7 @@ impl PluginCommand for AppendDF {
         "Appends a new dataframe."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Appends a dataframe as new columns",

@@ -19,7 +19,7 @@ impl Command for HideEnv {
             )
             .switch(
                 "ignore-errors",
-                "do not throw an error if an environment variable was not found",
+                "Do not throw an error if an environment variable was not found.",
                 Some('i'),
             )
             .category(Category::Core)
@@ -27,6 +27,10 @@ impl Command for HideEnv {
 
     fn description(&self) -> &str {
         "Hide environment variables in the current scope."
+    }
+
+    fn search_terms(&self) -> Vec<&str> {
+        vec!["unset", "drop"]
     }
 
     fn run(
@@ -60,9 +64,9 @@ impl Command for HideEnv {
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Hide an environment variable",
+            description: "Hide an environment variable.",
             example: r#"$env.HZ_ENV_ABC = 1; hide-env HZ_ENV_ABC; 'HZ_ENV_ABC' in $env"#,
             result: Some(Value::test_bool(false)),
         }]

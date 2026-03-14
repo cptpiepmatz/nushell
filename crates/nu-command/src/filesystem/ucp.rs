@@ -1,8 +1,12 @@
-#[allow(deprecated)]
-use nu_engine::{command_prelude::*, current_dir};
-use nu_protocol::NuGlob;
+use nu_engine::command_prelude::*;
+use nu_glob::MatchOptions;
+use nu_protocol::{
+    NuGlob,
+    shell_error::{self, io::IoError},
+};
 use std::path::PathBuf;
-use uu_cp::{BackupMode, CopyMode, UpdateMode};
+use uu_cp::{BackupMode, CopyMode, CpError, UpdateMode};
+use uucore::{localized_help_template, translate};
 
 // TODO: related to uucore::error::set_exit_code(EXIT_ERR)
 // const EXIT_ERR: i32 = 1;
@@ -31,76 +35,77 @@ impl Command for UCp {
     fn signature(&self) -> Signature {
         Signature::build("cp")
             .input_output_types(vec![(Type::Nothing, Type::Nothing)])
-            .switch("recursive", "copy directories recursively", Some('r'))
-            .switch("verbose", "explicitly state what is being done", Some('v'))
+            .switch("recursive", "Copy directories recursively.", Some('r'))
+            .switch("verbose", "Explicitly state what is being done.", Some('v'))
             .switch(
                 "force",
-                "if an existing destination file cannot be opened, remove it and try
+                "If an existing destination file cannot be opened, remove it and try
                     again (this option is ignored when the -n option is also used).
-                    currently not implemented for windows",
+                    Currently not implemented for windows.",
                 Some('f'),
             )
-            .switch("interactive", "ask before overwriting files", Some('i'))
+            .switch("interactive", "Ask before overwriting files.", Some('i'))
             .switch(
                 "update",
-                "copy only when the SOURCE file is newer than the destination file or when the destination file is missing",
+                "Copy only when the SOURCE file is newer than the destination file or when the destination file is missing.",
                 Some('u')
             )
-            .switch("progress", "display a progress bar", Some('p'))
-            .switch("no-clobber", "do not overwrite an existing file", Some('n'))
+            .switch("progress", "Display a progress bar.", Some('p'))
+            .switch("no-clobber", "Do not overwrite an existing file.", Some('n'))
             .named(
                 "preserve",
                 SyntaxShape::List(Box::new(SyntaxShape::String)),
-                "preserve only the specified attributes (empty list means no attributes preserved)
+                "Preserve only the specified attributes (empty list means no attributes preserved)
                     if not specified only mode is preserved
-                    possible values: mode, ownership (unix only), timestamps, context, link, links, xattr",
+                    possible values: mode, ownership (unix only), timestamps, context, link, links, xattr.",
                 None
             )
-            .switch("debug", "explain how a file is copied. Implies -v", None)
+            .switch("debug", "Explain how a file is copied. Implies -v.", None)
+            .switch("all", "Copy hidden files if '*' is provided.", Some('a'))
             .rest("paths", SyntaxShape::OneOf(vec![SyntaxShape::GlobPattern, SyntaxShape::String]), "Copy SRC file/s to DEST.")
             .allow_variants_without_examples(true)
             .category(Category::FileSystem)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Copy myfile to dir_b",
+                description: "Copy myfile to dir_b.",
                 example: "cp myfile dir_b",
                 result: None,
             },
             Example {
-                description: "Recursively copy dir_a to dir_b",
+                description: "Recursively copy dir_a to dir_b.",
                 example: "cp -r dir_a dir_b",
                 result: None,
             },
             Example {
-                description: "Recursively copy dir_a to dir_b, and print the feedbacks",
+                description: "Recursively copy dir_a to dir_b, and print the feedbacks.",
                 example: "cp -r -v dir_a dir_b",
                 result: None,
             },
             Example {
-                description: "Move many files into a directory",
+                description: "Move many files into a directory.",
                 example: "cp *.txt dir_a",
                 result: None,
             },
             Example {
-                description: "Copy only if source file is newer than target file",
+                description: "Copy only if source file is newer than target file.",
                 example: "cp -u myfile newfile",
                 result: None,
             },
             Example {
-                description: "Copy file preserving mode and timestamps attributes",
+                description: "Copy file preserving mode and timestamps attributes.",
                 example: "cp --preserve [ mode timestamps ] myfile newfile",
                 result: None,
             },
             Example {
-                description: "Copy file erasing all attributes",
+                description: "Copy file erasing all attributes.",
                 example: "cp --preserve [] myfile newfile",
                 result: None,
             },
             Example {
-                description: "Copy file to a directory three levels above its current location",
+                description: "Copy file to a directory three levels above its current location.",
                 example: "cp myfile ....",
                 result: None,
             },
@@ -114,11 +119,14 @@ impl Command for UCp {
         call: &Call,
         _input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
+        // setup the uutils error translation
+        let _ = localized_help_template("cp");
+
         let interactive = call.has_flag(engine_state, stack, "interactive")?;
         let (update, copy_mode) = if call.has_flag(engine_state, stack, "update")? {
-            (UpdateMode::ReplaceIfOlder, CopyMode::Update)
+            (UpdateMode::IfOlder, CopyMode::Update)
         } else {
-            (UpdateMode::ReplaceAll, CopyMode::Copy)
+            (UpdateMode::All, CopyMode::Copy)
         };
 
         let force = call.has_flag(engine_state, stack, "force")?;
@@ -127,6 +135,7 @@ impl Command for UCp {
         let recursive = call.has_flag(engine_state, stack, "recursive")?;
         let verbose = call.has_flag(engine_state, stack, "verbose")?;
         let preserve: Option<Value> = call.get_flag(engine_state, stack, "preserve")?;
+        let all = call.has_flag(engine_state, stack, "all")?;
 
         let debug = call.has_flag(engine_state, stack, "debug")?;
         let overwrite = if no_clobber {
@@ -173,8 +182,7 @@ impl Command for UCp {
         let target_path = PathBuf::from(&nu_utils::strip_ansi_string_unlikely(
             target.item.to_string(),
         ));
-        #[allow(deprecated)]
-        let cwd = current_dir(engine_state, stack)?;
+        let cwd = engine_state.cwd(Some(stack))?.into_std_path_buf();
         let target_path = nu_path::expand_path_with(target_path, &cwd, target.item.is_expand());
         if target.item.as_ref().ends_with(PATH_SEPARATOR) && !target_path.is_dir() {
             return Err(ShellError::GenericError {
@@ -189,18 +197,32 @@ impl Command for UCp {
         // paths now contains the sources
 
         let mut sources: Vec<(Vec<PathBuf>, bool)> = Vec::new();
-
+        let glob_options = if all {
+            None
+        } else {
+            let glob_options = MatchOptions {
+                require_literal_leading_dot: true,
+                ..Default::default()
+            };
+            Some(glob_options)
+        };
         for mut p in paths {
             p.item = p.item.strip_ansi_string_unlikely();
-            let exp_files: Vec<Result<PathBuf, ShellError>> =
-                nu_engine::glob_from(&p, &cwd, call.head, None)
-                    .map(|f| f.1)?
-                    .collect();
+            let exp_files: Vec<Result<PathBuf, ShellError>> = nu_engine::glob_from(
+                &p,
+                &cwd,
+                call.head,
+                glob_options,
+                engine_state.signals().clone(),
+            )
+            .map(|f| f.1)?
+            .collect();
             if exp_files.is_empty() {
-                return Err(ShellError::FileNotFound {
-                    file: p.item.to_string(),
-                    span: p.span,
-                });
+                return Err(ShellError::Io(IoError::new(
+                    shell_error::io::ErrorKind::FileNotFound,
+                    p.span,
+                    PathBuf::from(p.item.to_string()),
+                )));
             };
             let mut app_vals: Vec<PathBuf> = Vec::new();
             for v in exp_files {
@@ -248,7 +270,7 @@ impl Command for UCp {
             dereference: !recursive,
             progress_bar: progress,
             attributes_only: false,
-            backup: BackupMode::NoBackup,
+            backup: BackupMode::None,
             copy_contents: false,
             cli_dereference: false,
             copy_mode,
@@ -260,20 +282,23 @@ impl Command for UCp {
             backup_suffix: String::from("~"),
             target_dir: None,
             update,
+            set_selinux_context: false,
+            context: None,
         };
 
         if let Err(error) = uu_cp::copy(&sources, &target_path, &options) {
             match error {
                 // code should still be EXIT_ERR as does GNU cp
-                uu_cp::Error::NotAllFilesCopied => {}
+                CpError::NotAllFilesCopied => {}
                 _ => {
+                    eprintln!("here");
                     return Err(ShellError::GenericError {
-                        error: format!("{}", error),
-                        msg: format!("{}", error),
+                        error: format!("{error}"),
+                        msg: translate!(&error.to_string()),
                         span: None,
                         help: None,
                         inner: vec![],
-                    })
+                    });
                 }
             };
             // TODO: What should we do in place of set_exit_code?
@@ -369,7 +394,7 @@ fn parse_and_set_attribute(
                 "xattr" => &mut attribute.xattr,
                 _ => {
                     return Err(ShellError::IncompatibleParametersSingle {
-                        msg: format!("--preserve flag got an unexpected attribute \"{}\"", val),
+                        msg: format!("--preserve flag got an unexpected attribute \"{val}\""),
                         span: value.span(),
                     });
                 }
@@ -388,9 +413,7 @@ fn parse_and_set_attribute(
 mod test {
     use super::*;
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(UCp {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(UCp)
     }
 }

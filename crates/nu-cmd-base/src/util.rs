@@ -1,6 +1,6 @@
 use nu_protocol::{
-    engine::{EngineState, Stack},
     Range, ShellError, Span, Value,
+    engine::{EngineState, Stack},
 };
 use std::ops::Bound;
 
@@ -71,16 +71,15 @@ pub fn get_editor(
     stack: &Stack,
     span: Span,
 ) -> Result<(String, Vec<String>), ShellError> {
-    let config = engine_state.get_config();
-    let env_vars = stack.get_env_vars(engine_state);
+    let config = stack.get_config(engine_state);
 
     if let Ok(buff_editor) =
         get_editor_commandline(&config.buffer_editor, "$env.config.buffer_editor")
     {
         Ok(buff_editor)
-    } else if let Some(value) = env_vars.get("VISUAL") {
+    } else if let Some(value) = stack.get_env_var(engine_state, "VISUAL") {
         get_editor_commandline(value, "$env.VISUAL")
-    } else if let Some(value) = env_vars.get("EDITOR") {
+    } else if let Some(value) = stack.get_env_var(engine_state, "EDITOR") {
         get_editor_commandline(value, "$env.EDITOR")
     } else {
         Err(ShellError::GenericError {

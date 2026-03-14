@@ -16,7 +16,7 @@ impl Command for Hide {
             .optional(
                 "members",
                 SyntaxShape::Any,
-                "Which members of the module to import.",
+                "Which members of the module to hide.",
             )
             .category(Category::Core)
     }
@@ -30,6 +30,10 @@ impl Command for Hide {
 
 This command is a parser keyword. For details, check:
   https://www.nushell.sh/book/thinking_in_nu.html"#
+    }
+
+    fn search_terms(&self) -> Vec<&str> {
+        vec!["unset"]
     }
 
     fn command_type(&self) -> CommandType {
@@ -46,15 +50,15 @@ This command is a parser keyword. For details, check:
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Hide the alias just defined",
+                description: "Hide the alias just defined.",
                 example: r#"alias lll = ls -l; hide lll"#,
                 result: None,
             },
             Example {
-                description: "Hide a custom command",
+                description: "Hide a custom command.",
                 example: r#"def say-hi [] { echo 'Hi!' }; hide say-hi"#,
                 result: None,
             },

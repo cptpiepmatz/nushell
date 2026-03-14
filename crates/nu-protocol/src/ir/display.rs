@@ -1,5 +1,5 @@
 use super::{DataSlice, Instruction, IrBlock, Literal, RedirectMode};
-use crate::{ast::Pattern, engine::EngineState, DeclId, VarId};
+use crate::{DeclId, VarId, ast::Pattern, engine::EngineState};
 use std::fmt::{self};
 
 pub struct FmtIrBlock<'a> {
@@ -7,7 +7,7 @@ pub struct FmtIrBlock<'a> {
     pub(super) ir_block: &'a IrBlock,
 }
 
-impl<'a> fmt::Display for FmtIrBlock<'a> {
+impl fmt::Display for FmtIrBlock<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let plural = |count| if count == 1 { "" } else { "s" };
         writeln!(
@@ -55,7 +55,7 @@ pub struct FmtInstruction<'a> {
     pub(super) data: &'a [u8],
 }
 
-impl<'a> fmt::Display for FmtInstruction<'a> {
+impl fmt::Display for FmtInstruction<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         const WIDTH: usize = 22;
 
@@ -82,6 +82,9 @@ impl<'a> fmt::Display for FmtInstruction<'a> {
             }
             Instruction::Collect { src_dst } => {
                 write!(f, "{:WIDTH$} {src_dst}", "collect")
+            }
+            Instruction::TryCollect { src_dst } => {
+                write!(f, "{:WIDTH$} {src_dst}", "try-collect")
             }
             Instruction::Span { src_dst } => {
                 write!(f, "{:WIDTH$} {src_dst}", "span")
@@ -250,11 +253,20 @@ impl<'a> fmt::Display for FmtInstruction<'a> {
             Instruction::OnError { index } => {
                 write!(f, "{:WIDTH$} {index}", "on-error")
             }
+            Instruction::Finally { index } => {
+                write!(f, "{:WIDTH$} {index}", "finally")
+            }
+            Instruction::FinallyInto { index, dst } => {
+                write!(f, "{:WIDTH$} {index}, {dst}", "finally-into")
+            }
             Instruction::OnErrorInto { index, dst } => {
                 write!(f, "{:WIDTH$} {index}, {dst}", "on-error-into")
             }
             Instruction::PopErrorHandler => {
                 write!(f, "{:WIDTH$}", "pop-error-handler")
+            }
+            Instruction::PopFinallyRun => {
+                write!(f, "{:WIDTH$}", "pop-finally")
             }
             Instruction::ReturnEarly { src } => {
                 write!(f, "{:WIDTH$} {src}", "return-early")
@@ -321,7 +333,7 @@ impl fmt::Display for RedirectMode {
 
 struct FmtData<'a>(&'a [u8], DataSlice);
 
-impl<'a> fmt::Display for FmtData<'a> {
+impl fmt::Display for FmtData<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Ok(s) = std::str::from_utf8(&self.0[self.1]) {
             // Write as string
@@ -338,7 +350,7 @@ struct FmtLiteral<'a> {
     data: &'a [u8],
 }
 
-impl<'a> fmt::Display for FmtLiteral<'a> {
+impl fmt::Display for FmtLiteral<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.literal {
             Literal::Bool(b) => write!(f, "bool({b:?})"),
@@ -378,6 +390,7 @@ impl<'a> fmt::Display for FmtLiteral<'a> {
             Literal::CellPath(p) => write!(f, "cell-path({p})"),
             Literal::Date(dt) => write!(f, "date({dt})"),
             Literal::Nothing => write!(f, "nothing"),
+            Literal::Empty => write!(f, "empty"),
         }
     }
 }
@@ -387,7 +400,7 @@ struct FmtPattern<'a> {
     pattern: &'a Pattern,
 }
 
-impl<'a> fmt::Display for FmtPattern<'a> {
+impl fmt::Display for FmtPattern<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.pattern {
             Pattern::Record(bindings) => {
@@ -429,7 +442,7 @@ impl<'a> fmt::Display for FmtPattern<'a> {
             }
             Pattern::Variable(var_id) => {
                 let variable = FmtVar::new(self.engine_state, *var_id);
-                write!(f, "{}", variable)
+                write!(f, "{variable}")
             }
             Pattern::Or(patterns) => {
                 for (index, pattern) in patterns.iter().enumerate() {
@@ -449,7 +462,7 @@ impl<'a> fmt::Display for FmtPattern<'a> {
             }
             Pattern::Rest(var_id) => {
                 let variable = FmtVar::new(self.engine_state, *var_id);
-                write!(f, "..{}", variable)
+                write!(f, "..{variable}")
             }
             Pattern::IgnoreRest => f.write_str(".."),
             Pattern::IgnoreValue => f.write_str("_"),

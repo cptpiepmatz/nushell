@@ -12,6 +12,8 @@ mod nu_check;
 ))]
 mod ps;
 #[cfg(windows)]
+mod registry;
+#[cfg(windows)]
 mod registry_query;
 mod run_external;
 mod sys;
@@ -32,8 +34,10 @@ pub use nu_check::NuCheck;
 ))]
 pub use ps::Ps;
 #[cfg(windows)]
+pub use registry::Registry;
+#[cfg(windows)]
 pub use registry_query::RegistryQuery;
-pub use run_external::{command_not_found, eval_arguments_from_call, which, External};
+pub use run_external::{External, command_not_found, eval_external_arguments, which};
 pub use sys::*;
 pub use uname::UName;
 pub use which_::Which;

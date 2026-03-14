@@ -1,28 +1,30 @@
 //! Interface used by the engine to communicate with the plugin.
 
 use nu_plugin_core::{
-    util::{with_custom_values_in, Waitable, WaitableMut},
     Interface, InterfaceManager, PipelineDataWriter, PluginRead, PluginWrite, StreamManager,
     StreamManagerHandle,
+    util::{Waitable, WaitableMut, with_custom_values_in},
 };
 use nu_plugin_protocol::{
-    CallInfo, CustomValueOp, EngineCall, EngineCallId, EngineCallResponse, EvaluatedCall, Ordering,
-    PluginCall, PluginCallId, PluginCallResponse, PluginCustomValue, PluginInput, PluginOption,
-    PluginOutput, ProtocolInfo, StreamId, StreamMessage,
+    CallInfo, CustomValueOp, EngineCall, EngineCallId, EngineCallResponse, EvaluatedCall,
+    GetCompletionInfo, Ordering, PluginCall, PluginCallId, PluginCallResponse, PluginCustomValue,
+    PluginInput, PluginOption, PluginOutput, ProtocolInfo, StreamId, StreamMessage,
 };
 use nu_protocol::{
-    ast::Operator, engine::Sequence, CustomValue, IntoSpanned, PipelineData, PluginMetadata,
-    PluginSignature, ShellError, SignalAction, Signals, Span, Spanned, Value,
+    CustomValue, DynamicSuggestion, IntoSpanned, PipelineData, PluginMetadata, PluginSignature,
+    ShellError, SignalAction, Signals, Span, Spanned, Value, ast::Operator, casing::Casing,
+    engine::Sequence,
 };
 use nu_utils::SharedCow;
 use std::{
-    collections::{btree_map, BTreeMap},
-    sync::{mpsc, Arc, OnceLock},
+    collections::{BTreeMap, btree_map},
+    path::Path,
+    sync::{Arc, OnceLock, mpsc},
 };
 
 use crate::{
-    process::PluginProcess, PluginCustomValueWithSource, PluginExecutionContext, PluginGc,
-    PluginSource,
+    PluginCustomValueWithSource, PluginExecutionContext, PluginGc, PluginSource,
+    process::PluginProcess,
 };
 
 #[cfg(test)]
@@ -126,7 +128,7 @@ impl Drop for PluginCallState {
     fn drop(&mut self) {
         // Clear the keep custom values channel, so drop notifications can be sent
         for value in self.keep_plugin_custom_values.1.try_iter() {
-            log::trace!("Dropping custom value that was kept: {:?}", value);
+            log::trace!("Dropping custom value that was kept: {value:?}");
             drop(value);
         }
     }
@@ -381,8 +383,13 @@ impl PluginInterfaceManager {
                 // don't block
                 this.state.writer.write(&PluginInput::EngineCallResponse(
                     engine_call_id,
-                    EngineCallResponse::Error(ShellError::IOError {
-                        msg: "Can't make engine call because the original caller hung up".into(),
+                    EngineCallResponse::Error(ShellError::GenericError {
+                        error: "Caller hung up".to_string(),
+                        msg: "Can't make engine call because the original caller hung up"
+                            .to_string(),
+                        span: None,
+                        help: None,
+                        inner: vec![],
                     }),
                 ))?;
                 this.state.writer.flush()
@@ -462,7 +469,7 @@ impl InterfaceManager for PluginInterfaceManager {
     }
 
     fn consume(&mut self, input: Self::Input) -> Result<(), ShellError> {
-        log::trace!("from plugin: {:?}", input);
+        log::trace!("from plugin: {input:?}");
 
         match input {
             PluginOutput::Hello(info) => {
@@ -530,7 +537,7 @@ impl InterfaceManager for PluginInterfaceManager {
                     .unwrap_or_else(|err| {
                         // If there's an error with initializing this stream, change it to a plugin
                         // error response, but send it anyway
-                        PluginCallResponse::Error(err.into())
+                        PluginCallResponse::Error(err)
                     });
                 let result = self.send_plugin_call_response(id, response);
                 if result.is_ok() {
@@ -595,7 +602,7 @@ impl InterfaceManager for PluginInterfaceManager {
             }
             PipelineData::ListStream(stream, meta) => {
                 let source = self.state.source.clone();
-                Ok(PipelineData::ListStream(
+                Ok(PipelineData::list_stream(
                     stream.map(move |mut value| {
                         let _ = PluginCustomValueWithSource::add_source_in(&mut value, &source);
                         value
@@ -730,6 +737,9 @@ impl PluginInterface {
             PluginCall::CustomValueOp(value, op) => {
                 (PluginCall::CustomValueOp(value, op), Default::default())
             }
+            PluginCall::GetCompletion(flag_name) => {
+                (PluginCall::GetCompletion(flag_name), Default::default())
+            }
             PluginCall::Run(CallInfo { name, call, input }) => {
                 let (header, writer) = self.init_write_pipeline_data(input, &state)?;
                 (
@@ -808,20 +818,19 @@ impl PluginInterface {
                 ReceivedPluginCallMessage::Response(resp) => {
                     if state.entered_foreground {
                         // Make the plugin leave the foreground on return, even if it's a stream
-                        if let Some(context) = context.as_deref_mut() {
-                            if let Err(err) =
+                        if let Some(context) = context.as_deref_mut()
+                            && let Err(err) =
                                 set_foreground(self.state.process.as_ref(), context, false)
-                            {
-                                log::warn!("Failed to leave foreground state on exit: {err:?}");
-                            }
+                        {
+                            log::warn!("Failed to leave foreground state on exit: {err:?}");
                         }
                     }
                     if resp.has_stream() {
                         // If the response has a stream, we need to register the context
-                        if let Some(context) = context {
-                            if let Some(ref context_tx) = state.context_tx {
-                                let _ = context_tx.send(Context(context.boxed()));
-                            }
+                        if let Some(context) = context
+                            && let Some(ref context_tx) = state.context_tx
+                        {
+                            let _ = context_tx.send(Context(context.boxed()));
                         }
                     }
                     return Ok(resp);
@@ -927,7 +936,7 @@ impl PluginInterface {
     pub fn get_metadata(&self) -> Result<PluginMetadata, ShellError> {
         match self.plugin_call(PluginCall::Metadata, None)? {
             PluginCallResponse::Metadata(meta) => Ok(meta),
-            PluginCallResponse::Error(err) => Err(err.into()),
+            PluginCallResponse::Error(err) => Err(err),
             _ => Err(ShellError::PluginFailedToDecode {
                 msg: "Received unexpected response to plugin Metadata call".into(),
             }),
@@ -938,7 +947,7 @@ impl PluginInterface {
     pub fn get_signature(&self) -> Result<Vec<PluginSignature>, ShellError> {
         match self.plugin_call(PluginCall::Signature, None)? {
             PluginCallResponse::Signature(sigs) => Ok(sigs),
-            PluginCallResponse::Error(err) => Err(err.into()),
+            PluginCallResponse::Error(err) => Err(err),
             _ => Err(ShellError::PluginFailedToDecode {
                 msg: "Received unexpected response to plugin Signature call".into(),
             }),
@@ -953,9 +962,23 @@ impl PluginInterface {
     ) -> Result<PipelineData, ShellError> {
         match self.plugin_call(PluginCall::Run(call), Some(context))? {
             PluginCallResponse::PipelineData(data) => Ok(data),
-            PluginCallResponse::Error(err) => Err(err.into()),
+            PluginCallResponse::Error(err) => Err(err),
             _ => Err(ShellError::PluginFailedToDecode {
                 msg: "Received unexpected response to plugin Run call".into(),
+            }),
+        }
+    }
+
+    /// Get completion items from the plugin.
+    pub fn get_dynamic_completion(
+        &self,
+        info: GetCompletionInfo,
+    ) -> Result<Option<Vec<DynamicSuggestion>>, ShellError> {
+        match self.plugin_call(PluginCall::GetCompletion(info), None)? {
+            PluginCallResponse::CompletionItems(items) => Ok(items),
+            PluginCallResponse::Error(err) => Err(err),
+            _ => Err(ShellError::PluginFailedToDecode {
+                msg: "Received unexpected response to plugin GetCompletion call".into(),
             }),
         }
     }
@@ -975,7 +998,7 @@ impl PluginInterface {
         let call = PluginCall::CustomValueOp(value.map(|cv| cv.without_source()), op);
         match self.plugin_call(call, None)? {
             PluginCallResponse::PipelineData(out_data) => out_data.into_value(span),
-            PluginCallResponse::Error(err) => Err(err.into()),
+            PluginCallResponse::Error(err) => Err(err),
             _ => Err(ShellError::PluginFailedToDecode {
                 msg: format!("Received unexpected response to custom value {op_name}() call"),
             }),
@@ -995,8 +1018,12 @@ impl PluginInterface {
         &self,
         value: Spanned<PluginCustomValueWithSource>,
         index: Spanned<usize>,
+        optional: bool,
     ) -> Result<Value, ShellError> {
-        self.custom_value_op_expecting_value(value, CustomValueOp::FollowPathInt(index))
+        self.custom_value_op_expecting_value(
+            value,
+            CustomValueOp::FollowPathInt { index, optional },
+        )
     }
 
     /// Follow a named cell path on a custom value - e.g. `value.column`.
@@ -1004,8 +1031,17 @@ impl PluginInterface {
         &self,
         value: Spanned<PluginCustomValueWithSource>,
         column_name: Spanned<String>,
+        optional: bool,
+        casing: Casing,
     ) -> Result<Value, ShellError> {
-        self.custom_value_op_expecting_value(value, CustomValueOp::FollowPathString(column_name))
+        self.custom_value_op_expecting_value(
+            value,
+            CustomValueOp::FollowPathString {
+                column_name,
+                optional,
+                casing,
+            },
+        )
     }
 
     /// Invoke comparison logic for custom values.
@@ -1025,7 +1061,7 @@ impl PluginInterface {
         );
         match self.plugin_call(call, None)? {
             PluginCallResponse::Ordering(ordering) => Ok(ordering),
-            PluginCallResponse::Error(err) => Err(err.into()),
+            PluginCallResponse::Error(err) => Err(err),
             _ => Err(ShellError::PluginFailedToDecode {
                 msg: "Received unexpected response to custom value partial_cmp() call".into(),
             }),
@@ -1040,6 +1076,32 @@ impl PluginInterface {
         right: Value,
     ) -> Result<Value, ShellError> {
         self.custom_value_op_expecting_value(left, CustomValueOp::Operation(operator, right))
+    }
+
+    /// Invoke saving operation on a custom value.
+    pub fn custom_value_save(
+        &self,
+        value: Spanned<PluginCustomValueWithSource>,
+        path: Spanned<&Path>,
+        save_call_span: Span,
+    ) -> Result<(), ShellError> {
+        // Check that the value came from the right source
+        value.item.verify_source(value.span, &self.state.source)?;
+
+        let call = PluginCall::CustomValueOp(
+            value.map(|cv| cv.without_source()),
+            CustomValueOp::Save {
+                path: path.map(ToOwned::to_owned),
+                save_call_span,
+            },
+        );
+        match self.plugin_call(call, None)? {
+            PluginCallResponse::Ok => Ok(()),
+            PluginCallResponse::Error(err) => Err(err),
+            _ => Err(ShellError::PluginFailedToDecode {
+                msg: "Received unexpected response to custom value save() call".into(),
+            }),
+        }
     }
 
     /// Notify the plugin about a dropped custom value.
@@ -1061,9 +1123,9 @@ impl Interface for PluginInterface {
     type DataContext = CurrentCallState;
 
     fn write(&self, input: PluginInput) -> Result<(), ShellError> {
-        log::trace!("to plugin: {:?}", input);
+        log::trace!("to plugin: {input:?}");
         self.state.writer.write(&input).map_err(|err| {
-            log::warn!("write() error: {}", err);
+            log::warn!("write() error: {err}");
             // If there's an error in the state, return that instead because it's likely more
             // descriptive
             self.state.error.get().cloned().unwrap_or(err)
@@ -1072,7 +1134,7 @@ impl Interface for PluginInterface {
 
     fn flush(&self) -> Result<(), ShellError> {
         self.state.writer.flush().map_err(|err| {
-            log::warn!("flush() error: {}", err);
+            log::warn!("flush() error: {err}");
             // If there's an error in the state, return that instead because it's likely more
             // descriptive
             self.state.error.get().cloned().unwrap_or(err)
@@ -1096,12 +1158,12 @@ impl Interface for PluginInterface {
         match data {
             PipelineData::Value(mut value, meta) => {
                 state.prepare_value(&mut value, &self.state.source)?;
-                Ok(PipelineData::Value(value, meta))
+                Ok(PipelineData::value(value, meta))
             }
             PipelineData::ListStream(stream, meta) => {
                 let source = self.state.source.clone();
                 let state = state.clone();
-                Ok(PipelineData::ListStream(
+                Ok(PipelineData::list_stream(
                     stream.map(move |mut value| {
                         match state.prepare_value(&mut value, &source) {
                             Ok(()) => value,
@@ -1124,10 +1186,10 @@ impl Drop for PluginInterface {
         //
         // Our copy is about to be dropped, so there would only be one left, the manager. The
         // manager will never send any plugin calls, so we should let the plugin know that.
-        if Arc::strong_count(&self.state) < 3 {
-            if let Err(err) = self.goodbye() {
-                log::warn!("Error during plugin Goodbye: {err}");
-            }
+        if Arc::strong_count(&self.state) < 3
+            && let Err(err) = self.goodbye()
+        {
+            log::warn!("Error during plugin Goodbye: {err}");
         }
     }
 }
@@ -1174,21 +1236,19 @@ impl CurrentCallState {
         )?;
 
         // Check whether we need to keep it
-        if let Some(keep_tx) = &self.keep_plugin_custom_values_tx {
-            if let Some(custom_value) = custom_value
+        if let Some(keep_tx) = &self.keep_plugin_custom_values_tx
+            && let Some(custom_value) = custom_value
                 .item
                 .as_any()
                 .downcast_ref::<PluginCustomValueWithSource>()
-            {
-                if custom_value.notify_on_drop() {
-                    log::trace!("Keeping custom value for drop later: {:?}", custom_value);
-                    keep_tx
-                        .send(custom_value.clone())
-                        .map_err(|_| ShellError::NushellFailed {
-                            msg: "Failed to custom value to keep channel".into(),
-                        })?;
-                }
-            }
+            && custom_value.notify_on_drop()
+        {
+            log::trace!("Keeping custom value for drop later: {custom_value:?}");
+            keep_tx
+                .send(custom_value.clone())
+                .map_err(|_| ShellError::NushellFailed {
+                    msg: "Failed to custom value to keep channel".into(),
+                })?;
         }
 
         // Strip the source from it so it can be serialized
@@ -1229,15 +1289,17 @@ impl CurrentCallState {
         match call {
             PluginCall::Metadata => Ok(()),
             PluginCall::Signature => Ok(()),
+            PluginCall::GetCompletion(_) => Ok(()),
             PluginCall::Run(CallInfo { call, .. }) => self.prepare_call_args(call, source),
             PluginCall::CustomValueOp(_, op) => {
                 // Handle anything within the op.
                 match op {
                     CustomValueOp::ToBaseValue => Ok(()),
-                    CustomValueOp::FollowPathInt(_) => Ok(()),
-                    CustomValueOp::FollowPathString(_) => Ok(()),
+                    CustomValueOp::FollowPathInt { .. } => Ok(()),
+                    CustomValueOp::FollowPathString { .. } => Ok(()),
                     CustomValueOp::PartialCmp(value) => self.prepare_value(value, source),
                     CustomValueOp::Operation(_, value) => self.prepare_value(value, source),
+                    CustomValueOp::Save { .. } => Ok(()),
                     CustomValueOp::Dropped => Ok(()),
                 }
             }
@@ -1256,10 +1318,7 @@ pub(crate) fn handle_engine_call(
 
     let context = context.ok_or_else(|| ShellError::GenericError {
         error: "A plugin execution context is required for this engine call".into(),
-        msg: format!(
-            "attempted to call {} outside of a command invocation",
-            call_name
-        ),
+        msg: format!("attempted to call {call_name} outside of a command invocation"),
         span: None,
         help: Some("this is probably a bug with the plugin".into()),
         inner: vec![],
@@ -1331,6 +1390,9 @@ pub(crate) fn handle_engine_call(
                 EngineCallResponse::empty()
             }
         }),
+        EngineCall::GetBlockIR(block_id) => context
+            .get_block_ir(block_id)
+            .map(|ir| EngineCallResponse::IrBlock(Box::new(ir))),
         EngineCall::CallDecl {
             decl_id,
             call,

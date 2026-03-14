@@ -1,4 +1,4 @@
-use crate::repl::tests::{fail_test, run_test, TestResult};
+use crate::repl::tests::{TestResult, fail_test, run_test};
 use rstest::rstest;
 
 #[test]
@@ -143,6 +143,10 @@ fn export_module_which_defined_const() -> TestResult {
     run_test(
         r#"module spam { export const b = 3; export const c = 4 }; use spam; $spam.b + $spam.c"#,
         "7",
+    )?;
+    fail_test(
+        r#"module spam { export const b = 3; export const c = 4 }; use spam; $b"#,
+        "variable not found",
     )
 }
 
@@ -185,5 +189,21 @@ fn test_lexical_binding() -> TestResult {
     run_test(
         r#"const b = 4; module spam { const b = 3; export def c [] { $b } }; use spam; spam c"#,
         "3",
+    )
+}
+
+#[test]
+fn propagate_errors_in_export_env_on_use() -> TestResult {
+    fail_test(
+        r#"module foo { export-env { error make -u { msg: "error in export-env"} } }; use foo"#,
+        "error in export-env",
+    )
+}
+
+#[test]
+fn propagate_errors_in_export_env_when_run() -> TestResult {
+    fail_test(
+        r#"export-env { error make -u { msg: "error in export-env" } }"#,
+        "error in export-env",
     )
 }

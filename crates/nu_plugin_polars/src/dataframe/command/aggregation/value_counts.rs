@@ -1,9 +1,9 @@
-use crate::values::{CustomValueSupport, NuDataFrame};
 use crate::PolarsPlugin;
+use crate::values::{CustomValueSupport, NuDataFrame, PolarsPluginType};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape,
 };
 
 use polars::df;
@@ -28,29 +28,35 @@ impl PluginCommand for ValueCount {
             .named(
                 "column",
                 SyntaxShape::String,
-                "Provide a custom name for the count column",
+                "Provide a custom name for the count column.",
                 Some('c'),
             )
-            .switch("sort", "Whether or not values should be sorted", Some('s'))
+            .switch("sort", "Whether or not values should be sorted.", Some('s'))
             .switch(
                 "parallel",
-                "Use multiple threads when processing",
+                "Use multiple threads when processing.",
                 Some('p'),
             )
             .named(
                 "normalize",
                 SyntaxShape::String,
-                "Normalize the counts",
+                "Normalize the counts.",
                 Some('n'),
             )
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Calculates value counts",
             example: "[5 5 5 5 6 6] | polars into-df | polars value-counts | polars sort-by count",
@@ -74,7 +80,10 @@ impl PluginCommand for ValueCount {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

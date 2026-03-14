@@ -6,7 +6,7 @@
 /// The width seems to be a fixed length, but it doesn't always fit.
 /// GuessWidth finds the column separation position
 /// from the reference line(header) and multiple lines(body).
-
+///
 /// Briefly, the algorithm uses a histogram of spaces to find widths.
 /// blanks, lines, and pos are variables used in the algorithm. The other
 /// items names below are just for reference.
@@ -19,7 +19,7 @@
 /// spaces = "      ^        ^        ^"
 ///    pos =  6 15 24 <- the carets show these positions
 /// the items in pos map to 3's in the blanks array
-
+///
 /// Now that we have pos, we can let split() use this pos array to figure out
 /// how to split all lines by comparing each index to see if there's a space.
 /// So, it looks at position 6, 15, 24 and sees if it has a space in those
@@ -617,8 +617,8 @@ nu_plugin_from_sse = '0.4.0'            # Nushell plugin to convert a HTTP serve
             "... and 90 crates more (use --limit N",
         ];
         let got = guess_width.read_all();
-        for (row_indx, row) in got.into_iter().enumerate() {
-            assert_eq!(row[0], first_column_want[row_indx]);
+        for (row_index, row) in got.into_iter().enumerate() {
+            assert_eq!(row[0], first_column_want[row_index]);
         }
     }
 
@@ -650,8 +650,16 @@ nu_plugin_from_sse = '0.4.0'            # Nushell plugin to convert a HTTP serve
         ];
 
         let want = vec![
-            vec!["2022-12-21T09:50:16+0000", "WARN", "A warning that should be ignored is usually at this level and should be actionable."],
-            vec!["2022-12-21T09:50:17+0000", "INFO", "This is less important than debug log and is often used to provide context in the current task."],
+            vec![
+                "2022-12-21T09:50:16+0000",
+                "WARN",
+                "A warning that should be ignored is usually at this level and should be actionable.",
+            ],
+            vec![
+                "2022-12-21T09:50:17+0000",
+                "INFO",
+                "This is less important than debug log and is often used to provide context in the current task.",
+            ],
         ];
 
         let header = 0;

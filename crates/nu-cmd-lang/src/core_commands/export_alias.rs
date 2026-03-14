@@ -48,9 +48,9 @@ impl Command for ExportAlias {
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Alias ll to ls -l and export it from a module",
+            description: "Alias ll to ls -l and export it from a module.",
             example: "module spam { export alias ll = ls -l }",
             result: Some(Value::nothing(Span::test_data())),
         }]

@@ -1,4 +1,4 @@
-use crate::database::{SQLiteDatabase, MEMORY_DB};
+use crate::database::{MEMORY_DB, SQLiteDatabase};
 use nu_engine::command_prelude::*;
 use nu_protocol::Signals;
 
@@ -16,7 +16,7 @@ impl Command for StorImport {
             .required_named(
                 "file-name",
                 SyntaxShape::String,
-                "file name to import the sqlite in-memory database from",
+                "File name to import the sqlite in-memory database from.",
                 Some('f'),
             )
             .allow_variants_without_examples(true)
@@ -31,7 +31,7 @@ impl Command for StorImport {
         vec!["sqlite", "open", "database", "restore", "file"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Import a sqlite database file into the in-memory sqlite database",
             example: "stor import --file-name nudb.sqlite",
@@ -54,7 +54,7 @@ impl Command for StorImport {
                 return Err(ShellError::MissingParameter {
                     param_name: "please supply a file name with the --file-name parameter".into(),
                     span,
-                })
+                });
             }
         };
 
@@ -84,9 +84,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(StorImport {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StorImport)
     }
 }

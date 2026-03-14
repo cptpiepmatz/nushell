@@ -19,13 +19,13 @@ impl Command for PluginUse {
             .named(
                 "plugin-config",
                 SyntaxShape::Filepath,
-                "Use a plugin registry file other than the one set in `$nu.plugin-path`",
+                "Use a plugin registry file other than the one set in `$nu.plugin-path`.",
                 None,
             )
             .required(
                 "name",
                 SyntaxShape::String,
-                "The name, or filename, of the plugin to load",
+                "The name, or filename, of the plugin to load.",
             )
             .category(Category::Plugin)
     }
@@ -67,7 +67,7 @@ it was already previously registered with `plugin add`.
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Load the commands for the `query` plugin from $nu.plugin-path",
@@ -80,8 +80,7 @@ it was already previously registered with `plugin add`.
                 result: None,
             },
             Example {
-                description:
-                    "Load the commands for the `query` plugin from a custom plugin registry file",
+                description: "Load the commands for the `query` plugin from a custom plugin registry file",
                 example: r#"plugin use --plugin-config local-plugins.msgpackz query"#,
                 result: None,
             },

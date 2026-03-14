@@ -1,6 +1,6 @@
 mod griddle;
-mod icons;
 mod table;
 
 pub use griddle::Griddle;
 pub use table::Table;
+pub(crate) use table::render_value_as_plain_table_text;

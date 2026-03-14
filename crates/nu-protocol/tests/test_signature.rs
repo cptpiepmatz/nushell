@@ -17,17 +17,22 @@ fn test_signature() {
 fn test_signature_chained() {
     let signature = Signature::new("new_signature")
         .description("description")
-        .required("required", SyntaxShape::String, "required description")
-        .optional("optional", SyntaxShape::String, "optional description")
+        .required("required", SyntaxShape::String, "Required description.")
+        .optional("optional", SyntaxShape::String, "Optional description.")
         .required_named(
             "req-named",
             SyntaxShape::String,
-            "required named description",
+            "Required named description.",
             Some('r'),
         )
-        .named("named", SyntaxShape::String, "named description", Some('n'))
-        .switch("switch", "switch description", None)
-        .rest("rest", SyntaxShape::String, "rest description");
+        .named(
+            "named",
+            SyntaxShape::String,
+            "Named description.",
+            Some('n'),
+        )
+        .switch("switch", "Switch description.", None)
+        .rest("rest", SyntaxShape::String, "Rest description.");
 
     assert_eq!(signature.required_positional.len(), 1);
     assert_eq!(signature.optional_positional.len(), 1);
@@ -41,30 +46,33 @@ fn test_signature_chained() {
         signature.get_positional(0),
         Some(&PositionalArg {
             name: "required".to_string(),
-            desc: "required description".to_string(),
+            desc: "Required description.".to_string(),
             shape: SyntaxShape::String,
             var_id: None,
             default_value: None,
+            completion: None,
         })
     );
     assert_eq!(
         signature.get_positional(1),
         Some(&PositionalArg {
             name: "optional".to_string(),
-            desc: "optional description".to_string(),
+            desc: "Optional description.".to_string(),
             shape: SyntaxShape::String,
             var_id: None,
             default_value: None,
+            completion: None,
         })
     );
     assert_eq!(
         signature.get_positional(2),
         Some(&PositionalArg {
             name: "rest".to_string(),
-            desc: "rest description".to_string(),
+            desc: "Rest description.".to_string(),
             shape: SyntaxShape::String,
             var_id: None,
             default_value: None,
+            completion: None,
         })
     );
 
@@ -75,9 +83,10 @@ fn test_signature_chained() {
             short: Some('r'),
             arg: Some(SyntaxShape::String),
             required: true,
-            desc: "required named description".to_string(),
+            desc: "Required named description.".to_string(),
             var_id: None,
             default_value: None,
+            completion: None,
         })
     );
 
@@ -88,9 +97,10 @@ fn test_signature_chained() {
             short: Some('r'),
             arg: Some(SyntaxShape::String),
             required: true,
-            desc: "required named description".to_string(),
+            desc: "Required named description.".to_string(),
             var_id: None,
             default_value: None,
+            completion: None,
         })
     );
 }
@@ -103,10 +113,15 @@ fn test_signature_same_short() {
         .required_named(
             "required-named",
             SyntaxShape::String,
-            "required named description",
+            "Required named description.",
             Some('n'),
         )
-        .named("named", SyntaxShape::String, "named description", Some('n'));
+        .named(
+            "named",
+            SyntaxShape::String,
+            "Named description.",
+            Some('n'),
+        );
 }
 
 #[test]
@@ -117,28 +132,33 @@ fn test_signature_same_name() {
         .required_named(
             "name",
             SyntaxShape::String,
-            "required named description",
+            "Required named description.",
             Some('r'),
         )
-        .named("name", SyntaxShape::String, "named description", Some('n'));
+        .named("name", SyntaxShape::String, "Named description.", Some('n'));
 }
 
 #[test]
 fn test_signature_round_trip() {
     let signature = Signature::new("new_signature")
         .description("description")
-        .required("first", SyntaxShape::String, "first required")
-        .required("second", SyntaxShape::Int, "second required")
-        .optional("optional", SyntaxShape::String, "optional description")
+        .required("first", SyntaxShape::String, "First required.")
+        .required("second", SyntaxShape::Int, "Second required.")
+        .optional("optional", SyntaxShape::String, "Optional description.")
         .required_named(
             "req-named",
             SyntaxShape::String,
-            "required named description",
+            "Required named description.",
             Some('r'),
         )
-        .named("named", SyntaxShape::String, "named description", Some('n'))
-        .switch("switch", "switch description", None)
-        .rest("rest", SyntaxShape::String, "rest description")
+        .named(
+            "named",
+            SyntaxShape::String,
+            "Named description.",
+            Some('n'),
+        )
+        .switch("switch", "Switch description.", None)
+        .rest("rest", SyntaxShape::String, "Rest description.")
         .category(nu_protocol::Category::Conversions);
 
     let string = serde_json::to_string_pretty(&signature).unwrap();

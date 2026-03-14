@@ -134,7 +134,7 @@ pub fn create_file_at(full_path: impl AsRef<Path>) -> Result<(), std::io::Error>
 #[case(".", r#"'*z'"#, &["ablez", "baker", "charliez"], &["ablez", "charliez"], "simple glob")]
 #[case(".", r#"'qqq'"#, &["ablez", "baker", "charliez"], &[], "glob matches none")]
 #[case("foo/bar", r"'*[\]}]*'", &[r#"foo/bar/ab}le"#, "foo/bar/baker", r#"foo/bar/cha]rlie"#], &[r#"foo/bar/ab}le"#, r#"foo/bar/cha]rlie"#], "glob has quoted metachars")]
-#[case("foo/bar", r#"'../*'"#, &["foo/able", "foo/bar/baker", "foo/charlie"], &["foo/able", "foo/bar", "foo/charlie"], "glob matches files in parent")]
+#[case("foo/bar", r#"'../*'"#, &["foo/able", "foo/bar/baker", "foo/charlie"], &["foo/bar/../able", "foo/bar/../bar", "foo/bar/../charlie"], "glob matches files in parent")]
 #[case("foo", r#"'./{a,b}*'"#, &["foo/able", "foo/bar/baker", "foo/charlie"], &["foo/able", "foo/bar"], "glob with leading ./ matches peer files")]
 fn glob_files_in_parent(
     #[case] wd: &str,
@@ -153,23 +153,63 @@ fn glob_files_in_parent(
 
         let actual = nu!(
             cwd: working_directory,
-            r#"glob {} | sort | str join " ""#,
-            glob
+            format!(r#"glob {glob} | sort | str join " ""#)
         );
 
         let mut expected: Vec<String> = vec![];
         for e in exp {
-            expected.push(
-                dirs.test()
-                    .join(PathBuf::from(e)) // sadly, does *not" convert "foo/bar" to "foo\\bar" on Windows.
-                    .to_string_lossy()
-                    .to_string(),
-            );
+            // Normalize windows paths by converting / to \ and resolving .. components lexically.
+            #[cfg(windows)]
+            let e = {
+                let mut path = PathBuf::new();
+                for c in Path::new(e).components() {
+                    if c == std::path::Component::ParentDir {
+                        path.pop();
+                    } else {
+                        path.push(c)
+                    }
+                }
+                path
+            };
+            #[cfg(not(windows))]
+            let e = PathBuf::from(e);
+
+            expected.push(dirs.test().join(e).to_string_lossy().to_string());
         }
 
-        let expected = expected
-            .join(" ")
-            .replace('/', std::path::MAIN_SEPARATOR_STR);
-        assert_eq!(actual.out, expected, "\n  test: {}", tag);
+        let expected = expected.join(" ");
+        assert_eq!(actual.out, expected, "\n  test: {tag}");
     });
+}
+
+#[test]
+fn glob_follow_symlinks() {
+    Playground::setup("glob_follow_symlinks", |dirs, sandbox| {
+        // Create a directory with some files
+        sandbox.mkdir("target_dir");
+        sandbox
+            .within("target_dir")
+            .with_files(&[EmptyFile("target_file.txt")]);
+
+        let target_dir = dirs.test().join("target_dir");
+        let symlink_path = dirs.test().join("symlink_dir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target_dir, &symlink_path).expect("Failed to create symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(target_dir, &symlink_path)
+            .expect("Failed to create symlink");
+
+        // on some systems/filesystems, symlinks are followed by default
+        // on others (like Linux /sys), they aren't
+        // Test that with the --follow-symlinks flag, files are found for sure
+        let with_flag = nu!(
+            cwd: dirs.test(),
+            "glob 'symlink_dir/*.txt' --follow-symlinks | length",
+        );
+
+        assert_eq!(
+            with_flag.out, "1",
+            "Should find file with --follow-symlinks flag"
+        );
+    })
 }

@@ -1,5 +1,6 @@
+use chrono::Datelike;
 use nu_engine::command_prelude::*;
-use nu_protocol::Signals;
+use nu_protocol::{Signals, shell_error::io::IoError};
 
 use std::io::Write;
 
@@ -59,15 +60,15 @@ impl Command for StrJoin {
         run(working_set.permanent(), call, input, separator)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Create a string from input",
+                description: "Create a string from input.",
                 example: "['nu', 'shell'] | str join",
                 result: Some(Value::test_string("nushell")),
             },
             Example {
-                description: "Create a string from input with a separator",
+                description: "Create a string from input with a separator.",
                 example: "['nu', 'shell'] | str join '-'",
                 result: Some(Value::test_string("nu-shell")),
             },
@@ -94,23 +95,31 @@ fn run(
         Signals::empty(),
         ByteStreamType::String,
         move |buffer| {
+            let from_io_error = IoError::factory(span, None);
+
             // Write each input to the buffer
             if let Some(value) = iter.next() {
                 // Write the separator if this is not the first
                 if first {
                     first = false;
                 } else if let Some(separator) = &separator {
-                    write!(buffer, "{}", separator)?;
+                    write!(buffer, "{separator}").map_err(&from_io_error)?;
                 }
 
                 match value {
                     Value::Error { error, .. } => {
                         return Err(*error);
                     }
-                    // Hmm, not sure what we actually want.
-                    // `to_expanded_string` formats dates as human readable which feels funny.
-                    Value::Date { val, .. } => write!(buffer, "{val:?}")?,
-                    value => write!(buffer, "{}", value.to_expanded_string("\n", &config))?,
+                    Value::Date { val, .. } => {
+                        let date_str = if val.year() >= 0 && val.year() <= 9999 {
+                            val.to_rfc2822()
+                        } else {
+                            val.to_rfc3339()
+                        };
+                        write!(buffer, "{date_str}").map_err(&from_io_error)?
+                    }
+                    value => write!(buffer, "{}", value.to_expanded_string("\n", &config))
+                        .map_err(&from_io_error)?,
                 }
                 Ok(true)
             } else {
@@ -119,16 +128,14 @@ fn run(
         },
     );
 
-    Ok(PipelineData::ByteStream(output, metadata))
+    Ok(PipelineData::byte_stream(output, metadata))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(StrJoin {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StrJoin)
     }
 }

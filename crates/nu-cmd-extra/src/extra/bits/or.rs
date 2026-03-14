@@ -27,12 +27,12 @@ impl Command for BitsOr {
             .required(
                 "target",
                 SyntaxShape::OneOf(vec![SyntaxShape::Binary, SyntaxShape::Int]),
-                "right-hand side of the operation",
+                "Right-hand side of the operation.",
             )
             .named(
                 "endian",
                 SyntaxShape::String,
-                "byte encode endian, available options: native(default), little, big",
+                "Byte encode endian, available options: native(default), little, big.",
                 Some('e'),
             )
             .category(Category::Bits)
@@ -66,7 +66,7 @@ impl Command for BitsOr {
                     return Err(ShellError::TypeMismatch {
                         err_message: "Endian must be one of native, little, big".to_string(),
                         span: endian.span,
-                    })
+                    });
                 }
             }
         } else {
@@ -74,7 +74,7 @@ impl Command for BitsOr {
         };
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
 
@@ -84,7 +84,7 @@ impl Command for BitsOr {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Apply bits or to two numbers",
@@ -106,8 +106,7 @@ impl Command for BitsOr {
                 result: Some(Value::test_binary(vec![0xca, 0xfe])),
             },
             Example {
-                description:
-                    "Apply bitwise or to binary data of varying lengths with specified endianness",
+                description: "Apply bitwise or to binary data of varying lengths with specified endianness",
                 example: "0x[c0 ff ee] | bits or 0x[ff] --endian big",
                 result: Some(Value::test_binary(vec![0xc0, 0xff, 0xff])),
             },
@@ -125,9 +124,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(BitsOr {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(BitsOr)
     }
 }

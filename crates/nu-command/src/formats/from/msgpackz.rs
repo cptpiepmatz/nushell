@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use nu_engine::command_prelude::*;
 
-use super::msgpack::{read_msgpack, Opts};
+use super::msgpack::{Opts, read_msgpack};
 
 const BUFFER_SIZE: usize = 65536;
 
@@ -17,7 +17,7 @@ impl Command for FromMsgpackz {
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .input_output_type(Type::Binary, Type::Any)
-            .switch("objects", "Read multiple objects from input", None)
+            .switch("objects", "Read multiple objects from input.", None)
             .category(Category::Formats)
     }
 

@@ -4,6 +4,7 @@ use std::{
 };
 
 use nu_engine::command_prelude::*;
+use nu_protocol::shell_error::io::IoError;
 
 const CTRL_C: u8 = 3;
 
@@ -60,7 +61,7 @@ The `prefix` is not included in the output."
             )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Get cursor position.",
@@ -73,7 +74,7 @@ The `prefix` is not included in the output."
                 result: None,
             },
             Example {
-                description: "Get terminal background color. (some terminals prefer `char bel` rather than `ansi st` as string terminator)",
+                description: "Get terminal background color. (some terminals prefer `char bel` rather than `ansi st` as string terminator).",
                 example: r#"term query $'(ansi osc)10;?(char bel)' --prefix $'(ansi osc)10;' --terminator (char bel)"#,
                 result: None,
             },
@@ -98,15 +99,17 @@ The `prefix` is not included in the output."
         let prefix = prefix.unwrap_or_default();
         let terminator: Option<Vec<u8>> = call.get_flag(engine_state, stack, "terminator")?;
 
-        crossterm::terminal::enable_raw_mode()?;
+        crossterm::terminal::enable_raw_mode().map_err(|err| IoError::new(err, call.head, None))?;
         scopeguard::defer! {
             let _ = crossterm::terminal::disable_raw_mode();
         }
 
         // clear terminal events
-        while crossterm::event::poll(Duration::from_secs(0))? {
+        while crossterm::event::poll(Duration::from_secs(0))
+            .map_err(|err| IoError::new(err, call.head, None))?
+        {
             // If there's an event, read it to remove it from the queue
-            let _ = crossterm::event::read()?;
+            let _ = crossterm::event::read().map_err(|err| IoError::new(err, call.head, None))?;
         }
 
         let mut b = [0u8; 1];
@@ -115,13 +118,19 @@ The `prefix` is not included in the output."
 
         {
             let mut stdout = std::io::stdout().lock();
-            stdout.write_all(&query)?;
-            stdout.flush()?;
+            stdout
+                .write_all(&query)
+                .map_err(|err| IoError::new(err, call.head, None))?;
+            stdout
+                .flush()
+                .map_err(|err| IoError::new(err, call.head, None))?;
         }
 
         // Validate and skip prefix
         for bc in prefix {
-            stdin.read_exact(&mut b)?;
+            stdin
+                .read_exact(&mut b)
+                .map_err(|err| IoError::new(err, call.head, None))?;
             if b[0] != bc {
                 return Err(ShellError::GenericError {
                     error: "Input did not begin with expected sequence".into(),
@@ -138,12 +147,12 @@ The `prefix` is not included in the output."
 
         if let Some(terminator) = terminator {
             loop {
-                stdin.read_exact(&mut b)?;
+                stdin
+                    .read_exact(&mut b)
+                    .map_err(|err| IoError::new(err, call.head, None))?;
 
                 if b[0] == CTRL_C {
-                    return Err(ShellError::InterruptedByUser {
-                        span: Some(call.head),
-                    });
+                    return Err(ShellError::Interrupted { span: call.head });
                 }
 
                 buf.push(b[0]);
@@ -158,7 +167,9 @@ The `prefix` is not included in the output."
             }
         } else {
             loop {
-                stdin.read_exact(&mut b)?;
+                stdin
+                    .read_exact(&mut b)
+                    .map_err(|err| IoError::new(err, call.head, None))?;
 
                 if b[0] == CTRL_C {
                     break;

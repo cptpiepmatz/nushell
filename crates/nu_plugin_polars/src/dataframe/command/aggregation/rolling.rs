@@ -1,10 +1,10 @@
-use crate::values::{Column, NuDataFrame};
-use crate::{values::CustomValueSupport, PolarsPlugin};
+use crate::values::{Column, NuDataFrame, PolarsPluginType};
+use crate::{PolarsPlugin, values::CustomValueSupport};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
     Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Spanned,
-    SyntaxShape, Type, Value,
+    SyntaxShape, Value,
 };
 use polars::prelude::{DataType, IntoSeries, RollingOptionsFixedWindow, SeriesOpsTime};
 
@@ -58,16 +58,22 @@ impl PluginCommand for Rolling {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .required("type", SyntaxShape::String, "rolling operation")
-            .required("window", SyntaxShape::Int, "Window size for rolling")
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .required("type", SyntaxShape::String, "Rolling operation.")
+            .required("window", SyntaxShape::Int, "Window size for rolling.")
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Rolling sum for a series",
@@ -119,7 +125,10 @@ impl PluginCommand for Rolling {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

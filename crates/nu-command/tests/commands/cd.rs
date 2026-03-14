@@ -41,11 +41,13 @@ fn filesystem_change_from_current_directory_using_absolute_path() {
     Playground::setup("cd_test_2", |dirs, _| {
         let actual = nu!(
             cwd: dirs.test(),
-            r#"
-                cd '{}'
-                $env.PWD
-            "#,
-            dirs.formats().display()
+            format!(
+                r#"
+                    cd '{}'
+                    $env.PWD
+                "#,
+                dirs.formats().display()
+            )
         );
 
         assert_eq!(Path::new(&actual.out), dirs.formats());
@@ -57,12 +59,14 @@ fn filesystem_change_from_current_directory_using_absolute_path_with_trailing_sl
     Playground::setup("cd_test_2", |dirs, _| {
         let actual = nu!(
             cwd: dirs.test(),
-            r#"
-                cd '{}{}'
-                $env.PWD
-            "#,
-            dirs.formats().display(),
-            std::path::MAIN_SEPARATOR_STR,
+            format!(
+                r#"
+                    cd '{}{}'
+                    $env.PWD
+                "#,
+                dirs.formats().display(),
+                std::path::MAIN_SEPARATOR_STR,
+            )
         );
 
         assert_eq!(Path::new(&actual.out), dirs.formats());
@@ -76,12 +80,14 @@ fn filesystem_switch_back_to_previous_working_directory() {
 
         let actual = nu!(
             cwd: dirs.test().join("odin"),
-            "
-                cd {}
-                cd -
-                $env.PWD
-            ",
-            dirs.test().display()
+            format!(
+                "
+                    cd {}
+                    cd -
+                    $env.PWD
+                ",
+                dirs.test().display()
+            )
         );
 
         assert_eq!(Path::new(&actual.out), dirs.test().join("odin"));
@@ -188,7 +194,7 @@ fn filesystem_not_a_directory() {
             actual.err
         );
         assert!(
-            actual.err.contains("is not a directory"),
+            actual.err.contains("nu::shell::io::not_a_directory"),
             "actual={:?}",
             actual.err
         );
@@ -210,7 +216,7 @@ fn filesystem_directory_not_found() {
             actual.err
         );
         assert!(
-            actual.err.contains("directory not found"),
+            actual.err.contains("nu::shell::io::directory_not_found"),
             "actual={:?}",
             actual.err
         );
@@ -262,11 +268,12 @@ fn test_change_windows_drive() {
                 subst Z: /d
             "#
         );
-        assert!(dirs
-            .test()
-            .join("test_folder")
-            .join("test_file.txt")
-            .exists());
+        assert!(
+            dirs.test()
+                .join("test_folder")
+                .join("test_file.txt")
+                .exists()
+        );
     })
 }
 
@@ -282,7 +289,7 @@ fn cd_permission_denied_folder() {
                 cd banned
             "
         );
-        assert!(actual.err.contains("Cannot change directory to"));
+        assert!(actual.err.contains("nu::shell::io::permission_denied"));
         nu!(
             cwd: dirs.test(),
             "
@@ -314,11 +321,19 @@ fn cd_permission_denied_folder() {
 #[cfg(unix)]
 fn pwd_recovery() {
     let nu = nu_test_support::fs::executable_path().display().to_string();
-    let tmpdir = std::env::temp_dir().join("foobar").display().to_string();
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmpdir = std::env::temp_dir()
+        .join(format!("nu_pwd_recovery_{}_{}", std::process::id(), unique))
+        .display()
+        .to_string();
 
     // We `cd` into a temporary directory, then spawn another `nu` process to
     // delete that directory. Then we attempt to recover by running `cd /`.
-    let cmd = format!("mkdir {tmpdir}; cd {tmpdir}; {nu} -c 'cd /; rm -r {tmpdir}'; cd /; pwd");
+    let cmd =
+        format!("mkdir '{tmpdir}'; cd '{tmpdir}'; {nu} -c \"cd /; rm -r '{tmpdir}'\"; cd /; pwd");
     let actual = nu!(cmd);
 
     assert_eq!(actual.out, "/");

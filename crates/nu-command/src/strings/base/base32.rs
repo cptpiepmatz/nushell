@@ -23,14 +23,14 @@ impl Command for DecodeBase32 {
     }
 
     fn description(&self) -> &str {
-        "Decode a Base32 value."
+        "Decode a Base32-encoded value."
     }
 
     fn extra_description(&self) -> &str {
         EXTRA_USAGE
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Decode arbitrary binary data",
@@ -110,7 +110,7 @@ impl Command for EncodeBase32 {
         EXTRA_USAGE
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Encode a binary value",
@@ -169,12 +169,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples_decode() {
-        crate::test_examples(DecodeBase32)
+    fn test_examples_decode() -> nu_test_support::Result {
+        nu_test_support::test().examples(DecodeBase32)
     }
 
     #[test]
-    fn test_examples_encode() {
-        crate::test_examples(EncodeBase32)
+    fn test_examples_encode() -> nu_test_support::Result {
+        nu_test_support::test().examples(EncodeBase32)
     }
 }

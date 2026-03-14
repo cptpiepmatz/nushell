@@ -1,7 +1,7 @@
 use std::io::{BufRead, Cursor};
 
 use nu_engine::command_prelude::*;
-use nu_protocol::{ListStream, Signals};
+use nu_protocol::{ListStream, Signals, shell_error::io::IoError};
 
 #[derive(Clone)]
 pub struct FromJson;
@@ -12,29 +12,33 @@ impl Command for FromJson {
     }
 
     fn description(&self) -> &str {
-        "Convert from json to structured data."
+        "Convert JSON text into structured data."
     }
 
     fn signature(&self) -> nu_protocol::Signature {
         Signature::build("from json")
             .input_output_types(vec![(Type::String, Type::Any)])
-            .switch("objects", "treat each line as a separate value", Some('o'))
-            .switch("strict", "follow the json specification exactly", Some('s'))
+            .switch("objects", "Treat each line as a separate value.", Some('o'))
+            .switch(
+                "strict",
+                "Follow the json specification exactly.",
+                Some('s'),
+            )
             .category(Category::Formats)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: r#"'{ "a": 1 }' | from json"#,
-                description: "Converts json formatted string to table",
+                description: "Converts json formatted string to table.",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
                 })),
             },
             Example {
                 example: r#"'{ "a": 1, "b": [1, 2] }' | from json"#,
-                description: "Converts json formatted string to table",
+                description: "Converts json formatted string to table.",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
                     "b" => Value::test_list(vec![Value::test_int(1), Value::test_int(2)]),
@@ -42,7 +46,7 @@ impl Command for FromJson {
             },
             Example {
                 example: r#"'{ "a": 1, "b": 2 }' | from json -s"#,
-                description: "Parse json strictly which will error on comments and trailing commas",
+                description: "Parse json strictly which will error on comments and trailing commas.",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
                     "b" => Value::test_int(2),
@@ -51,7 +55,7 @@ impl Command for FromJson {
             Example {
                 example: r#"'{ "a": 1 }
 { "b": 2 }' | from json --objects"#,
-                description: "Parse a stream of line-delimited JSON values",
+                description: "Parse a stream of line-delimited JSON values.",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {"a" => Value::test_int(1)}),
                     Value::test_record(record! {"b" => Value::test_int(2)}),
@@ -76,25 +80,27 @@ impl Command for FromJson {
         if call.has_flag(engine_state, stack, "objects")? {
             // Return a stream of JSON values, one for each non-empty line
             match input {
-                PipelineData::Value(Value::String { val, .. }, ..) => Ok(PipelineData::ListStream(
-                    read_json_lines(
-                        Cursor::new(val),
-                        span,
-                        strict,
-                        engine_state.signals().clone(),
-                    ),
-                    metadata,
-                )),
+                PipelineData::Value(Value::String { val, .. }, ..) => {
+                    Ok(PipelineData::list_stream(
+                        read_json_lines(
+                            Cursor::new(val),
+                            span,
+                            strict,
+                            engine_state.signals().clone(),
+                        ),
+                        metadata,
+                    ))
+                }
                 PipelineData::ByteStream(stream, ..)
                     if stream.type_() != ByteStreamType::Binary =>
                 {
                     if let Some(reader) = stream.reader() {
-                        Ok(PipelineData::ListStream(
+                        Ok(PipelineData::list_stream(
                             read_json_lines(reader, span, strict, Signals::empty()),
                             metadata,
                         ))
                     } else {
-                        Ok(PipelineData::Empty)
+                        Ok(PipelineData::empty())
                     }
                 }
                 _ => Err(ShellError::OnlySupportsThisInputType {
@@ -134,7 +140,7 @@ fn read_json_lines(
         .lines()
         .filter(|line| line.as_ref().is_ok_and(|line| !line.trim().is_empty()) || line.is_err())
         .map(move |line| {
-            let line = line.err_span(span)?;
+            let line = line.map_err(|err| IoError::new(err, span, None))?;
             if strict {
                 convert_string_to_value_strict(&line, span)
             } else {
@@ -184,34 +190,14 @@ fn convert_nujson_to_value(value: nu_json::Value, span: Span) -> Value {
     }
 }
 
-// Converts row+column to a Span, assuming bytes (1-based rows)
-fn convert_row_column_to_span(row: usize, col: usize, contents: &str) -> Span {
-    let mut cur_row = 1;
-    let mut cur_col = 1;
-
-    for (offset, curr_byte) in contents.bytes().enumerate() {
-        if curr_byte == b'\n' {
-            cur_row += 1;
-            cur_col = 1;
-        }
-        if cur_row >= row && cur_col >= col {
-            return Span::new(offset, offset);
-        } else {
-            cur_col += 1;
-        }
-    }
-
-    Span::new(contents.len(), contents.len())
-}
-
-fn convert_string_to_value(string_input: &str, span: Span) -> Result<Value, ShellError> {
+pub fn convert_string_to_value(string_input: &str, span: Span) -> Result<Value, ShellError> {
     match nu_json::from_str(string_input) {
         Ok(value) => Ok(convert_nujson_to_value(value, span)),
 
         Err(x) => match x {
             nu_json::Error::Syntax(_, row, col) => {
                 let label = x.to_string();
-                let label_span = convert_row_column_to_span(row, col, string_input);
+                let label_span = Span::from_row_column(row, col, string_input);
                 Err(ShellError::GenericError {
                     error: "Error while parsing JSON text".into(),
                     msg: "error parsing JSON text".into(),
@@ -240,7 +226,7 @@ fn convert_string_to_value_strict(string_input: &str, span: Span) -> Result<Valu
         Ok(value) => Ok(convert_nujson_to_value(value, span)),
         Err(err) => Err(if err.is_syntax() {
             let label = err.to_string();
-            let label_span = convert_row_column_to_span(err.line(), err.column(), string_input);
+            let label_span = Span::from_row_column(err.line(), err.column(), string_input);
             ShellError::GenericError {
                 error: "Error while parsing JSON text".into(),
                 msg: "error parsing JSON text".into(),
@@ -268,15 +254,14 @@ fn convert_string_to_value_strict(string_input: &str, span: Span) -> Result<Valu
 mod test {
     use nu_cmd_lang::eval_pipeline_without_terminal_expression;
 
+    use crate::Reject;
     use crate::{Metadata, MetadataSet};
 
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(FromJson {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(FromJson)
     }
 
     #[test]
@@ -288,6 +273,7 @@ mod test {
             working_set.add_decl(Box::new(FromJson {}));
             working_set.add_decl(Box::new(Metadata {}));
             working_set.add_decl(Box::new(MetadataSet {}));
+            working_set.add_decl(Box::new(Reject {}));
 
             working_set.render()
         };
@@ -296,14 +282,16 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = r#"'{"a":1,"b":2}' | metadata set --content-type 'application/json' --datasource-ls | from json | metadata | $in"#;
+        let cmd = r#"'{"a":1,"b":2}' | metadata set --content-type 'application/json' --path-columns [name] | from json | metadata | reject span | $in"#;
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(record!("source" => Value::test_string("ls"))),
+            Value::test_record(
+                record!("path_columns" => Value::test_list(vec![Value::test_string("name")]))
+            ),
             result.expect("There should be a result")
         )
     }

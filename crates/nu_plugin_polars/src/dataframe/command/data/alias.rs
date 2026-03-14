@@ -1,10 +1,10 @@
-use crate::{values::CustomValueSupport, PolarsPlugin};
+use crate::{PolarsPlugin, values::CustomValueSupport};
 
-use crate::values::NuExpression;
+use crate::values::{NuExpression, PolarsPluginType};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    record, Category, Example, LabeledError, PipelineData, Signature, SyntaxShape, Type, Value,
+    Category, Example, LabeledError, PipelineData, Signature, SyntaxShape, Value, record,
 };
 
 #[derive(Clone)]
@@ -26,16 +26,22 @@ impl PluginCommand for ExprAlias {
             .required(
                 "Alias name",
                 SyntaxShape::String,
-                "Alias name for the expression",
+                "Alias name for the expression.",
             )
-            .input_output_type(
-                Type::Custom("expression".into()),
-                Type::Custom("expression".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
+                ),
+                (
+                    PolarsPluginType::NuSelector.into(),
+                    PolarsPluginType::NuExpression.into(),
+                ),
+            ])
             .category(Category::Custom("expression".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Creates and alias expression",
             example: "polars col a | polars as new_a | polars into-nu",
@@ -64,13 +70,18 @@ impl PluginCommand for ExprAlias {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let alias: String = call.req(0)?;
 
-        let expr = NuExpression::try_from_pipeline(plugin, input, call.head)?;
+        // Convert input to Value first to check type
+        let value = input.into_value(call.head)?;
+
+        let expr = NuExpression::try_from_value(plugin, &value)?;
         let expr: NuExpression = expr.into_polars().alias(alias.as_str()).into();
 
         expr.to_pipeline_data(plugin, engine, call.head)
             .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

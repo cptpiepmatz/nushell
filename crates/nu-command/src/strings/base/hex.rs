@@ -15,10 +15,10 @@ impl Command for DecodeHex {
     }
 
     fn description(&self) -> &str {
-        "Hex decode a value."
+        "Decode a hex-encoded value."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Decode arbitrary binary data",
@@ -79,7 +79,7 @@ impl Command for EncodeHex {
         "Hex encode a binary value or a string."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Encode a binary value",
@@ -140,12 +140,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples_decode() {
-        crate::test_examples(DecodeHex)
+    fn test_examples_decode() -> nu_test_support::Result {
+        nu_test_support::test().examples(DecodeHex)
     }
 
     #[test]
-    fn test_examples_encode() {
-        crate::test_examples(EncodeHex)
+    fn test_examples_encode() -> nu_test_support::Result {
+        nu_test_support::test().examples(EncodeHex)
     }
 }

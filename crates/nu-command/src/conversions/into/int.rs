@@ -1,5 +1,5 @@
 use chrono::{FixedOffset, TimeZone};
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
 use nu_utils::get_system_locale;
@@ -18,9 +18,9 @@ impl CmdArgument for Arguments {
 }
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct IntoInt;
 
-impl Command for SubCommand {
+impl Command for IntoInt {
     fn name(&self) -> &str {
         "into int"
     }
@@ -69,16 +69,17 @@ impl Command for SubCommand {
                 ),
             ])
             .allow_variants_without_examples(true)
-            .named("radix", SyntaxShape::Number, "radix of integer", Some('r'))
-            .named(
-                "endian",
-                SyntaxShape::String,
-                "byte encode endian, available options: native(default), little, big",
-                Some('e'),
+            .named("radix", SyntaxShape::Number, "Radix of integer.", Some('r'))
+            .param(
+                Flag::new("endian")
+                    .short('e')
+                    .arg(SyntaxShape::String)
+                    .desc("Byte encode endian, available options: native(default), little, big.")
+                    .completion(Completion::new_list(&["native", "little", "big"])),
             )
             .switch(
                 "signed",
-                "always treat input number as a signed number",
+                "Always treat input number as a signed number.",
                 Some('s'),
             )
             .rest(
@@ -90,7 +91,7 @@ impl Command for SubCommand {
     }
 
     fn description(&self) -> &str {
-        "Convert value to integer."
+        "Convert value to an integer."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -141,7 +142,7 @@ impl Command for SubCommand {
                                 err_message: "Endian must be one of native, little, big"
                                     .to_string(),
                                 span,
-                            })
+                            });
                         }
                     },
                     _ => false,
@@ -161,35 +162,35 @@ impl Command for SubCommand {
         operate(action, args, input, call.head, engine_state.signals())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Convert string to int in table",
+                description: "Convert string to int in table.",
                 example: "[[num]; ['-5'] [4] [1.5]] | into int num",
                 result: None,
             },
             Example {
-                description: "Convert string to int",
+                description: "Convert string to int.",
                 example: "'2' | into int",
                 result: Some(Value::test_int(2)),
             },
             Example {
-                description: "Convert float to int",
+                description: "Convert float to int.",
                 example: "5.9 | into int",
                 result: Some(Value::test_int(5)),
             },
             Example {
-                description: "Convert decimal string to int",
+                description: "Convert decimal string to int.",
                 example: "'5.9' | into int",
                 result: Some(Value::test_int(5)),
             },
             Example {
-                description: "Convert file size to int",
+                description: "Convert file size to int.",
                 example: "4KB | into int",
                 result: Some(Value::test_int(4000)),
             },
             Example {
-                description: "Convert bool to int",
+                description: "Convert bool to int.",
                 example: "[false, true] | into int",
                 result: Some(Value::list(
                     vec![Value::test_int(0), Value::test_int(1)],
@@ -197,42 +198,42 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Convert date to int (Unix nanosecond timestamp)",
+                description: "Convert date to int (Unix nanosecond timestamp).",
                 example: "1983-04-13T12:09:14.123456789-05:00 | into int",
                 result: Some(Value::test_int(419101754123456789)),
             },
             Example {
-                description: "Convert to int from binary data (radix: 2)",
+                description: "Convert to int from binary data (radix: 2).",
                 example: "'1101' | into int --radix 2",
                 result: Some(Value::test_int(13)),
             },
             Example {
-                description: "Convert to int from hex",
+                description: "Convert to int from hex.",
                 example: "'FF' |  into int --radix 16",
                 result: Some(Value::test_int(255)),
             },
             Example {
-                description: "Convert octal string to int",
+                description: "Convert octal string to int.",
                 example: "'0o10132' | into int",
                 result: Some(Value::test_int(4186)),
             },
             Example {
-                description: "Convert 0 padded string to int",
+                description: "Convert 0 padded string to int.",
                 example: "'0010132' | into int",
                 result: Some(Value::test_int(10132)),
             },
             Example {
-                description: "Convert 0 padded string to int with radix 8",
+                description: "Convert 0 padded string to int with radix 8.",
                 example: "'0010132' | into int --radix 8",
                 result: Some(Value::test_int(4186)),
             },
             Example {
-                description: "Convert binary value to int",
+                description: "Convert binary value to int.",
                 example: "0x[10] | into int",
                 result: Some(Value::test_int(16)),
             },
             Example {
-                description: "Convert binary value to signed int",
+                description: "Convert binary value to signed int.",
                 example: "0x[a0] | into int --signed",
                 result: Some(Value::test_int(-96)),
             },
@@ -240,58 +241,59 @@ impl Command for SubCommand {
     }
 }
 
-fn action(input: &Value, args: &Arguments, span: Span) -> Value {
+fn action(input: &Value, args: &Arguments, head: Span) -> Value {
     let radix = args.radix;
     let signed = args.signed;
     let little_endian = args.little_endian;
     let val_span = input.span();
+
     match input {
         Value::Int { val: _, .. } => {
             if radix == 10 {
                 input.clone()
             } else {
-                convert_int(input, span, radix)
+                convert_int(input, head, radix)
             }
         }
-        Value::Filesize { val, .. } => Value::int(val.get(), span),
+        Value::Filesize { val, .. } => Value::int(val.get(), head),
         Value::Float { val, .. } => Value::int(
             {
                 if radix == 10 {
                     *val as i64
                 } else {
-                    match convert_int(&Value::int(*val as i64, span), span, radix).as_int() {
+                    match convert_int(&Value::int(*val as i64, head), head, radix).as_int() {
                         Ok(v) => v,
                         _ => {
                             return Value::error(
                                 ShellError::CantConvert {
                                     to_type: "float".to_string(),
                                     from_type: "int".to_string(),
-                                    span,
+                                    span: head,
                                     help: None,
                                 },
-                                span,
-                            )
+                                head,
+                            );
                         }
                     }
                 }
             },
-            span,
+            head,
         ),
         Value::String { val, .. } => {
             if radix == 10 {
-                match int_from_string(val, span) {
-                    Ok(val) => Value::int(val, span),
-                    Err(error) => Value::error(error, span),
+                match int_from_string(val, head) {
+                    Ok(val) => Value::int(val, head),
+                    Err(error) => Value::error(error, head),
                 }
             } else {
-                convert_int(input, span, radix)
+                convert_int(input, head, radix)
             }
         }
         Value::Bool { val, .. } => {
             if *val {
-                Value::int(1, span)
+                Value::int(1, head)
             } else {
-                Value::int(0, span)
+                Value::int(0, head)
             }
         }
         Value::Date { val, .. } => {
@@ -310,15 +312,15 @@ fn action(input: &Value, args: &Arguments, span: Span) -> Value {
                     ShellError::IncorrectValue {
                         msg: "DateTime out of range for timestamp: 1677-09-21T00:12:43Z to 2262-04-11T23:47:16".to_string(),
                         val_span,
-                        call_span: span,
+                        call_span: head,
                     },
-                    span,
+                    head,
                 )
             } else {
-                Value::int(val.timestamp_nanos_opt().unwrap_or_default(), span)
+                Value::int(val.timestamp_nanos_opt().unwrap_or_default(), head)
             }
         }
-        Value::Duration { val, .. } => Value::int(*val, span),
+        Value::Duration { val, .. } => Value::int(*val, head),
         Value::Binary { val, .. } => {
             use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
@@ -326,7 +328,7 @@ fn action(input: &Value, args: &Arguments, span: Span) -> Value {
             let size = val.len();
 
             if size == 0 {
-                return Value::int(0, span);
+                return Value::int(0, head);
             }
 
             if size > 8 {
@@ -334,22 +336,22 @@ fn action(input: &Value, args: &Arguments, span: Span) -> Value {
                     ShellError::IncorrectValue {
                         msg: format!("binary input is too large to convert to int ({size} bytes)"),
                         val_span,
-                        call_span: span,
+                        call_span: head,
                     },
-                    span,
+                    head,
                 );
             }
 
             match (little_endian, signed) {
-                (true, true) => Value::int(LittleEndian::read_int(&val, size), span),
-                (false, true) => Value::int(BigEndian::read_int(&val, size), span),
+                (true, true) => Value::int(LittleEndian::read_int(&val, size), head),
+                (false, true) => Value::int(BigEndian::read_int(&val, size), head),
                 (true, false) => {
                     while val.len() < 8 {
                         val.push(0);
                     }
                     val.resize(8, 0);
 
-                    Value::int(LittleEndian::read_i64(&val), span)
+                    Value::int(LittleEndian::read_i64(&val), head)
                 }
                 (false, false) => {
                     while val.len() < 8 {
@@ -357,7 +359,7 @@ fn action(input: &Value, args: &Arguments, span: Span) -> Value {
                     }
                     val.resize(8, 0);
 
-                    Value::int(BigEndian::read_i64(&val), span)
+                    Value::int(BigEndian::read_i64(&val), head)
                 }
             }
         }
@@ -368,10 +370,10 @@ fn action(input: &Value, args: &Arguments, span: Span) -> Value {
                 exp_input_type: "int, float, filesize, date, string, binary, duration, or bool"
                     .into(),
                 wrong_type: other.get_type().to_string(),
-                dst_span: span,
+                dst_span: head,
                 src_span: other.span(),
             },
-            span,
+            head,
         ),
     }
 }
@@ -403,7 +405,7 @@ fn convert_int(input: &Value, head: Span, radix: u32) -> Value {
                                 help: Some(e.to_string()),
                             },
                             head,
-                        )
+                        );
                     }
                 }
             }
@@ -456,7 +458,7 @@ fn int_from_string(a_string: &str, span: Span) -> Result<i64, ShellError> {
                         from_type: "string".to_string(),
                         span,
                         help: Some(r#"digits following "0b" can only be 0 or 1"#.to_string()),
-                    })
+                    });
                 }
             };
             Ok(num)
@@ -486,7 +488,7 @@ fn int_from_string(a_string: &str, span: Span) -> Result<i64, ShellError> {
                         from_type: "string".to_string(),
                         span,
                         help: Some(r#"octal digits following "0o" should be in 0-7"#.to_string()),
-                    })
+                    });
                 }
             };
             Ok(num)
@@ -518,10 +520,9 @@ mod test {
     use nu_protocol::Type::Error;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    #[env(NU_TEST_LOCALE_OVERRIDE = "en_US.utf8")]
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(IntoInt)
     }
 
     #[test]

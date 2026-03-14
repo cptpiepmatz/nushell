@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
-use nu_engine::{command_prelude::*, ClosureEval};
-use nu_protocol::{engine::Closure, FromValue, IntoValue};
+use nu_engine::{ClosureEval, command_prelude::*};
+use nu_protocol::{FromValue, IntoValue, engine::Closure};
 
 #[derive(Clone)]
 pub struct GroupBy;
@@ -15,7 +15,7 @@ impl Command for GroupBy {
             .input_output_types(vec![(Type::List(Box::new(Type::Any)), Type::Any)])
             .switch(
                 "to-table",
-                "Return a table with \"groups\" and \"items\" columns",
+                "Return a table with \"groups\" and \"items\" columns.",
                 None,
             )
             .rest(
@@ -52,20 +52,20 @@ impl Command for GroupBy {
         group_by(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Group items by the \"type\" column's values",
+                description: "Group items by the \"type\" column's values.",
                 example: r#"ls | group-by type"#,
                 result: None,
             },
             Example {
-                description: "Group items by the \"foo\" column's values, ignoring records without a \"foo\" column",
+                description: "Group items by the \"foo\" column's values, ignoring records without a \"foo\" column.",
                 example: r#"open cool.json | group-by foo?"#,
                 result: None,
             },
             Example {
-                description: "Group using a block which is evaluated against each input value",
+                description: "Group using a block which is evaluated against each input value.",
                 example: "[foo.txt bar.csv baz.txt] | group-by { path parse | get extension }",
                 result: Some(Value::test_record(record! {
                     "txt" => Value::test_list(vec![
@@ -76,7 +76,7 @@ impl Command for GroupBy {
                 })),
             },
             Example {
-                description: "You can also group by raw values by leaving out the argument",
+                description: "You can also group by raw values by leaving out the argument.",
                 example: "['1' '3' '1' '3' '2' '1' '1'] | group-by",
                 result: Some(Value::test_record(record! {
                     "1" => Value::test_list(vec![
@@ -93,7 +93,7 @@ impl Command for GroupBy {
                 })),
             },
             Example {
-                description: "You can also output a table instead of a record",
+                description: "You can also output a table instead of a record.",
                 example: "['1' '3' '1' '3' '2' '1' '1'] | group-by --to-table",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -119,7 +119,7 @@ impl Command for GroupBy {
                 ])),
             },
             Example {
-                description: "Group bools, whether they are strings or actual bools",
+                description: "Group bools, whether they are strings or actual bools.",
                 example: r#"[true "true" false "false"] | group-by"#,
                 result: Some(Value::test_record(record! {
                     "true" => Value::test_list(vec![
@@ -133,7 +133,7 @@ impl Command for GroupBy {
                 })),
             },
             Example {
-                description: "Group items by multiple columns' values",
+                description: "Group items by multiple columns' values.",
                 example: r#"[
         [name, lang, year];
         [andres, rb, "2019"],
@@ -167,10 +167,10 @@ impl Command for GroupBy {
                                 })],
                             ),
                     }),
-                }))
+                })),
             },
             Example {
-                description: "Group items by multiple columns' values",
+                description: "Group items by multiple columns' values.",
                 example: r#"[
         [name, lang, year];
         [andres, rb, "2019"],
@@ -212,7 +212,38 @@ impl Command for GroupBy {
                             })
                         ]),
                     }),
-                ]))
+                ])),
+            },
+            Example {
+                description: "Group items by column and delete the original.",
+                example: r#"[
+        [name, lang, year];
+        [andres, rb, "2019"],
+        [jt, rs, "2019"],
+        [storm, rs, "2021"]
+    ]
+    | group-by lang | update cells { reject lang }"#,
+                #[cfg(test)] // Cannot test this example, it requires the nu-cmd-extra crate.
+                result: None,
+                #[cfg(not(test))]
+                result: Some(Value::test_record(record! {
+                        "rb" => Value::test_list(vec![Value::test_record(record! {
+                                        "name" => Value::test_string("andres"),
+                                        "year" => Value::test_string("2019"),
+                                })],
+                            ),
+                        "rs" => Value::test_list(
+                                    vec![
+                                    Value::test_record(record! {
+                                            "name" => Value::test_string("jt"),
+                                            "year" => Value::test_string("2019"),
+                                    }),
+                                    Value::test_record(record! {
+                                            "name" => Value::test_string("storm"),
+                                            "year" => Value::test_string("2021"),
+                                    })
+                            ]),
+                })),
             },
         ]
     }
@@ -227,11 +258,16 @@ pub fn group_by(
     let head = call.head;
     let groupers: Vec<Spanned<Grouper>> = call.rest(engine_state, stack, 0)?;
     let to_table = call.has_flag(engine_state, stack, "to-table")?;
-    let config = engine_state.get_config();
+    let config = &stack.get_config(engine_state);
 
     let values: Vec<Value> = input.into_iter().collect();
     if values.is_empty() {
-        return Ok(Value::record(Record::new(), head).into_pipeline_data());
+        let val = if to_table {
+            Value::list(Vec::new(), head)
+        } else {
+            Value::record(Record::new(), head)
+        };
+        return Ok(val.into_pipeline_data());
     }
 
     let grouped = match &groupers[..] {
@@ -322,11 +358,9 @@ fn group_cell_path(
     let mut groups = IndexMap::<_, Vec<_>>::new();
 
     for value in values.into_iter() {
-        let key = value
-            .clone()
-            .follow_cell_path(&column_name.members, false)?;
+        let key = value.follow_cell_path(&column_name.members)?;
 
-        if matches!(key, Value::Nothing { .. }) {
+        if key.is_nothing() {
             continue; // likely the result of a failed optional access, ignore this value
         }
 
@@ -346,7 +380,7 @@ fn group_closure(
 ) -> Result<IndexMap<String, Vec<Value>>, ShellError> {
     let mut groups = IndexMap::<_, Vec<_>>::new();
     let mut closure = ClosureEval::new(engine_state, stack, closure);
-    let config = engine_state.get_config();
+    let config = &stack.get_config(engine_state);
 
     for value in values {
         let key = closure
@@ -508,9 +542,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(GroupBy {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(GroupBy)
     }
 }

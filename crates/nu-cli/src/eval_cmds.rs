@@ -1,11 +1,13 @@
 use log::info;
-use nu_engine::{convert_env_values, eval_block};
+use nu_engine::eval_block;
 use nu_parser::parse;
 use nu_protocol::{
-    cli_error::report_compile_error,
+    PipelineData, ShellError, Spanned, Value,
     debugger::WithoutDebug,
     engine::{EngineState, Stack, StateWorkingSet},
-    report_parse_error, report_parse_warning, PipelineData, ShellError, Spanned, Value,
+    process::check_exit_status_future,
+    report_error::report_compile_error,
+    report_parse_error, report_parse_warning,
 };
 use std::sync::Arc;
 
@@ -50,9 +52,6 @@ pub fn evaluate_commands(
         }
     }
 
-    // Translate environment variables from Strings to Values
-    convert_env_values(engine_state, stack)?;
-
     // Parse the source code
     let (block, delta) = {
         if let Some(ref t_mode) = table_mode {
@@ -64,16 +63,16 @@ pub fn evaluate_commands(
 
         let output = parse(&mut working_set, None, commands.item.as_bytes(), false);
         if let Some(warning) = working_set.parse_warnings.first() {
-            report_parse_warning(&working_set, warning);
+            report_parse_warning(Some(stack), &working_set, warning);
         }
 
         if let Some(err) = working_set.parse_errors.first() {
-            report_parse_error(&working_set, err);
+            report_parse_error(Some(stack), &working_set, err);
             std::process::exit(1);
         }
 
         if let Some(err) = working_set.compile_errors.first() {
-            report_compile_error(&working_set, err);
+            report_compile_error(Some(stack), &working_set, err);
             std::process::exit(1);
         }
 
@@ -86,7 +85,8 @@ pub fn evaluate_commands(
     // Run the block
     let pipeline = eval_block::<WithoutDebug>(engine_state, stack, &block, input)?;
 
-    if let PipelineData::Value(Value::Error { error, .. }, ..) = pipeline {
+    let pipeline_data = pipeline.body;
+    if let PipelineData::Value(Value::Error { error, .. }, ..) = pipeline_data {
         return Err(*error);
     }
 
@@ -95,9 +95,12 @@ pub fn evaluate_commands(
             t_mode.coerce_str()?.parse().unwrap_or_default();
     }
 
-    print_pipeline(engine_state, stack, pipeline, no_newline)?;
-
+    print_pipeline(engine_state, stack, pipeline_data, no_newline)?;
     info!("evaluate {}:{}:{}", file!(), line!(), column!());
-
-    Ok(())
+    let pipefail = nu_experimental::PIPE_FAIL.get();
+    if !pipefail {
+        return Ok(());
+    }
+    // After print pipeline, need to check exit status to implement pipeline feature.
+    check_exit_status_future(pipeline.exit)
 }

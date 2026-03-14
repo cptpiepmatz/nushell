@@ -1,4 +1,4 @@
-use crate::{update::Update, CustomValuePlugin};
+use crate::{CustomValuePlugin, update::Update};
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, LabeledError, Signature, SyntaxShape, Value};
 
@@ -20,7 +20,7 @@ impl SimplePluginCommand for UpdateArg {
             .required(
                 "custom_value",
                 SyntaxShape::Any,
-                "the custom value to update",
+                "The custom value to update.",
             )
             .category(Category::Experimental)
     }

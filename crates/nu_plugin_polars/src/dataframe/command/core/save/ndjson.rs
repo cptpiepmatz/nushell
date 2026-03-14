@@ -1,30 +1,46 @@
-use std::{fs::File, io::BufWriter, path::Path};
+use std::{fs::File, io::BufWriter, path::PathBuf, sync::Arc};
 
+use log::debug;
 use nu_plugin::EvaluatedCall;
-use nu_protocol::{ShellError, Span};
-use polars::prelude::{JsonWriter, SerWriter};
-use polars_io::json::JsonWriterOptions;
+use nu_protocol::ShellError;
+use polars::prelude::{
+    FileWriteFormat, JsonWriter, NDJsonWriterOptions, SerWriter, UnifiedSinkArgs,
+};
 
-use crate::values::{NuDataFrame, NuLazyFrame};
+use crate::{
+    command::core::resource::Resource,
+    values::{NuDataFrame, NuLazyFrame},
+};
 
 use super::polars_file_save_error;
 
 pub(crate) fn command_lazy(
     _call: &EvaluatedCall,
     lazy: &NuLazyFrame,
-    file_path: &Path,
-    file_span: Span,
+    resource: Resource,
 ) -> Result<(), ShellError> {
+    let file_path = resource.as_string();
+    let file_span = resource.span;
+    debug!("Writing ndjson file {file_path}");
     lazy.to_polars()
-        .sink_json(file_path, JsonWriterOptions::default())
+        .sink(
+            resource.clone().into(),
+            FileWriteFormat::NDJson(NDJsonWriterOptions::default()),
+            UnifiedSinkArgs {
+                cloud_options: resource.cloud_options.map(Arc::new),
+                ..Default::default()
+            },
+        )
+        .and_then(|l| l.collect())
         .map_err(|e| polars_file_save_error(e, file_span))
+        .map(|_| {
+            debug!("Wrote ndjson file {file_path}");
+        })
 }
 
-pub(crate) fn command_eager(
-    df: &NuDataFrame,
-    file_path: &Path,
-    file_span: Span,
-) -> Result<(), ShellError> {
+pub(crate) fn command_eager(df: &NuDataFrame, resource: Resource) -> Result<(), ShellError> {
+    let file_span = resource.span;
+    let file_path: PathBuf = resource.as_path_buf();
     let file = File::create(file_path).map_err(|e| ShellError::GenericError {
         error: format!("Error with file name: {e}"),
         msg: "".into(),
@@ -52,12 +68,12 @@ pub mod test {
     use crate::command::core::save::test::{test_eager_save, test_lazy_save};
 
     #[test]
-    pub fn test_arrow_eager_save() -> Result<(), Box<dyn std::error::Error>> {
+    pub fn test_ndjson_eager_save() -> Result<(), Box<dyn std::error::Error>> {
         test_eager_save("ndjson")
     }
 
     #[test]
-    pub fn test_arrow_lazy_save() -> Result<(), Box<dyn std::error::Error>> {
+    pub fn test_ndjson_lazy_save() -> Result<(), Box<dyn std::error::Error>> {
         test_lazy_save("ndjson")
     }
 }

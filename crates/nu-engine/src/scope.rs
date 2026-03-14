@@ -1,7 +1,8 @@
 use nu_protocol::{
+    CommandWideCompleter, DeclId, ModuleId, Signature, Span, Type, Value, VarId,
     ast::Expr,
     engine::{Command, EngineState, Stack, Visibility},
-    record, DeclId, ModuleId, Signature, Span, SyntaxShape, Type, Value, VarId,
+    record,
 };
 use std::{cmp::Ordering, collections::HashMap};
 
@@ -56,14 +57,21 @@ impl<'e, 's> ScopeData<'e, 's> {
             let var_type = Value::string(var.ty.to_string(), span);
             let is_const = Value::bool(var.const_val.is_some(), span);
 
-            let var_value = self
-                .stack
-                .get_var(**var_id, span)
+            let var_value_result = self.stack.get_var(**var_id, span);
+
+            // Skip variables that have no value in the stack and are not constants.
+            // This ensures that variables deleted with unlet disappear from scope variables.
+            if var_value_result.is_err() && var.const_val.is_none() {
+                continue;
+            }
+
+            let var_value = var_value_result
                 .ok()
                 .or(var.const_val.clone())
                 .unwrap_or(Value::nothing(span));
 
             let var_id_val = Value::int(var_id.get() as i64, span);
+            let memory_size = Value::int(var_value.memory_size() as i64, span);
 
             vars.push(Value::record(
                 record! {
@@ -72,6 +80,7 @@ impl<'e, 's> ScopeData<'e, 's> {
                     "value" => var_value,
                     "is_const" => is_const,
                     "var_id" => var_id_val,
+                    "mem_size" => memory_size,
                 },
                 span,
             ));
@@ -99,7 +108,21 @@ impl<'e, 's> ScopeData<'e, 's> {
                             record! {
                                 "description" => Value::string(x.description, span),
                                 "example" => Value::string(x.example, span),
-                                "result" => x.result.unwrap_or(Value::nothing(span)),
+                                "result" => x.result.unwrap_or(Value::nothing(span)).with_span(span),
+                            },
+                            span,
+                        )
+                    })
+                    .collect();
+
+                let attributes = decl
+                    .attributes()
+                    .into_iter()
+                    .map(|(name, value)| {
+                        Value::record(
+                            record! {
+                                "name" => Value::string(name, span),
+                                "value" => value,
                             },
                             span,
                         )
@@ -112,12 +135,18 @@ impl<'e, 's> ScopeData<'e, 's> {
                     "signatures" => self.collect_signatures(&signature, span),
                     "description" => Value::string(decl.description(), span),
                     "examples" => Value::list(examples, span),
+                    "attributes" => Value::list(attributes, span),
                     "type" => Value::string(decl.command_type().to_string(), span),
                     "is_sub" => Value::bool(decl.is_sub(), span),
                     "is_const" => Value::bool(decl.is_const(), span),
                     "creates_scope" => Value::bool(signature.creates_scope, span),
                     "extra_description" => Value::string(decl.extra_description(), span),
                     "search_terms" => Value::string(decl.search_terms().join(", "), span),
+                    "complete" => match signature.complete {
+                        Some(CommandWideCompleter::Command(decl_id)) => Value::int(decl_id.get() as i64, span),
+                        Some(CommandWideCompleter::External) => Value::string("external", span),
+                        None => Value::nothing(span),
+                    },
                     "decl_id" => Value::int(decl_id.get() as i64, span),
                 };
 
@@ -190,7 +219,7 @@ impl<'e, 's> ScopeData<'e, 's> {
                 "is_optional" => Value::bool(false, span),
                 "short_flag" => Value::nothing(span),
                 "description" => Value::nothing(span),
-                "custom_completion" => Value::nothing(span),
+                "completion" => Value::nothing(span),
                 "parameter_default" => Value::nothing(span),
             },
             span,
@@ -198,7 +227,11 @@ impl<'e, 's> ScopeData<'e, 's> {
 
         // required_positional
         for req in &signature.required_positional {
-            let custom = extract_custom_completion_from_arg(self.engine_state, &req.shape);
+            let completion = req
+                .completion
+                .as_ref()
+                .map(|compl| compl.to_value(self.engine_state, span))
+                .unwrap_or(Value::nothing(span));
 
             sig_records.push(Value::record(
                 record! {
@@ -208,7 +241,7 @@ impl<'e, 's> ScopeData<'e, 's> {
                     "is_optional" => Value::bool(false, span),
                     "short_flag" => Value::nothing(span),
                     "description" => Value::string(&req.desc, span),
-                    "custom_completion" => Value::string(custom, span),
+                    "completion" => completion,
                     "parameter_default" => Value::nothing(span),
                 },
                 span,
@@ -217,7 +250,12 @@ impl<'e, 's> ScopeData<'e, 's> {
 
         // optional_positional
         for opt in &signature.optional_positional {
-            let custom = extract_custom_completion_from_arg(self.engine_state, &opt.shape);
+            let completion = opt
+                .completion
+                .as_ref()
+                .map(|compl| compl.to_value(self.engine_state, span))
+                .unwrap_or(Value::nothing(span));
+
             let default = if let Some(val) = &opt.default_value {
                 val.clone()
             } else {
@@ -232,7 +270,7 @@ impl<'e, 's> ScopeData<'e, 's> {
                     "is_optional" => Value::bool(true, span),
                     "short_flag" => Value::nothing(span),
                     "description" => Value::string(&opt.desc, span),
-                    "custom_completion" => Value::string(custom, span),
+                    "completion" => completion,
                     "parameter_default" => default,
                 },
                 span,
@@ -242,7 +280,11 @@ impl<'e, 's> ScopeData<'e, 's> {
         // rest_positional
         if let Some(rest) = &signature.rest_positional {
             let name = if rest.name == "rest" { "" } else { &rest.name };
-            let custom = extract_custom_completion_from_arg(self.engine_state, &rest.shape);
+            let completion = rest
+                .completion
+                .as_ref()
+                .map(|compl| compl.to_value(self.engine_state, span))
+                .unwrap_or(Value::nothing(span));
 
             sig_records.push(Value::record(
                 record! {
@@ -252,7 +294,7 @@ impl<'e, 's> ScopeData<'e, 's> {
                     "is_optional" => Value::bool(true, span),
                     "short_flag" => Value::nothing(span),
                     "description" => Value::string(&rest.desc, span),
-                    "custom_completion" => Value::string(custom, span),
+                    "completion" => completion,
                     // rest_positional does have default, but parser prohibits specifying it?!
                     "parameter_default" => Value::nothing(span),
                 },
@@ -269,11 +311,14 @@ impl<'e, 's> ScopeData<'e, 's> {
                 continue;
             }
 
-            let mut custom_completion_command_name: String = "".to_string();
+            let completion = named
+                .completion
+                .as_ref()
+                .map(|compl| compl.to_value(self.engine_state, span))
+                .unwrap_or(Value::nothing(span));
+
             let shape = if let Some(arg) = &named.arg {
                 flag_type = Value::string("named", span);
-                custom_completion_command_name =
-                    extract_custom_completion_from_arg(self.engine_state, arg);
                 Value::string(arg.to_string(), span)
             } else {
                 flag_type = Value::string("switch", span);
@@ -300,7 +345,7 @@ impl<'e, 's> ScopeData<'e, 's> {
                     "is_optional" => Value::bool(!named.required, span),
                     "short_flag" => short_flag,
                     "description" => Value::string(&named.desc, span),
-                    "custom_completion" => Value::string(custom_completion_command_name, span),
+                    "completion" => completion,
                     "parameter_default" => default,
                 },
                 span,
@@ -316,7 +361,7 @@ impl<'e, 's> ScopeData<'e, 's> {
                 "is_optional" => Value::bool(false, span),
                 "short_flag" => Value::nothing(span),
                 "description" => Value::nothing(span),
-                "custom_completion" => Value::nothing(span),
+                "completion" => Value::nothing(span),
                 "parameter_default" => Value::nothing(span),
             },
             span,
@@ -526,17 +571,6 @@ impl<'e, 's> ScopeData<'e, 's> {
             span,
         )
     }
-}
-
-fn extract_custom_completion_from_arg(engine_state: &EngineState, shape: &SyntaxShape) -> String {
-    return match shape {
-        SyntaxShape::CompleterWrapper(_, custom_completion_decl_id) => {
-            let custom_completion_command = engine_state.get_decl(*custom_completion_decl_id);
-            let custom_completion_command_name: &str = custom_completion_command.name();
-            custom_completion_command_name.to_string()
-        }
-        _ => "".to_string(),
-    };
 }
 
 fn sort_rows(decls: &mut [Value]) {

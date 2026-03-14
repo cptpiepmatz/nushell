@@ -2,29 +2,33 @@
 //        overall reduce the redundant calls to StyleComputer etc.
 //        the goal is to configure it once...
 
-use std::{collections::VecDeque, io::IsTerminal, io::Read, path::PathBuf, str::FromStr};
+use std::{collections::VecDeque, io::Read, path::PathBuf, str::FromStr, time::Duration};
 
+use devicons::icon_for_file;
 use lscolors::{LsColors, Style};
+use nu_color_config::lookup_ansi_color_style;
 use url::Url;
 use web_time::Instant;
 
-use nu_color_config::{color_from_hex, StyleComputer, TextStyle};
+use nu_color_config::{StyleComputer, TextStyle, color_from_hex};
 use nu_engine::{command_prelude::*, env_to_string};
 use nu_path::form::Absolute;
 use nu_pretty_hex::HexConfig;
 use nu_protocol::{
-    ByteStream, Config, DataSource, ListStream, PipelineMetadata, Signals, TableMode, ValueIterator,
+    ByteStream, Config, DataSource, ListStream, PipelineMetadata, Signals, TableMode,
+    ValueIterator,
+    shell_error::{bridge::ShellErrorBridge, io::IoError},
 };
 use nu_table::{
-    common::configure_table, CollapsedTable, ExpandedTable, JustTable, NuRecordsValue, NuTable,
-    StringResult, TableOpts, TableOutput,
+    CollapsedTable, ExpandedTable, JustTable, NuTable, StringResult, TableOpts, TableOutput,
+    common::configure_table,
 };
 use nu_utils::{get_ls_colors, terminal_size};
 
 type ShellResult<T> = Result<T, ShellError>;
 type NuPathBuf = nu_path::PathBuf<Absolute>;
+type NuPath = nu_path::Path<Absolute>;
 
-const STREAM_PAGE_SIZE: usize = 1000;
 const DEFAULT_TABLE_WIDTH: usize = 80;
 
 #[derive(Clone)]
@@ -52,54 +56,57 @@ impl Command for Table {
         Signature::build("table")
             .input_output_types(vec![(Type::Any, Type::Any)])
             // TODO: make this more precise: what turns into string and what into raw stream
-            .named(
-                "theme",
-                SyntaxShape::String,
-                "set a table mode/theme",
-                Some('t'),
+            .param(
+                Flag::new("theme")
+                    .short('t')
+                    .arg(SyntaxShape::String)
+                    .desc("Set a table mode/theme.")
+                    .completion(Completion::new_list(SUPPORTED_TABLE_MODES)),
             )
             .named(
                 "index",
                 SyntaxShape::Any,
-                "enable (true) or disable (false) the #/index column or set the starting index",
+                "Enable (true) or disable (false) the #/index column or set the starting index.",
                 Some('i'),
             )
             .named(
                 "width",
                 SyntaxShape::Int,
-                "number of terminal columns wide (not output columns)",
+                "Number of terminal columns wide (not output columns).",
                 Some('w'),
             )
             .switch(
                 "expand",
-                "expand the table structure in a light mode",
+                "Expand the table structure in a light mode.",
                 Some('e'),
             )
             .named(
                 "expand-deep",
                 SyntaxShape::Int,
-                "an expand limit of recursion which will take place, must be used with --expand",
+                "An expand limit of recursion which will take place, must be used with --expand.",
                 Some('d'),
             )
-            .switch("flatten", "Flatten simple arrays", None)
+            .switch("flatten", "Flatten simple arrays.", None)
             .named(
                 "flatten-separator",
                 SyntaxShape::String,
-                "sets a separator when 'flatten' used",
+                "Sets a separator when 'flatten' is used.",
                 None,
             )
             .switch(
                 "collapse",
-                "expand the table structure in collapse mode.\nBe aware collapse mode currently doesn't support width control",
+                "Expand the table structure in collapse mode.\nBe aware collapse mode currently doesn't support width control.",
                 Some('c'),
             )
             .named(
                 "abbreviated",
                 SyntaxShape::Int,
-                "abbreviate the data in the table by truncating the middle part and only showing amount provided on top and bottom",
+                "Abbreviate the data in the table by truncating the middle part and only showing amount provided on top and bottom.",
                 Some('a'),
             )
-            .switch("list", "list available table modes/themes", Some('l'))
+            .switch("list", "List available table modes/themes.", Some('l'))
+            .switch("icons", "Add icons to file paths in tables.", Some('o'),
+            )
             .category(Category::Viewers)
     }
 
@@ -119,7 +126,7 @@ impl Command for Table {
 
         let input = CmdInput::parse(engine_state, stack, call, input)?;
 
-        // reset vt processing, aka ansi because illbehaved externals can break it
+        // reset vt processing, aka ansi because ill behaved externals can break it
         #[cfg(windows)]
         {
             let _ = nu_utils::enable_vt_processing();
@@ -128,7 +135,7 @@ impl Command for Table {
         handle_table_command(input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "List the files in current directory, with indexes starting from 1",
@@ -151,7 +158,7 @@ impl Command for Table {
             },
             Example {
                 description: "Render data in table view (expanded)",
-                example: r#"[[a b]; [1 2] [2 [4 4]]] | table --expand"#,
+                example: r#"[[a b]; [1 2] [3 [4 4]]] | table --expand"#,
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
                         "a" =>  Value::test_int(1),
@@ -168,7 +175,7 @@ impl Command for Table {
             },
             Example {
                 description: "Render data in table view (collapsed)",
-                example: r#"[[a b]; [1 2] [2 [4 4]]] | table --collapse"#,
+                example: r#"[[a b]; [1 2] [3 [4 4]]] | table --collapse"#,
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
                         "a" =>  Value::test_int(1),
@@ -185,27 +192,47 @@ impl Command for Table {
             },
             Example {
                 description: "Change the table theme to the specified theme for a single run",
-                example: r#"[[a b]; [1 2] [2 [4 4]]] | table --theme basic"#,
+                example: r#"[[a b]; [1 2] [3 [4 4]]] | table --theme basic"#,
                 result: None,
             },
             Example {
                 description: "Force showing of the #/index column for a single run",
-                example: r#"[[a b]; [1 2] [2 [4 4]]] | table -i true"#,
+                example: r#"[[a b]; [1 2] [3 [4 4]]] | table -i true"#,
                 result: None,
             },
             Example {
-                description:
-                    "Set the starting number of the #/index column to 100 for a single run",
-                example: r#"[[a b]; [1 2] [2 [4 4]]] | table -i 100"#,
+                description: "Set the starting number of the #/index column to 100 for a single run",
+                example: r#"[[a b]; [1 2] [3 [4 4]]] | table -i 100"#,
                 result: None,
             },
             Example {
                 description: "Force hiding of the #/index column for a single run",
-                example: r#"[[a b]; [1 2] [2 [4 4]]] | table -i false"#,
+                example: r#"[[a b]; [1 2] [3 [4 4]]] | table -i false"#,
                 result: None,
             },
         ]
     }
+}
+
+pub(crate) fn render_value_as_plain_table_text(
+    engine_state: &EngineState,
+    stack: &mut Stack,
+    value: Value,
+    span: Span,
+) -> ShellResult<String> {
+    let call = Call::new(span);
+    let input = value.into_pipeline_data();
+    let input = CmdInput::parse(engine_state, stack, &call, input)?;
+    let output = handle_table_command(input)?;
+    let output = output.into_value(span)?;
+    let config = stack.get_config(engine_state);
+
+    let text = match output {
+        Value::String { val, .. } => val,
+        other => other.to_expanded_string("", &config),
+    };
+
+    Ok(nu_utils::strip_ansi_string_likely(text))
 }
 
 #[derive(Debug, Clone)]
@@ -216,6 +243,7 @@ struct TableConfig {
     abbreviation: Option<usize>,
     index: Option<usize>,
     use_ansi_coloring: bool,
+    icons: bool,
 }
 
 impl TableConfig {
@@ -226,6 +254,7 @@ impl TableConfig {
         abbreviation: Option<usize>,
         index: Option<usize>,
         use_ansi_coloring: bool,
+        icons: bool,
     ) -> Self {
         Self {
             view,
@@ -234,6 +263,7 @@ impl TableConfig {
             abbreviation,
             index,
             use_ansi_coloring,
+            icons,
         }
     }
 }
@@ -260,6 +290,7 @@ struct CLIArgs {
     collapse: bool,
     index: Option<usize>,
     use_ansi_coloring: bool,
+    icons: bool,
 }
 
 fn parse_table_config(
@@ -278,6 +309,7 @@ fn parse_table_config(
         args.abbrivation,
         args.index,
         args.use_ansi_coloring,
+        args.icons,
     );
 
     Ok(cfg)
@@ -309,8 +341,9 @@ fn get_cli_args(call: &Call<'_>, state: &EngineState, stack: &mut Stack) -> Shel
     let theme =
         get_theme_flag(call, state, stack)?.unwrap_or_else(|| stack.get_config(state).table.mode);
     let index = get_index_flag(call, state, stack)?;
+    let icons = call.has_flag(state, stack, "icons")?;
 
-    let use_ansi_coloring = state.get_config().use_ansi_coloring.get(state);
+    let use_ansi_coloring = stack.get_config(state).use_ansi_coloring.get(state);
 
     Ok(CLIArgs {
         theme,
@@ -323,6 +356,7 @@ fn get_cli_args(call: &Call<'_>, state: &EngineState, stack: &mut Stack) -> Shel
         width,
         index,
         use_ansi_coloring,
+        icons,
     })
 }
 
@@ -379,7 +413,7 @@ fn get_theme_flag(
                 to_type: String::from("theme"),
                 from_type: String::from("string"),
                 span: call.span(),
-                help: Some(format!("{}, but found '{}'.", err, theme)),
+                help: Some(format!("{err}, but found '{theme}'.")),
             })
         })
         .transpose()
@@ -424,13 +458,13 @@ fn handle_table_command(mut input: CmdInput<'_>) -> ShellResult<PipelineData> {
     match input.data {
         // Binary streams should behave as if they really are `binary` data, and printed as hex
         PipelineData::ByteStream(stream, _) if stream.type_() == ByteStreamType::Binary => Ok(
-            PipelineData::ByteStream(pretty_hex_stream(stream, input.call.head), None),
+            PipelineData::byte_stream(pretty_hex_stream(stream, input.call.head), None),
         ),
         PipelineData::ByteStream(..) => Ok(input.data),
         PipelineData::Value(Value::Binary { val, .. }, ..) => {
             let signals = input.engine_state.signals().clone();
             let stream = ByteStream::read_binary(val, input.call.head, signals);
-            Ok(PipelineData::ByteStream(
+            Ok(PipelineData::byte_stream(
                 pretty_hex_stream(stream, input.call.head),
                 None,
             ))
@@ -439,17 +473,17 @@ fn handle_table_command(mut input: CmdInput<'_>) -> ShellResult<PipelineData> {
         PipelineData::Value(Value::List { vals, .. }, metadata) => {
             let signals = input.engine_state.signals().clone();
             let stream = ListStream::new(vals.into_iter(), span, signals);
-            input.data = PipelineData::Empty;
+            input.data = PipelineData::empty();
 
             handle_row_stream(input, stream, metadata)
         }
         PipelineData::ListStream(stream, metadata) => {
-            input.data = PipelineData::Empty;
+            input.data = PipelineData::empty();
             handle_row_stream(input, stream, metadata)
         }
-        PipelineData::Value(Value::Record { val, .. }, ..) => {
-            input.data = PipelineData::Empty;
-            handle_record(input, val.into_owned())
+        PipelineData::Value(Value::Record { val, .. }, metadata) => {
+            input.data = PipelineData::empty();
+            handle_record(input, val.into_owned(), metadata)
         }
         PipelineData::Value(Value::Error { error, .. }, ..) => {
             // Propagate this error outward, so that it goes to stderr
@@ -464,7 +498,7 @@ fn handle_table_command(mut input: CmdInput<'_>) -> ShellResult<PipelineData> {
             let signals = input.engine_state.signals().clone();
             let stream =
                 ListStream::new(val.into_range_iter(span, Signals::empty()), span, signals);
-            input.data = PipelineData::Empty;
+            input.data = PipelineData::empty();
             handle_row_stream(input, stream, metadata)
         }
         x => Ok(x),
@@ -518,7 +552,10 @@ fn pretty_hex_stream(stream: ByteStream, span: Span) -> ByteStream {
                 (&mut reader)
                     .take(cfg.width as u64)
                     .read_to_end(&mut read_buf)
-                    .err_span(span)?;
+                    .map_err(|err| match ShellErrorBridge::try_from(err) {
+                        Ok(ShellErrorBridge(err)) => err,
+                        Err(err) => IoError::new(err, span, None).into(),
+                    })?;
 
                 if !read_buf.is_empty() {
                     nu_pretty_hex::hex_write(&mut write_buf, &read_buf, cfg, Some(true))
@@ -540,12 +577,21 @@ fn pretty_hex_stream(stream: ByteStream, span: Span) -> ByteStream {
     )
 }
 
-fn handle_record(input: CmdInput, mut record: Record) -> ShellResult<PipelineData> {
+fn handle_record(
+    input: CmdInput,
+    mut record: Record,
+    metadata: Option<PipelineMetadata>,
+) -> ShellResult<PipelineData> {
     let span = input.data.span().unwrap_or(input.call.head);
 
     if record.is_empty() {
-        let value =
-            create_empty_placeholder("record", input.cfg.width, input.engine_state, input.stack);
+        let value = create_empty_placeholder(
+            "record",
+            input.cfg.width,
+            input.engine_state,
+            input.stack,
+            input.cfg.use_ansi_coloring,
+        );
         let value = Value::string(value, span);
         return Ok(value.into_pipeline_data());
     };
@@ -555,6 +601,50 @@ fn handle_record(input: CmdInput, mut record: Record) -> ShellResult<PipelineDat
     }
 
     let config = input.get_config();
+
+    if let Some(PipelineMetadata {
+        data_source,
+        mut path_columns,
+        ..
+    }) = metadata
+    {
+        #[allow(deprecated)]
+        if data_source == DataSource::Ls {
+            path_columns.push(String::from("name"));
+        }
+        // Remove duplicates
+        path_columns.sort_unstable();
+        path_columns.dedup();
+
+        let ls_colors_env_str = match input.stack.get_env_var(input.engine_state, "LS_COLORS") {
+            Some(v) => Some(env_to_string(
+                "LS_COLORS",
+                v,
+                input.engine_state,
+                input.stack,
+            )?),
+            None => None,
+        };
+        let ls_colors = get_ls_colors(ls_colors_env_str);
+
+        for column in &path_columns {
+            if let Some(value) = record.get_mut(column) {
+                let span = value.span();
+                if let Value::String { val, .. } = value
+                    && let Some(val) = render_path_name(
+                        val,
+                        &config,
+                        &ls_colors,
+                        input.cwd.as_deref(),
+                        input.cfg.icons,
+                        span,
+                    )
+                {
+                    *value = val;
+                }
+            }
+        }
+    }
     let opts = create_table_opts(
         input.engine_state,
         input.stack,
@@ -608,7 +698,7 @@ fn build_table_kv(
     span: Span,
 ) -> StringResult {
     match table_view {
-        TableView::General => JustTable::kv_table(&record, opts),
+        TableView::General => JustTable::kv_table(record, opts),
         TableView::Expanded {
             limit,
             flatten,
@@ -625,13 +715,26 @@ fn build_table_kv(
 }
 
 fn build_table_batch(
-    vals: Vec<Value>,
+    mut vals: Vec<Value>,
     view: TableView,
     opts: TableOpts<'_>,
     span: Span,
 ) -> StringResult {
+    // convert each custom value to its base value so it can be properly
+    // displayed in a table
+    for val in &mut vals {
+        let span = val.span();
+
+        if let Value::Custom { val: custom, .. } = val {
+            *val = custom
+                .to_base_value(span)
+                .or_else(|err| Result::<_, ShellError>::Ok(Value::error(err, span)))
+                .expect("error converting custom value to base value")
+        }
+    }
+
     match view {
-        TableView::General => JustTable::table(&vals, opts),
+        TableView::General => JustTable::table(vals, opts),
         TableView::Expanded {
             limit,
             flatten,
@@ -653,46 +756,13 @@ fn handle_row_stream(
     metadata: Option<PipelineMetadata>,
 ) -> ShellResult<PipelineData> {
     let cfg = input.get_config();
-    let stream = match metadata.as_ref() {
-        // First, `ls` sources:
-        Some(PipelineMetadata {
-            data_source: DataSource::Ls,
-            ..
-        }) => {
-            let config = cfg.clone();
-            let ls_colors_env_str = match input.stack.get_env_var(input.engine_state, "LS_COLORS") {
-                Some(v) => Some(env_to_string(
-                    "LS_COLORS",
-                    v,
-                    input.engine_state,
-                    input.stack,
-                )?),
-                None => None,
-            };
-            let ls_colors = get_ls_colors(ls_colors_env_str);
 
-            stream.map(move |mut value| {
-                if let Value::Record { val: record, .. } = &mut value {
-                    // Only the name column gets special colors, for now
-                    if let Some(value) = record.to_mut().get_mut("name") {
-                        let span = value.span();
-                        if let Value::String { val, .. } = value {
-                            if let Some(val) =
-                                render_path_name(val, &config, &ls_colors, input.cwd.clone(), span)
-                            {
-                                *value = val;
-                            }
-                        }
-                    }
-                }
-                value
-            })
-        }
-        // Next, `to html -l` sources:
-        Some(PipelineMetadata {
+    let stream = if let Some(metadata) = metadata {
+        let stream = if let PipelineMetadata {
             data_source: DataSource::HtmlThemes,
             ..
-        }) => {
+        } = &metadata
+        {
             stream.map(|mut value| {
                 if let Value::Record { val: record, .. } = &mut value {
                     for (rec_col, rec_val) in record.to_mut().iter_mut() {
@@ -723,8 +793,60 @@ fn handle_row_stream(
                 }
                 value
             })
+        } else {
+            stream
+        };
+
+        let PipelineMetadata {
+            data_source,
+            mut path_columns,
+            ..
+        } = metadata;
+
+        #[allow(deprecated)]
+        if data_source == DataSource::Ls {
+            path_columns.push(String::from("name"));
         }
-        _ => stream,
+        // Remove duplicates
+        path_columns.sort_unstable();
+        path_columns.dedup();
+
+        let config = cfg.clone();
+        let ls_colors_env_str = match input.stack.get_env_var(input.engine_state, "LS_COLORS") {
+            Some(v) => Some(env_to_string(
+                "LS_COLORS",
+                v,
+                input.engine_state,
+                input.stack,
+            )?),
+            None => None,
+        };
+        let ls_colors = get_ls_colors(ls_colors_env_str);
+
+        stream.map(move |mut value| {
+            if let Value::Record { val: record, .. } = &mut value {
+                for column in &path_columns {
+                    if let Some(value) = record.to_mut().get_mut(column) {
+                        let span = value.span();
+                        if let Value::String { val, .. } = value
+                            && let Some(val) = render_path_name(
+                                val,
+                                &config,
+                                &ls_colors,
+                                input.cwd.as_deref(),
+                                input.cfg.icons,
+                                span,
+                            )
+                        {
+                            *value = val;
+                        }
+                    }
+                }
+            }
+            value
+        })
+    } else {
+        stream
     };
 
     let paginator = PagingTableCreator::new(
@@ -743,7 +865,7 @@ fn handle_row_stream(
         Signals::empty(),
         ByteStreamType::String,
     );
-    Ok(PipelineData::ByteStream(stream, None))
+    Ok(PipelineData::byte_stream(stream, None))
 }
 
 fn make_clickable_link(
@@ -854,13 +976,14 @@ impl Iterator for PagingTableCreator {
         match self.table_config.abbreviation {
             Some(abbr) => {
                 (batch, _, end) =
-                    stream_collect_abbriviated(&mut self.stream, abbr, self.engine_state.signals());
+                    stream_collect_abbreviated(&mut self.stream, abbr, self.engine_state.signals());
             }
             None => {
                 // Pull from stream until time runs out or we have enough items
                 (batch, end) = stream_collect(
                     &mut self.stream,
-                    STREAM_PAGE_SIZE,
+                    self.config.table.stream_page_size.get() as usize,
+                    self.config.table.batch_duration,
                     self.engine_state.signals(),
                 );
             }
@@ -884,8 +1007,14 @@ impl Iterator for PagingTableCreator {
                     self.table_config.width,
                     &self.engine_state,
                     &self.stack,
+                    self.table_config.use_ansi_coloring,
                 );
-                Some(Ok(result.into_bytes()))
+                let mut bytes = result.into_bytes();
+                // Add extra newline if show_empty is enabled
+                if !bytes.is_empty() {
+                    bytes.push(b'\n');
+                }
+                Some(Ok(bytes))
             } else {
                 None
             };
@@ -907,6 +1036,7 @@ impl Iterator for PagingTableCreator {
 fn stream_collect(
     stream: impl Iterator<Item = Value>,
     size: usize,
+    batch_duration: Duration,
     signals: &Signals,
 ) -> (Vec<Value>, bool) {
     let start_time = Instant::now();
@@ -916,12 +1046,13 @@ fn stream_collect(
     for (i, item) in stream.enumerate() {
         batch.push(item);
 
-        // If we've been buffering over a second, go ahead and send out what we have so far
-        if (Instant::now() - start_time).as_secs() >= 1 {
+        // We buffer until `$env.config.table.batch_duration`, then we send out what we have so far
+        if (Instant::now() - start_time) >= batch_duration {
             end = false;
             break;
         }
 
+        // Or until we reached `$env.config.table.stream_page_size`.
         if i + 1 == size {
             end = false;
             break;
@@ -935,7 +1066,7 @@ fn stream_collect(
     (batch, end)
 }
 
-fn stream_collect_abbriviated(
+fn stream_collect_abbreviated(
     stream: impl Iterator<Item = Value>,
     size: usize,
     signals: &Signals,
@@ -969,7 +1100,7 @@ fn stream_collect_abbriviated(
 
     let have_filled_list = head.len() == size && tail.len() == size;
     if have_filled_list {
-        let dummy = get_abbriviated_dummy(&head, &tail);
+        let dummy = get_abbreviated_dummy(&head, &tail);
         head.insert(size, dummy)
     }
 
@@ -978,7 +1109,7 @@ fn stream_collect_abbriviated(
     (head, read, end)
 }
 
-fn get_abbriviated_dummy(head: &[Value], tail: &VecDeque<Value>) -> Value {
+fn get_abbreviated_dummy(head: &[Value], tail: &VecDeque<Value>) -> Value {
     let dummy = || Value::string(String::from("..."), Span::unknown());
     let is_record_list = is_record_list(head.iter()) && is_record_list(tail.iter());
 
@@ -1006,7 +1137,8 @@ fn render_path_name(
     path: &str,
     config: &Config,
     ls_colors: &LsColors,
-    cwd: Option<NuPathBuf>,
+    cwd: Option<&NuPath>,
+    icons: bool,
     span: Span,
 ) -> Option<Value> {
     if !config.ls.use_ls_colors {
@@ -1024,6 +1156,9 @@ fn render_path_name(
     let style =
         ls_colors.style_for_path_with_metadata(stripped_path.as_ref(), metadata.ok().as_ref());
 
+    let file_icon = icon_for_file(path, &None);
+    let icon_style = lookup_ansi_color_style(file_icon.color);
+
     // clickable links don't work in remote SSH sessions
     let in_ssh_session = std::env::var("SSH_CLIENT").is_ok();
     //TODO: Deprecated show_clickable_links_in_ls in favor of shell_integration_osc8
@@ -1032,10 +1167,30 @@ fn render_path_name(
         && has_metadata
         && config.shell_integration.osc8;
 
-    let ansi_style = style.map(Style::to_nu_ansi_term_style).unwrap_or_default();
+    // If there is no style at all set it to use 'default' foreground and background
+    // colors. This prevents it being colored in tabled as string colors.
+    // To test this:
+    //   $env.LS_COLORS = 'fi=0'
+    //   $env.config.color_config.string = 'red'
+    // if a regular file without an extension is the color 'default' then it's working
+    // if a regular file without an extension is the color 'red' then it's not working
+    let ansi_style = style
+        .map(Style::to_nu_ansi_term_style)
+        .unwrap_or(nu_ansi_term::Style {
+            foreground: Some(nu_ansi_term::Color::Default),
+            background: Some(nu_ansi_term::Color::Default),
+            is_bold: false,
+            is_dimmed: false,
+            is_italic: false,
+            is_underline: false,
+            is_blink: false,
+            is_reverse: false,
+            is_hidden: false,
+            is_strikethrough: false,
+            prefix_with_reset: false,
+        });
 
-    let full_path = PathBuf::from(stripped_path.as_ref())
-        .canonicalize()
+    let full_path = std::path::absolute(stripped_path.as_ref())
         .unwrap_or_else(|_| PathBuf::from(stripped_path.as_ref()));
 
     let full_path_link = make_clickable_link(
@@ -1044,13 +1199,23 @@ fn render_path_name(
         show_clickable_links,
     );
 
-    let val = ansi_style.paint(full_path_link).to_string();
+    let val = if icons {
+        format!(
+            "{}  {}",
+            icon_style.paint(String::from(file_icon.icon)),
+            ansi_style.paint(full_path_link)
+        )
+    } else {
+        ansi_style.paint(full_path_link).to_string()
+    };
+
     Some(Value::string(val, span))
 }
 
 fn maybe_strip_color(output: String, use_ansi_coloring: bool) -> String {
-    // the terminal is for when people do ls from vim, there should be no coloring there
-    if !use_ansi_coloring || !std::io::stdout().is_terminal() {
+    // only use `use_ansi_coloring` here, it already includes `std::io::stdout().is_terminal()`
+    // when set to "auto"
+    if !use_ansi_coloring {
         // Draw the table without ansi colors
         nu_utils::strip_ansi_string_likely(output)
     } else {
@@ -1064,20 +1229,25 @@ fn create_empty_placeholder(
     termwidth: usize,
     engine_state: &EngineState,
     stack: &Stack,
+    use_ansi_coloring: bool,
 ) -> String {
     let config = stack.get_config(engine_state);
     if !config.table.show_empty {
         return String::new();
     }
 
-    let cell = NuRecordsValue::new(format!("empty {}", value_type_name));
-    let data = vec![vec![cell]];
-    let mut table = NuTable::from(data);
+    let cell = format!("empty {value_type_name}");
+    let mut table = NuTable::new(1, 1);
+    table.insert((0, 0), cell);
     table.set_data_style(TextStyle::default().dimmed());
     let mut out = TableOutput::from_table(table, false, false);
 
     let style_computer = &StyleComputer::from_config(engine_state, stack);
     configure_table(&mut out, &config, style_computer, TableMode::default());
+
+    if !use_ansi_coloring {
+        out.table.clear_all_colors();
+    }
 
     out.table
         .draw(termwidth)
@@ -1105,7 +1275,7 @@ fn convert_table_to_output(
             } else {
                 // assume this failed because the table was too wide
                 // TODO: more robust error classification
-                format!("Couldn't fit table into {} columns!", term_width)
+                format!("Couldn't fit table into {term_width} columns!")
             };
 
             Some(Ok(msg.as_bytes().to_vec()))
@@ -1114,26 +1284,34 @@ fn convert_table_to_output(
     }
 }
 
+const SUPPORTED_TABLE_MODES: &[&str] = &[
+    "basic",
+    "compact",
+    "compact_double",
+    "default",
+    "heavy",
+    "light",
+    "none",
+    "reinforced",
+    "rounded",
+    "thin",
+    "with_love",
+    "psql",
+    "markdown",
+    "dots",
+    "restructured",
+    "ascii_rounded",
+    "basic_compact",
+    "single",
+    "double",
+];
+
 fn supported_table_modes() -> Vec<Value> {
-    vec![
-        Value::test_string("basic"),
-        Value::test_string("compact"),
-        Value::test_string("compact_double"),
-        Value::test_string("default"),
-        Value::test_string("heavy"),
-        Value::test_string("light"),
-        Value::test_string("none"),
-        Value::test_string("reinforced"),
-        Value::test_string("rounded"),
-        Value::test_string("thin"),
-        Value::test_string("with_love"),
-        Value::test_string("psql"),
-        Value::test_string("markdown"),
-        Value::test_string("dots"),
-        Value::test_string("restructured"),
-        Value::test_string("ascii_rounded"),
-        Value::test_string("basic_compact"),
-    ]
+    SUPPORTED_TABLE_MODES
+        .iter()
+        .copied()
+        .map(Value::test_string)
+        .collect()
 }
 
 fn create_table_opts<'a>(

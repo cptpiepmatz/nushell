@@ -1,7 +1,7 @@
 use nu_protocol::{
+    CompileError, IntoSpanned, RegId, Span, Spanned,
     ast::Pattern,
     ir::{DataSlice, Instruction, IrAstRef, IrBlock, Literal},
-    CompileError, IntoSpanned, RegId, Span, Spanned,
 };
 
 /// A label identifier. Only exists while building code. Replaced with the actual target.
@@ -25,7 +25,7 @@ pub(crate) struct BlockBuilder {
     pub(crate) comments: Vec<String>,
     pub(crate) register_allocation_state: Vec<bool>,
     pub(crate) file_count: u32,
-    pub(crate) loop_stack: Vec<Loop>,
+    pub(crate) context_stack: ContextStack,
 }
 
 impl BlockBuilder {
@@ -41,7 +41,7 @@ impl BlockBuilder {
             comments: vec![],
             register_allocation_state: vec![true],
             file_count: 0,
-            loop_stack: vec![],
+            context_stack: ContextStack::new(),
         }
     }
 
@@ -195,7 +195,8 @@ impl BlockBuilder {
                         | Literal::RawString(_)
                         | Literal::CellPath(_)
                         | Literal::Date(_)
-                        | Literal::Nothing => Ok(()),
+                        | Literal::Nothing
+                        | Literal::Empty => Ok(()),
                     },
                 )
             }
@@ -203,12 +204,13 @@ impl BlockBuilder {
             Instruction::Move { dst, src } => allocate(&[*src], &[*dst]),
             Instruction::Clone { dst, src } => allocate(&[*src], &[*dst, *src]),
             Instruction::Collect { src_dst } => allocate(&[*src_dst], &[*src_dst]),
+            Instruction::TryCollect { src_dst } => allocate(&[*src_dst], &[*src_dst]),
             Instruction::Span { src_dst } => allocate(&[*src_dst], &[*src_dst]),
             Instruction::Drop { src } => allocate(&[*src], &[]),
             Instruction::Drain { src } => allocate(&[*src], &[]),
             Instruction::DrainIfEnd { src } => allocate(&[*src], &[]),
             Instruction::LoadVariable { dst, var_id: _ } => allocate(&[], &[*dst]),
-            Instruction::StoreVariable { var_id: _, src } => allocate(&[*src], &[]),
+            Instruction::StoreVariable { var_id: _, src } => allocate(&[*src], &[*src]),
             Instruction::DropVariable { var_id: _ } => Ok(()),
             Instruction::LoadEnv { dst, key: _ } => allocate(&[], &[*dst]),
             Instruction::LoadEnvOpt { dst, key: _ } => allocate(&[], &[*dst]),
@@ -281,8 +283,11 @@ impl BlockBuilder {
                 end_index: _,
             } => allocate(&[*stream], &[*dst, *stream]),
             Instruction::OnError { index: _ } => Ok(()),
+            Instruction::Finally { index: _ } => Ok(()),
             Instruction::OnErrorInto { index: _, dst } => allocate(&[], &[*dst]),
+            Instruction::FinallyInto { index: _, dst } => allocate(&[], &[*dst]),
             Instruction::PopErrorHandler => Ok(()),
+            Instruction::PopFinallyRun => Ok(()),
             Instruction::ReturnEarly { src } => allocate(&[*src], &[]),
             Instruction::Return { src } => allocate(&[*src], &[]),
         };
@@ -347,15 +352,23 @@ impl BlockBuilder {
     /// Deallocate a register and set it to `Empty`, if it is allocated
     pub(crate) fn drop_reg(&mut self, reg_id: RegId) -> Result<(), CompileError> {
         if self.is_allocated(reg_id) {
-            self.push(Instruction::Drop { src: reg_id }.into_spanned(Span::unknown()))?;
+            // try using the block Span if available, since that's slightly more helpful than Span::unknown
+            let span = self.block_span.unwrap_or(Span::unknown());
+            self.push(Instruction::Drop { src: reg_id }.into_spanned(span))?;
         }
         Ok(())
     }
 
     /// Set a register to `Empty`, but mark it as in-use, e.g. for input
     pub(crate) fn load_empty(&mut self, reg_id: RegId) -> Result<(), CompileError> {
-        self.drop_reg(reg_id)?;
-        self.mark_register(reg_id)
+        self.push(
+            Instruction::LoadLiteral {
+                dst: reg_id,
+                lit: Literal::Empty,
+            }
+            .into_spanned(self.block_span.unwrap_or(Span::unknown())),
+        )?;
+        Ok(())
     }
 
     /// Drain the stream in a register (fully consuming it)
@@ -468,20 +481,20 @@ impl BlockBuilder {
             break_label: self.label(None),
             continue_label: self.label(None),
         };
-        self.loop_stack.push(loop_);
+        self.context_stack.push_loop(loop_);
         loop_
     }
 
     /// True if we are currently in a loop.
     pub(crate) fn is_in_loop(&self) -> bool {
-        !self.loop_stack.is_empty()
+        self.context_stack.is_in_loop()
     }
 
     /// Add a loop breaking jump instruction.
     pub(crate) fn push_break(&mut self, span: Span) -> Result<(), CompileError> {
         let loop_ = self
-            .loop_stack
-            .last()
+            .context_stack
+            .current_loop()
             .ok_or_else(|| CompileError::NotInALoop {
                 msg: "`break` called from outside of a loop".into(),
                 span: Some(span),
@@ -492,8 +505,8 @@ impl BlockBuilder {
     /// Add a loop continuing jump instruction.
     pub(crate) fn push_continue(&mut self, span: Span) -> Result<(), CompileError> {
         let loop_ = self
-            .loop_stack
-            .last()
+            .context_stack
+            .current_loop()
             .ok_or_else(|| CompileError::NotInALoop {
                 msg: "`continue` called from outside of a loop".into(),
                 span: Some(span),
@@ -503,20 +516,19 @@ impl BlockBuilder {
 
     /// Pop the loop state. Checks that the loop being ended is the same one that was expected.
     pub(crate) fn end_loop(&mut self, loop_: Loop) -> Result<(), CompileError> {
-        let ended_loop = self
-            .loop_stack
+        let context_block = self
+            .context_stack
             .pop()
             .ok_or_else(|| CompileError::NotInALoop {
                 msg: "end_loop() called outside of a loop".into(),
                 span: None,
             })?;
 
-        if ended_loop == loop_ {
-            Ok(())
-        } else {
-            Err(CompileError::IncoherentLoopState {
+        match context_block {
+            ContextBlock::Loop(ended_loop) if ended_loop == loop_ => Ok(()),
+            _ => Err(CompileError::IncoherentLoopState {
                 block_span: self.block_span,
-            })
+            }),
         }
     }
 
@@ -556,7 +568,7 @@ impl BlockBuilder {
                 );
                 instruction.set_branch_target(target_index).map_err(|_| {
                     CompileError::SetBranchTargetOfNonBranchInstruction {
-                        instruction: format!("{:?}", instruction),
+                        instruction: format!("{instruction:?}"),
                         span: *span,
                     }
                 })?;
@@ -577,6 +589,20 @@ impl BlockBuilder {
             file_count: self.file_count,
         })
     }
+
+    pub(crate) fn begin_try(&mut self) {
+        self.context_stack.push_try();
+    }
+
+    pub(crate) fn end_try(&mut self) -> Result<(), CompileError> {
+        match self.context_stack.pop() {
+            Some(ContextBlock::Try) => Ok(()),
+            _ => Err(CompileError::NotInATry {
+                msg: "end_try() called outside of a try block".into(),
+                span: None,
+            }),
+        }
+    }
 }
 
 /// Keeps track of the `break` and `continue` target labels for a loop.
@@ -584,6 +610,53 @@ impl BlockBuilder {
 pub(crate) struct Loop {
     pub(crate) break_label: LabelId,
     pub(crate) continue_label: LabelId,
+}
+
+/// Blocks that modify/define behavior for the instructions they contain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContextBlock {
+    Loop(Loop),
+    Try,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ContextStack(Vec<ContextBlock>);
+
+impl ContextStack {
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn push_loop(&mut self, r#loop: Loop) {
+        self.0.push(ContextBlock::Loop(r#loop));
+    }
+
+    pub fn push_try(&mut self) {
+        self.0.push(ContextBlock::Try);
+    }
+
+    pub fn pop(&mut self) -> Option<ContextBlock> {
+        self.0.pop()
+    }
+
+    pub fn current_loop(&self) -> Option<&Loop> {
+        self.0.iter().rev().find_map(|cb| match cb {
+            ContextBlock::Loop(r#loop) => Some(r#loop),
+            _ => None,
+        })
+    }
+
+    pub fn try_block_depth_from_loop(&self) -> usize {
+        self.0
+            .iter()
+            .rev()
+            .take_while(|&cb| matches!(cb, ContextBlock::Try))
+            .count()
+    }
+
+    pub fn is_in_loop(&self) -> bool {
+        self.current_loop().is_some()
+    }
 }
 
 /// Add a new comment to an existing one

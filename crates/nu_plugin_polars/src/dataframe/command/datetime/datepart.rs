@@ -1,19 +1,20 @@
-use crate::values::NuExpression;
+use crate::values::{NuExpression, PolarsPluginType};
+use std::sync::Arc;
 
 use crate::{
-    dataframe::values::{Column, NuDataFrame},
-    values::CustomValueSupport,
     PolarsPlugin,
+    dataframe::values::{Column, NuDataFrame, NuSchema},
+    values::CustomValueSupport,
 };
 use chrono::{DateTime, FixedOffset};
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
     Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Spanned,
-    SyntaxShape, Type, Value,
+    SyntaxShape, Value,
 };
 use polars::{
     datatypes::{DataType, TimeUnit},
-    prelude::NamedFrom,
+    prelude::{Field, NamedFrom, Schema},
     series::Series,
 };
 
@@ -36,16 +37,16 @@ impl PluginCommand for ExprDatePart {
             .required(
                 "Datepart name",
                 SyntaxShape::String,
-                "Part of the date to capture.  Possible values are year, quarter, month, week, weekday, day, hour, minute, second, millisecond, microsecond, nanosecond",
+                "Part of the date to capture.  Possible values are year, quarter, month, week, weekday, day, hour, minute, second, millisecond, microsecond, nanosecond.",
             )
             .input_output_type(
-                Type::Custom("expression".into()),
-                Type::Custom("expression".into()),
+                PolarsPluginType::NuExpression.into(),
+                PolarsPluginType::NuExpression.into(),
             )
             .category(Category::Custom("expression".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         let dt = DateTime::<FixedOffset>::parse_from_str(
             "2021-12-30T01:02:03.123456789 +0000",
             "%Y-%m-%dT%H:%M:%S.%9f %z",
@@ -54,14 +55,20 @@ impl PluginCommand for ExprDatePart {
         vec![
             Example {
                 description: "Creates an expression to capture the year date part",
-                example: r#"[["2021-12-30T01:02:03.123456789"]] | polars into-df | polars as-datetime "%Y-%m-%dT%H:%M:%S.%9f" | polars with-column [(polars col datetime | polars datepart year | polars as datetime_year )]"#,
+                example: r#"[["2021-12-30T01:02:03.123456789"]] | polars into-df | polars as-datetime "%Y-%m-%dT%H:%M:%S.%9f" --naive | polars with-column [(polars col datetime | polars datepart year | polars as datetime_year )]"#,
                 result: Some(
                     NuDataFrame::try_from_columns(
                         vec![
                             Column::new("datetime".to_string(), vec![Value::test_date(dt)]),
                             Column::new("datetime_year".to_string(), vec![Value::test_int(2021)]),
                         ],
-                        None,
+                        Some(NuSchema::new(Arc::new(Schema::from_iter(vec![
+                            Field::new(
+                                "datetime".into(),
+                                DataType::Datetime(TimeUnit::Nanoseconds, None),
+                            ),
+                            Field::new("datetime_year".into(), DataType::Int64),
+                        ])))),
                     )
                     .expect("simple df for test should not fail")
                     .into_value(Span::test_data()),
@@ -69,7 +76,7 @@ impl PluginCommand for ExprDatePart {
             },
             Example {
                 description: "Creates an expression to capture multiple date parts",
-                example: r#"[["2021-12-30T01:02:03.123456789"]] | polars into-df | polars as-datetime "%Y-%m-%dT%H:%M:%S.%9f" |
+                example: r#"[["2021-12-30T01:02:03.123456789"]] | polars into-df | polars as-datetime "%Y-%m-%dT%H:%M:%S.%9f" --naive |
                 polars with-column [ (polars col datetime | polars datepart year | polars as datetime_year ),
                 (polars col datetime | polars datepart month | polars as datetime_month ),
                 (polars col datetime | polars datepart day | polars as datetime_day ),
@@ -124,6 +131,7 @@ impl PluginCommand for ExprDatePart {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let part: Spanned<String> = call.req(0)?;
 
         let expr = NuExpression::try_from_pipeline(plugin, input, call.head)?;
@@ -151,6 +159,7 @@ impl PluginCommand for ExprDatePart {
         }.into();
         expr.to_pipeline_data(plugin, engine, call.head)
             .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

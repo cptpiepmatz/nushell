@@ -1,6 +1,6 @@
-// use super::icons::{icon_for_file, iconify_style_ansi_to_nu};
-use super::icons::icon_for_file;
+use devicons::icon_for_file;
 use lscolors::Style;
+use nu_color_config::lookup_ansi_color_style;
 use nu_engine::{command_prelude::*, env_to_string};
 use nu_protocol::Config;
 use nu_term_grid::grid::{Alignment, Cell, Direction, Filling, Grid, GridOptions};
@@ -28,19 +28,19 @@ impl Command for Griddle {
             .named(
                 "width",
                 SyntaxShape::Int,
-                "number of terminal columns wide (not output columns)",
+                "Number of terminal columns wide (not output columns).",
                 Some('w'),
             )
-            .switch("color", "draw output with color", Some('c'))
+            .switch("color", "Draw output with color.", Some('c'))
             .switch(
                 "icons",
-                "draw output with icons (assumes nerd font is used)",
+                "Draw output with icons (assumes nerd font is used).",
                 Some('i'),
             )
             .named(
                 "separator",
                 SyntaxShape::String,
-                "character to separate grid with",
+                "Character to separate grid with.",
                 Some('s'),
             )
             .category(Category::Viewers)
@@ -140,7 +140,7 @@ prints out the list properly."#
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Render a simple list to a grid",
@@ -214,13 +214,9 @@ fn create_grid_output(
                 if icons_param {
                     let no_ansi = nu_utils::strip_ansi_unlikely(&value);
                     let path = cwd.join(no_ansi.as_ref());
-                    let icon = icon_for_file(&path, call.head)?;
+                    let file_icon = icon_for_file(&path, &None);
                     let ls_colors_style = ls_colors.style_for_path(path);
-
-                    let icon_style = match ls_colors_style {
-                        Some(c) => c.to_nu_ansi_term_style(),
-                        None => nu_ansi_term::Style::default(),
-                    };
+                    let icon_style = lookup_ansi_color_style(file_icon.color);
 
                     let ansi_style = ls_colors_style
                         .map(Style::to_nu_ansi_term_style)
@@ -228,7 +224,7 @@ fn create_grid_output(
 
                     let item = format!(
                         "{} {}",
-                        icon_style.paint(String::from(icon)),
+                        icon_style.paint(String::from(file_icon.icon)),
                         ansi_style.paint(value)
                     );
 
@@ -247,8 +243,8 @@ fn create_grid_output(
             } else if icons_param {
                 let no_ansi = nu_utils::strip_ansi_unlikely(&value);
                 let path = cwd.join(no_ansi.as_ref());
-                let icon = icon_for_file(&path, call.head)?;
-                let item = format!("{} {}", String::from(icon), value);
+                let file_icon = icon_for_file(&path, &None);
+                let item = format!("{} {}", String::from(file_icon.icon), value);
                 let mut cell = Cell::from(item);
                 cell.alignment = Alignment::Left;
                 grid.add(cell);
@@ -353,9 +349,8 @@ fn convert_to_list(
 #[cfg(test)]
 mod test {
     #[test]
-    fn test_examples() {
+    fn test_examples() -> nu_test_support::Result {
         use super::Griddle;
-        use crate::test_examples;
-        test_examples(Griddle {})
+        nu_test_support::test().examples(Griddle)
     }
 }

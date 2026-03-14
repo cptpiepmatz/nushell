@@ -5,15 +5,17 @@ use crate::{
 use log::trace;
 #[cfg(feature = "plugin")]
 use nu_cli::read_plugin_file;
-use nu_cli::{evaluate_commands, evaluate_file, evaluate_repl, EvaluateCommandsOpts};
+use nu_cli::{EvaluateCommandsOpts, evaluate_commands, evaluate_file, evaluate_repl};
 use nu_protocol::{
+    PipelineData, Spanned,
     engine::{EngineState, Stack},
-    report_shell_error, PipelineData, Spanned,
+    report_shell_error,
 };
 use nu_utils::perf;
 
 pub(crate) fn run_commands(
     engine_state: &mut EngineState,
+    mut stack: Stack,
     parsed_nu_cli_args: command::NushellCliArgs,
     use_color: bool,
     commands: &Spanned<String>,
@@ -23,9 +25,7 @@ pub(crate) fn run_commands(
     trace!("run_commands");
 
     let start_time = std::time::Instant::now();
-    let create_scaffold = nu_path::nu_config_dir().map_or(false, |p| !p.exists());
-
-    let mut stack = Stack::new();
+    let create_scaffold = nu_path::nu_config_dir().is_some_and(|p| !p.exists());
 
     // if the --no-config-file(-n) option is NOT passed, load the plugin file,
     // load the default env file or custom (depending on parsed_nu_cli_args.env_file),
@@ -45,8 +45,9 @@ pub(crate) fn run_commands(
                 engine_state,
                 &mut stack,
                 parsed_nu_cli_args.env_file,
-                true,
+                nu_utils::ConfigFileKind::Env,
                 create_scaffold,
+                true,
             );
         } else {
             config_files::read_default_env_file(engine_state, &mut stack)
@@ -55,7 +56,7 @@ pub(crate) fn run_commands(
         perf!("read env.nu", start_time, use_color);
 
         let start_time = std::time::Instant::now();
-        let create_scaffold = nu_path::nu_config_dir().map_or(false, |p| !p.exists());
+        let create_scaffold = nu_path::nu_config_dir().is_some_and(|p| !p.exists());
 
         // If we have a config file parameter *OR* we have a login shell parameter, read the config file
         if parsed_nu_cli_args.config_file.is_some() || parsed_nu_cli_args.login_shell.is_some() {
@@ -63,8 +64,9 @@ pub(crate) fn run_commands(
                 engine_state,
                 &mut stack,
                 parsed_nu_cli_args.config_file,
-                false,
+                nu_utils::ConfigFileKind::Config,
                 create_scaffold,
+                true,
             );
         }
 
@@ -73,7 +75,7 @@ pub(crate) fn run_commands(
         // If we have a login shell parameter, read the login file
         let start_time = std::time::Instant::now();
         if parsed_nu_cli_args.login_shell.is_some() {
-            config_files::read_loginshell_file(engine_state, &mut stack);
+            config_files::read_loginshell_file(engine_state, &mut stack, false);
         }
 
         perf!("read login.nu", start_time, use_color);
@@ -100,13 +102,14 @@ pub(crate) fn run_commands(
     perf!("evaluate_commands", start_time, use_color);
 
     if let Err(err) = result {
-        report_shell_error(engine_state, &err);
+        report_shell_error(Some(&stack), engine_state, &err);
         std::process::exit(err.exit_code().unwrap_or(0));
     }
 }
 
 pub(crate) fn run_file(
     engine_state: &mut EngineState,
+    mut stack: Stack,
     parsed_nu_cli_args: command::NushellCliArgs,
     use_color: bool,
     script_name: String,
@@ -114,7 +117,6 @@ pub(crate) fn run_file(
     input: PipelineData,
 ) {
     trace!("run_file");
-    let mut stack = Stack::new();
 
     // if the --no-config-file(-n) option is NOT passed, load the plugin file,
     // load the default env file or custom (depending on parsed_nu_cli_args.env_file),
@@ -123,7 +125,7 @@ pub(crate) fn run_file(
     // if the --no-config-file(-n) flag is passed, do not load plugin, env, or config files
     if parsed_nu_cli_args.no_config_file.is_none() {
         let start_time = std::time::Instant::now();
-        let create_scaffold = nu_path::nu_config_dir().map_or(false, |p| !p.exists());
+        let create_scaffold = nu_path::nu_config_dir().is_some_and(|p| !p.exists());
         #[cfg(feature = "plugin")]
         read_plugin_file(engine_state, parsed_nu_cli_args.plugin_file);
         perf!("read plugins", start_time, use_color);
@@ -135,8 +137,9 @@ pub(crate) fn run_file(
                 engine_state,
                 &mut stack,
                 parsed_nu_cli_args.env_file,
-                true,
+                nu_utils::ConfigFileKind::Env,
                 create_scaffold,
+                true,
             );
         } else {
             config_files::read_default_env_file(engine_state, &mut stack)
@@ -149,8 +152,9 @@ pub(crate) fn run_file(
                 engine_state,
                 &mut stack,
                 parsed_nu_cli_args.config_file,
-                false,
+                nu_utils::ConfigFileKind::Config,
                 create_scaffold,
+                true,
             );
         }
         perf!("read config.nu", start_time, use_color);
@@ -170,18 +174,18 @@ pub(crate) fn run_file(
     perf!("evaluate_file", start_time, use_color);
 
     if let Err(err) = result {
-        report_shell_error(engine_state, &err);
+        report_shell_error(Some(&stack), engine_state, &err);
         std::process::exit(err.exit_code().unwrap_or(0));
     }
 }
 
 pub(crate) fn run_repl(
     engine_state: &mut EngineState,
+    mut stack: Stack,
     parsed_nu_cli_args: command::NushellCliArgs,
     entire_start_time: std::time::Instant,
 ) -> Result<(), miette::ErrReport> {
     trace!("run_repl");
-    let mut stack = Stack::new();
     let start_time = std::time::Instant::now();
 
     if parsed_nu_cli_args.no_config_file.is_none() {

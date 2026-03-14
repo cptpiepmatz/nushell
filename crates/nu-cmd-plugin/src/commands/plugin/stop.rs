@@ -16,7 +16,7 @@ impl Command for PluginStop {
             .required(
                 "name",
                 SyntaxShape::String,
-                "The name, or filename, of the plugin to stop",
+                "The name, or filename, of the plugin to stop.",
             )
             .category(Category::Plugin)
     }
@@ -25,7 +25,7 @@ impl Command for PluginStop {
         "Stop an installed plugin if it was running."
     }
 
-    fn examples(&self) -> Vec<nu_protocol::Example> {
+    fn examples(&self) -> Vec<nu_protocol::Example<'_>> {
         vec![
             Example {
                 example: "plugin stop inc",
@@ -66,7 +66,7 @@ impl Command for PluginStop {
         }
 
         if found {
-            Ok(PipelineData::Empty)
+            Ok(PipelineData::empty())
         } else {
             Err(ShellError::GenericError {
                 error: format!("Failed to stop the `{}` plugin", name.item),

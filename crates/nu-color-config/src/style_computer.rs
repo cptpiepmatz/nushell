@@ -1,9 +1,10 @@
-use crate::{color_record_to_nustyle, lookup_ansi_color_style, text_style::Alignment, TextStyle};
+use crate::{TextStyle, color_record_to_nustyle, lookup_ansi_color_style, text_style::Alignment};
 use nu_ansi_term::{Color, Style};
 use nu_engine::ClosureEvalOnce;
 use nu_protocol::{
+    Span, Value,
     engine::{Closure, EngineState, Stack},
-    report_shell_error, Span, Value,
+    report_shell_error,
 };
 use std::{
     collections::HashMap,
@@ -70,7 +71,7 @@ impl<'a> StyleComputer<'a> {
                         }
                     }
                     Err(err) => {
-                        report_shell_error(self.engine_state, &err);
+                        report_shell_error(Some(self.stack), self.engine_state, &err);
                         Style::default()
                     }
                 }
@@ -112,27 +113,27 @@ impl<'a> StyleComputer<'a> {
         // Create the hashmap
         #[rustfmt::skip]
         let mut map: StyleMapping = [
-            ("separator".to_string(), ComputableStyle::Static(Color::White.normal())),
+            ("separator".to_string(), ComputableStyle::Static(Color::Default.normal())),
             ("leading_trailing_space_bg".to_string(), ComputableStyle::Static(Style::default().on(Color::Rgb(128, 128, 128)))),
             ("header".to_string(), ComputableStyle::Static(Color::Green.bold())),
             ("empty".to_string(), ComputableStyle::Static(Color::Blue.normal())),
             ("bool".to_string(), ComputableStyle::Static(Color::LightCyan.normal())),
-            ("int".to_string(), ComputableStyle::Static(Color::White.normal())),
+            ("int".to_string(), ComputableStyle::Static(Color::Default.normal())),
             ("filesize".to_string(), ComputableStyle::Static(Color::Cyan.normal())),
-            ("duration".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("date".to_string(), ComputableStyle::Static(Color::Purple.normal())),
-            ("range".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("float".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("string".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("nothing".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("binary".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("cell-path".to_string(), ComputableStyle::Static(Color::White.normal())),
+            ("duration".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("datetime".to_string(), ComputableStyle::Static(Color::Purple.normal())),
+            ("range".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("float".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("string".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("nothing".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("binary".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("cell-path".to_string(), ComputableStyle::Static(Color::Default.normal())),
             ("row_index".to_string(), ComputableStyle::Static(Color::Green.bold())),
-            ("record".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("list".to_string(), ComputableStyle::Static(Color::White.normal())),
-            ("block".to_string(), ComputableStyle::Static(Color::White.normal())),
+            ("record".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("list".to_string(), ComputableStyle::Static(Color::Default.normal())),
+            ("block".to_string(), ComputableStyle::Static(Color::Default.normal())),
             ("hints".to_string(), ComputableStyle::Static(Color::DarkGray.normal())),
-            ("search_result".to_string(), ComputableStyle::Static(Color::White.normal().on(Color::Red))),
+            ("search_result".to_string(), ComputableStyle::Static(Color::Default.normal().on(Color::Red))),
         ].into_iter().collect();
 
         for (key, value) in &config.color_config {
@@ -169,7 +170,7 @@ impl<'a> StyleComputer<'a> {
 
 // Because EngineState doesn't have Debug (Dec 2022),
 // this incomplete representation must be used.
-impl<'a> Debug for StyleComputer<'a> {
+impl Debug for StyleComputer<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("StyleComputer")
             .field("map", &self.map)
@@ -240,7 +241,11 @@ fn test_computable_style_closure_errors() {
     ];
     let actual_repl = nu!(nu_repl_code(&inp));
     // Check that the error was printed
-    assert!(actual_repl.err.contains("type mismatch for operator"));
+    assert!(
+        actual_repl
+            .err
+            .contains("nu::shell::operator_incompatible_types")
+    );
     // Check that the value was printed
     assert!(actual_repl.out.contains("bell"));
 }

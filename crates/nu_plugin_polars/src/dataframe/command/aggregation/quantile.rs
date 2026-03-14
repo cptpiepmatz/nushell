@@ -1,16 +1,15 @@
 use crate::{
+    PolarsPlugin,
     dataframe::values::{Column, NuDataFrame, NuLazyFrame},
     values::{
-        cant_convert_err, CustomValueSupport, NuExpression, PolarsPluginObject, PolarsPluginType,
+        CustomValueSupport, NuExpression, PolarsPluginObject, PolarsPluginType, cant_convert_err,
     },
-    PolarsPlugin,
 };
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
-use polars::prelude::{lit, QuantileMethod};
+use polars::prelude::{QuantileMethod, lit};
 
 #[derive(Clone)]
 pub struct LazyQuantile;
@@ -31,22 +30,26 @@ impl PluginCommand for LazyQuantile {
             .required(
                 "quantile",
                 SyntaxShape::Number,
-                "quantile value for quantile operation",
+                "Quantile value for quantile operation.",
             )
             .input_output_types(vec![
                 (
-                    Type::Custom("expression".into()),
-                    Type::Custom("expression".into()),
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
                 ),
                 (
-                    Type::Custom("dataframe".into()),
-                    Type::Custom("dataframe".into()),
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
                 ),
             ])
             .category(Category::Custom("lazyframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "quantile value from columns in a dataframe",
@@ -99,6 +102,7 @@ impl PluginCommand for LazyQuantile {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         let quantile: f64 = call.req(0)?;
         match PolarsPluginObject::try_from_value(plugin, &value)? {
@@ -123,6 +127,7 @@ impl PluginCommand for LazyQuantile {
             )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

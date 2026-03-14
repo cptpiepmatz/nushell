@@ -1,6 +1,4 @@
-use nu_test_support::fs::Stub::EmptyFile;
-use nu_test_support::nu;
-use nu_test_support::playground::Playground;
+use nu_test_support::{fs::Stub::EmptyFile, prelude::*};
 
 #[test]
 fn gets_the_last_row() {
@@ -97,8 +95,40 @@ fn fail_on_non_iterator() {
 }
 
 #[test]
-fn errors_on_empty_list_when_no_rows_given() {
+fn errors_on_empty_list_when_no_rows_given_in_strict_mode() {
+    let actual = nu!("[] | last --strict");
+    assert!(actual.err.contains("index too large"));
+}
+
+#[test]
+fn does_not_error_on_empty_list_when_no_rows_given() {
+    let actual = nu!("[] | last | describe");
+
+    assert!(actual.out.contains("nothing"));
+}
+
+#[test]
+fn returns_nothing_on_empty_list_when_no_rows_given() {
     let actual = nu!("[] | last");
 
-    assert!(actual.err.contains("index too large"));
+    assert_eq!(actual.out, "");
+}
+
+#[test]
+fn returns_d_on_empty_list_when_no_rows_given_with_default() {
+    let actual = nu!("[a b] | where $it == 'c' | last | default 'd'");
+
+    assert_eq!(actual.out, "d");
+}
+
+#[test]
+fn wrapping_last_with_optional_null_rows() -> Result {
+    let code = "def wraps-last [rows?: int] { [1, 2, 3] | last $rows }; wraps-last";
+    test().run(code).expect_value_eq(3)
+}
+
+#[test]
+fn wrapping_last_with_optional_explicit_rows() -> Result {
+    let code = "def wraps-last [rows?: int] { [1, 2, 3] | last $rows }; wraps-last 2 | length";
+    test().run(code).expect_value_eq(2)
 }

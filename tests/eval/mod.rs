@@ -56,8 +56,7 @@ fn test_eval(source: &str, expected_out: ExpectedOut) {
                 let compiled_regex = Regex::new(regex).expect("regex failed to compile");
                 assert!(
                     compiled_regex.is_match(&actual.err).unwrap_or(false),
-                    "eval err does not match: {}",
-                    regex
+                    "eval err does not match: {regex}"
                 );
                 assert!(!actual.status.success());
             }
@@ -88,7 +87,7 @@ fn literal_float() {
 
 #[test]
 fn literal_filesize() {
-    test_eval("30MiB", Eq("30.0 MiB"))
+    test_eval("30MB", Eq("30.0 MB"))
 }
 
 #[test]
@@ -103,7 +102,27 @@ fn literal_binary() {
 
 #[test]
 fn literal_closure() {
-    test_eval("{||}", Matches("<Closure"))
+    test_eval("{||}", Matches("closure_"))
+}
+
+#[test]
+fn literal_closure_to_nuon() {
+    test_eval("{||} | to nuon --serialize", Eq("\"{||}\""))
+}
+
+#[test]
+fn literal_closure_to_json() {
+    test_eval("{||} | to json --serialize", Eq("\"{||}\""))
+}
+
+#[test]
+fn literal_closure_to_toml() {
+    test_eval("{a: {||}} | to toml --serialize", Eq("a = \"{||}\""))
+}
+
+#[test]
+fn literal_closure_to_yaml() {
+    test_eval("{||} | to yaml --serialize", Eq("'{||}'"))
 }
 
 #[test]

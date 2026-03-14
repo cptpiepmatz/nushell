@@ -1,9 +1,9 @@
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct StrCapitalize;
 
-impl Command for SubCommand {
+impl Command for StrCapitalize {
     fn name(&self) -> &str {
         "str capitalize"
     }
@@ -29,7 +29,7 @@ impl Command for SubCommand {
     }
 
     fn description(&self) -> &str {
-        "Capitalize first letter of text."
+        "Capitalize the first letter of text."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -61,20 +61,20 @@ impl Command for SubCommand {
         operate(working_set.permanent(), call, input, column_paths)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Capitalize contents",
+                description: "Capitalize contents.",
                 example: "'good day' | str capitalize",
                 result: Some(Value::test_string("Good day")),
             },
             Example {
-                description: "Capitalize contents",
+                description: "Capitalize contents.",
                 example: "'anton' | str capitalize",
                 result: Some(Value::test_string("Anton")),
             },
             Example {
-                description: "Capitalize a column in a table",
+                description: "Capitalize a column in a table.",
                 example: "[[lang, gems]; [nu_test, 100]] | str capitalize lang",
                 result: Some(Value::test_list(vec![Value::test_record(record! {
                     "lang" => Value::test_string("Nu_test"),
@@ -142,9 +142,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StrCapitalize)
     }
 }

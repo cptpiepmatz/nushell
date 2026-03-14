@@ -1,7 +1,14 @@
-#[allow(deprecated)]
-use nu_engine::{command_prelude::*, current_dir, get_eval_block};
-use nu_protocol::{ast, DataSource, NuGlob, PipelineMetadata};
-use std::path::Path;
+use nu_engine::{command_prelude::*, eval_call};
+use nu_path::is_windows_device_path;
+use nu_protocol::{
+    DataSource, NuGlob, PipelineMetadata, ast,
+    debugger::{WithDebug, WithoutDebug},
+    shell_error::{self, io::IoError},
+};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 #[cfg(feature = "sqlite")]
 use crate::database::SQLiteDatabase;
@@ -26,18 +33,31 @@ impl Command for Open {
     }
 
     fn search_terms(&self) -> Vec<&str> {
-        vec!["load", "read", "load_file", "read_file"]
+        vec![
+            "load",
+            "read",
+            "load_file",
+            "read_file",
+            "cat",
+            "get-content",
+        ]
     }
 
     fn signature(&self) -> nu_protocol::Signature {
         Signature::build("open")
-            .input_output_types(vec![(Type::Nothing, Type::Any), (Type::String, Type::Any)])
+            .input_output_types(vec![
+                (Type::Nothing, Type::Any),
+                (Type::String, Type::Any),
+                // FIXME Type::Any input added to disable pipeline input type checking, as run-time checks can raise undesirable type errors
+                // which aren't caught by the parser. see https://github.com/nushell/nushell/pull/14922 for more details
+                (Type::Any, Type::Any),
+            ])
             .rest(
                 "files",
                 SyntaxShape::OneOf(vec![SyntaxShape::GlobPattern, SyntaxShape::String]),
                 "The file(s) to open.",
             )
-            .switch("raw", "open file as raw binary", Some('r'))
+            .switch("raw", "Open file as raw binary.", Some('r'))
             .category(Category::FileSystem)
     }
 
@@ -50,10 +70,8 @@ impl Command for Open {
     ) -> Result<PipelineData, ShellError> {
         let raw = call.has_flag(engine_state, stack, "raw")?;
         let call_span = call.head;
-        #[allow(deprecated)]
-        let cwd = current_dir(engine_state, stack)?;
+        let cwd = engine_state.cwd(Some(stack))?.into_std_path_buf();
         let mut paths = call.rest::<Spanned<NuGlob>>(engine_state, stack, 0)?;
-        let eval_block = get_eval_block(engine_state);
 
         if paths.is_empty() && !call.has_positional_args(stack, 0) {
             // try to use path from pipeline input if there were no positional or spread args
@@ -85,38 +103,55 @@ impl Command for Open {
             let arg_span = path.span;
             // let path_no_whitespace = &path.item.trim_end_matches(|x| matches!(x, '\x09'..='\x0d'));
 
-            for path in nu_engine::glob_from(&path, &cwd, call_span, None)
-                .map_err(|err| match err {
-                    ShellError::DirectoryNotFound { span, .. } => ShellError::FileNotFound {
-                        file: path.item.to_string(),
-                        span,
-                    },
-                    _ => err,
-                })?
-                .1
-            {
+            let matches: Box<dyn Iterator<Item = Result<PathBuf, ShellError>> + Send> =
+                if is_windows_device_path(Path::new(&path.item.to_string())) {
+                    Box::new(vec![Ok(PathBuf::from(path.item.to_string()))].into_iter())
+                } else {
+                    nu_engine::glob_from(
+                        &path,
+                        &cwd,
+                        call_span,
+                        None,
+                        engine_state.signals().clone(),
+                    )
+                    .map_err(|err| match err {
+                        ShellError::Io(mut err) => {
+                            err.kind = err.kind.not_found_as(NotFound::File);
+                            err.span = arg_span;
+                            err.into()
+                        }
+                        _ => err,
+                    })?
+                    .1
+                };
+            for path in matches {
                 let path = path?;
                 let path = Path::new(&path);
 
                 if permission_denied(path) {
+                    let err = IoError::new(
+                        shell_error::io::ErrorKind::from_std(std::io::ErrorKind::PermissionDenied),
+                        arg_span,
+                        PathBuf::from(path),
+                    );
+
                     #[cfg(unix)]
-                    let error_msg = match path.metadata() {
-                        Ok(md) => format!(
-                            "The permissions of {:o} does not allow access for this user",
-                            md.permissions().mode() & 0o0777
-                        ),
-                        Err(e) => e.to_string(),
+                    let err = {
+                        let mut err = err;
+                        err.additional_context = Some(
+                            match path.metadata() {
+                                Ok(md) => format!(
+                                    "The permissions of {:o} does not allow access for this user",
+                                    md.permissions().mode() & 0o0777
+                                ),
+                                Err(e) => e.to_string(),
+                            }
+                            .into(),
+                        );
+                        err
                     };
 
-                    #[cfg(not(unix))]
-                    let error_msg = String::from("Permission denied");
-                    return Err(ShellError::GenericError {
-                        error: "Permission denied".into(),
-                        msg: error_msg,
-                        span: Some(arg_span),
-                        help: None,
-                        inner: vec![],
-                    });
+                    return Err(err.into());
                 } else {
                     #[cfg(feature = "sqlite")]
                     if !raw {
@@ -132,25 +167,29 @@ impl Command for Open {
                         }
                     }
 
-                    let file = match std::fs::File::open(path) {
-                        Ok(file) => file,
-                        Err(err) => {
-                            return Err(ShellError::GenericError {
-                                error: "Permission denied".into(),
-                                msg: err.to_string(),
-                                span: Some(arg_span),
-                                help: None,
-                                inner: vec![],
-                            });
-                        }
-                    };
+                    if path.is_dir() {
+                        // At least under windows this check ensures that we don't get a
+                        // permission denied error on directories
+                        return Err(ShellError::Io(IoError::new(
+                            #[allow(
+                                deprecated,
+                                reason = "we don't have a IsADirectory variant here, so we provide one"
+                            )]
+                            shell_error::io::ErrorKind::from_std(std::io::ErrorKind::IsADirectory),
+                            arg_span,
+                            PathBuf::from(path),
+                        )));
+                    }
+
+                    let file = std::fs::File::open(path)
+                        .map_err(|err| IoError::new(err, arg_span, PathBuf::from(path)))?;
 
                     // No content_type by default - Is added later if no converter is found
-                    let stream = PipelineData::ByteStream(
+                    let stream = PipelineData::byte_stream(
                         ByteStream::file(file, call_span, engine_state.signals().clone()),
                         Some(PipelineMetadata {
                             data_source: DataSource::FilePath(path.to_path_buf()),
-                            content_type: None,
+                            ..Default::default()
                         }),
                     );
 
@@ -168,20 +207,23 @@ impl Command for Open {
                     let converter = exts_opt.and_then(|exts| {
                         exts.iter().find_map(|ext| {
                             engine_state
-                                .find_decl(format!("from {}", ext).as_bytes(), &[])
+                                .find_decl(format!("from {ext}").as_bytes(), &[])
                                 .map(|id| (id, ext.to_string()))
                         })
                     });
 
                     match converter {
                         Some((converter_id, ext)) => {
-                            let decl = engine_state.get_decl(converter_id);
-                            let command_output = if let Some(block_id) = decl.block_id() {
-                                let block = engine_state.get_block(block_id);
-                                eval_block(engine_state, stack, block, stream)
+                            let open_call = ast::Call {
+                                decl_id: converter_id,
+                                head: call_span,
+                                arguments: vec![],
+                                parser_info: HashMap::new(),
+                            };
+                            let command_output = if engine_state.is_debugging() {
+                                eval_call::<WithDebug>(engine_state, stack, &open_call, stream)
                             } else {
-                                let call = ast::Call::new(call_span);
-                                decl.run(engine_state, stack, &(&call).into(), stream)
+                                eval_call::<WithoutDebug>(engine_state, stack, &open_call, stream)
                             };
                             output.push(command_output.map_err(|inner| {
                                     ShellError::GenericError{
@@ -204,6 +246,7 @@ impl Command for Open {
                                 stream.set_metadata(Some(PipelineMetadata {
                                     data_source: DataSource::FilePath(path.to_path_buf()),
                                     content_type,
+                                    ..Default::default()
                                 }));
                             output.push(stream_with_content_type);
                         }
@@ -213,7 +256,7 @@ impl Command for Open {
         }
 
         if output.is_empty() {
-            Ok(PipelineData::Empty)
+            Ok(PipelineData::empty())
         } else if output.len() == 1 {
             Ok(output.remove(0))
         } else {
@@ -224,31 +267,41 @@ impl Command for Open {
         }
     }
 
-    fn examples(&self) -> Vec<nu_protocol::Example> {
+    fn examples(&self) -> Vec<nu_protocol::Example<'_>> {
         vec![
             Example {
-                description: "Open a file, with structure (based on file extension or SQLite database header)",
+                description: "Open a file, with structure (based on file extension or SQLite database header).",
                 example: "open myfile.json",
                 result: None,
             },
             Example {
-                description: "Open a file, as raw bytes",
+                description: "Open a file, as raw bytes.",
                 example: "open myfile.json --raw",
                 result: None,
             },
             Example {
-                description: "Open a file, using the input to get filename",
+                description: "Open a file, using the input to get filename.",
                 example: "'myfile.txt' | open",
                 result: None,
             },
             Example {
-                description: "Open a file, and decode it by the specified encoding",
+                description: "Open a file, and decode it by the specified encoding.",
                 example: "open myfile.txt --raw | decode utf-8",
                 result: None,
             },
             Example {
-                description: "Create a custom `from` parser to open newline-delimited JSON files with `open`",
+                description: "Create a custom `from` parser to open newline-delimited JSON files with `open`.",
                 example: r#"def "from ndjson" [] { from json -o }; open myfile.ndjson"#,
+                result: None,
+            },
+            Example {
+                description: "Show the extensions for which the `open` command will automatically parse.",
+                example: r#"scope commands
+    | where name starts-with "from "
+    | insert extension { get name | str replace -r "^from " "" | $"*.($in)" }
+    | select extension name
+    | rename extension command
+"#,
                 result: None,
             },
         ]
@@ -271,7 +324,7 @@ fn extract_extensions(filename: &str) -> Vec<String> {
         if current_extension.is_empty() {
             current_extension.push_str(part);
         } else {
-            current_extension = format!("{}.{}", part, current_extension);
+            current_extension = format!("{part}.{current_extension}");
         }
         extensions.push(current_extension.clone());
     }

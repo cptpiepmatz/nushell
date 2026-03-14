@@ -17,18 +17,18 @@ impl Command for PluginRm {
             .named(
                 "plugin-config",
                 SyntaxShape::Filepath,
-                "Use a plugin registry file other than the one set in `$nu.plugin-path`",
+                "Use a plugin registry file other than the one set in `$nu.plugin-path`.",
                 None,
             )
             .switch(
                 "force",
-                "Don't cause an error if the plugin name wasn't found in the file",
+                "Don't cause an error if the plugin name wasn't found in the file.",
                 Some('f'),
             )
             .required(
                 "name",
                 SyntaxShape::String,
-                "The name, or filename, of the plugin to remove",
+                "The name, or filename, of the plugin to remove.",
             )
             .category(Category::Plugin)
     }
@@ -54,7 +54,7 @@ fixed with `plugin add`.
         vec!["remove", "delete", "signature"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "plugin rm inc",

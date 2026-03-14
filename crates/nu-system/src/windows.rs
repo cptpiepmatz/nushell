@@ -11,7 +11,7 @@ use ntapi::ntwow64::{PEB32, RTL_USER_PROCESS_PARAMETERS32};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::mem::{size_of, zeroed, MaybeUninit};
+use std::mem::{MaybeUninit, size_of, zeroed};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr;
@@ -25,27 +25,27 @@ use windows::core::{PCWSTR, PWSTR};
 
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Wdk::System::Threading::{
-    NtQueryInformationProcess, ProcessBasicInformation, ProcessCommandLineInformation,
-    ProcessWow64Information, PROCESSINFOCLASS,
+    NtQueryInformationProcess, PROCESSINFOCLASS, ProcessBasicInformation,
+    ProcessCommandLineInformation, ProcessWow64Information,
 };
 
 use windows::Win32::Foundation::{
-    CloseHandle, LocalFree, FALSE, FILETIME, HANDLE, HLOCAL, HMODULE, MAX_PATH, PSID,
+    CloseHandle, FALSE, FILETIME, HANDLE, HLOCAL, HMODULE, LocalFree, MAX_PATH,
     STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL, STATUS_INFO_LENGTH_MISMATCH, UNICODE_STRING,
 };
 
 use windows::Win32::Security::{
-    AdjustTokenPrivileges, GetTokenInformation, LookupAccountSidW, LookupPrivilegeValueW,
-    TokenGroups, TokenUser, SE_DEBUG_NAME, SE_PRIVILEGE_ENABLED, SID, SID_NAME_USE,
-    TOKEN_ADJUST_PRIVILEGES, TOKEN_GROUPS, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER,
+    AdjustTokenPrivileges, GetTokenInformation, LookupAccountSidW, LookupPrivilegeValueW, PSID,
+    SE_DEBUG_NAME, SE_PRIVILEGE_ENABLED, SID, SID_NAME_USE, TOKEN_ADJUST_PRIVILEGES, TOKEN_GROUPS,
+    TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER, TokenGroups, TokenUser,
 };
 
 use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, PROCESSENTRY32, Process32First, Process32Next, TH32CS_SNAPPROCESS,
 };
 
-use windows::Win32::System::Memory::{VirtualQueryEx, MEMORY_BASIC_INFORMATION};
+use windows::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx};
 
 use windows::Win32::System::ProcessStatus::{
     GetModuleBaseNameW, GetProcessMemoryInfo, K32EnumProcesses, PROCESS_MEMORY_COUNTERS,
@@ -55,8 +55,8 @@ use windows::Win32::System::ProcessStatus::{
 use windows::Win32::System::SystemInformation::OSVERSIONINFOEXW;
 
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetPriorityClass, GetProcessIoCounters, GetProcessTimes, OpenProcess,
-    OpenProcessToken, IO_COUNTERS, PEB, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+    GetCurrentProcess, GetPriorityClass, GetProcessIoCounters, GetProcessTimes, IO_COUNTERS,
+    OpenProcess, OpenProcessToken, PEB, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
     PROCESS_VM_READ,
 };
 
@@ -275,7 +275,7 @@ fn set_privilege() -> bool {
         }
 
         tps.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-        if AdjustTokenPrivileges(token, FALSE, Some(&tps), 0, None, None).is_err() {
+        if AdjustTokenPrivileges(token, FALSE.into(), Some(&tps), 0, None, None).is_err() {
             return false;
         }
 
@@ -337,7 +337,7 @@ fn get_handle(pid: i32) -> Option<HANDLE> {
     let handle = unsafe {
         OpenProcess(
             PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-            FALSE,
+            FALSE.into(),
             pid as u32,
         )
     }
@@ -364,10 +364,10 @@ fn get_times(handle: HANDLE) -> Option<(u64, u64, u64, u64)> {
             &mut user as *mut FILETIME,
         );
 
-        let start = u64::from(start.dwHighDateTime) << 32 | u64::from(start.dwLowDateTime);
-        let exit = u64::from(exit.dwHighDateTime) << 32 | u64::from(exit.dwLowDateTime);
-        let sys = u64::from(sys.dwHighDateTime) << 32 | u64::from(sys.dwLowDateTime);
-        let user = u64::from(user.dwHighDateTime) << 32 | u64::from(user.dwLowDateTime);
+        let start = (u64::from(start.dwHighDateTime) << 32) | u64::from(start.dwLowDateTime);
+        let exit = (u64::from(exit.dwHighDateTime) << 32) | u64::from(exit.dwLowDateTime);
+        let sys = (u64::from(sys.dwHighDateTime) << 32) | u64::from(sys.dwLowDateTime);
+        let user = (u64::from(user.dwHighDateTime) << 32) | u64::from(user.dwLowDateTime);
 
         if ret.is_ok() {
             Some((start, exit, sys, user))
@@ -412,7 +412,7 @@ fn get_command(handle: HANDLE) -> Option<String> {
         let mut exe_buf = [0u16; MAX_PATH as usize + 1];
         let h_mod = HMODULE::default();
 
-        let ret = GetModuleBaseNameW(handle, h_mod, exe_buf.as_mut_slice());
+        let ret = GetModuleBaseNameW(handle, h_mod.into(), exe_buf.as_mut_slice());
 
         let mut pos = 0;
         for x in exe_buf.iter() {
@@ -480,217 +480,225 @@ unsafe fn get_process_data(
     let mut buffer: Vec<u16> = Vec::with_capacity(size / 2 + 1);
     let mut bytes_read = 0;
 
-    if ReadProcessMemory(
-        handle,
-        ptr,
-        buffer.as_mut_ptr().cast(),
-        size,
-        Some(&mut bytes_read),
-    )
-    .is_err()
-    {
-        return Err("Unable to read process data");
-    }
+    unsafe {
+        if ReadProcessMemory(
+            handle,
+            ptr,
+            buffer.as_mut_ptr().cast(),
+            size,
+            Some(&mut bytes_read),
+        )
+        .is_err()
+        {
+            return Err("Unable to read process data");
+        }
 
-    // Documentation states that the function fails if not all data is accessible.
-    if bytes_read != size {
-        return Err("ReadProcessMemory returned unexpected number of bytes read");
-    }
+        // Documentation states that the function fails if not all data is accessible.
+        if bytes_read != size {
+            return Err("ReadProcessMemory returned unexpected number of bytes read");
+        }
 
-    buffer.set_len(size / 2);
-    buffer.push(0);
+        buffer.set_len(size / 2);
+        buffer.push(0);
+    }
 
     Ok(buffer)
 }
 
 unsafe fn get_region_size(handle: HANDLE, ptr: *const c_void) -> Result<usize, &'static str> {
-    let mut meminfo = MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
-    if VirtualQueryEx(
-        handle,
-        Some(ptr),
-        meminfo.as_mut_ptr().cast(),
-        size_of::<MEMORY_BASIC_INFORMATION>(),
-    ) == 0
-    {
-        return Err("Unable to read process memory information");
+    unsafe {
+        let mut meminfo = MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
+        if VirtualQueryEx(
+            handle,
+            Some(ptr),
+            meminfo.as_mut_ptr().cast(),
+            size_of::<MEMORY_BASIC_INFORMATION>(),
+        ) == 0
+        {
+            return Err("Unable to read process memory information");
+        }
+        let meminfo = meminfo.assume_init();
+        Ok((meminfo.RegionSize as isize - ptr.offset_from(meminfo.BaseAddress)) as usize)
     }
-    let meminfo = meminfo.assume_init();
-    Ok((meminfo.RegionSize as isize - ptr.offset_from(meminfo.BaseAddress)) as usize)
 }
 
 unsafe fn ph_query_process_variable_size(
     process_handle: HANDLE,
     process_information_class: PROCESSINFOCLASS,
 ) -> Option<Vec<u16>> {
-    let mut return_length = MaybeUninit::<u32>::uninit();
+    unsafe {
+        let mut return_length = MaybeUninit::<u32>::uninit();
 
-    if let Err(err) = NtQueryInformationProcess(
-        process_handle,
-        process_information_class,
-        std::ptr::null_mut(),
-        0,
-        return_length.as_mut_ptr() as *mut _,
-    )
-    .ok()
-    {
-        if ![
-            STATUS_BUFFER_OVERFLOW.into(),
-            STATUS_BUFFER_TOO_SMALL.into(),
-            STATUS_INFO_LENGTH_MISMATCH.into(),
-        ]
-        .contains(&err.code())
+        if let Err(err) = NtQueryInformationProcess(
+            process_handle,
+            process_information_class,
+            std::ptr::null_mut(),
+            0,
+            return_length.as_mut_ptr() as *mut _,
+        )
+        .ok()
+            && ![
+                STATUS_BUFFER_OVERFLOW.into(),
+                STATUS_BUFFER_TOO_SMALL.into(),
+                STATUS_INFO_LENGTH_MISMATCH.into(),
+            ]
+            .contains(&err.code())
         {
             return None;
         }
-    }
 
-    let mut return_length = return_length.assume_init();
-    let buf_len = (return_length as usize) / 2;
-    let mut buffer: Vec<u16> = Vec::with_capacity(buf_len + 1);
-    if NtQueryInformationProcess(
-        process_handle,
-        process_information_class,
-        buffer.as_mut_ptr() as *mut _,
-        return_length,
-        &mut return_length as *mut _,
-    )
-    .is_err()
-    {
-        return None;
+        let mut return_length = return_length.assume_init();
+        let buf_len = (return_length as usize) / 2;
+        let mut buffer: Vec<u16> = Vec::with_capacity(buf_len + 1);
+        if NtQueryInformationProcess(
+            process_handle,
+            process_information_class,
+            buffer.as_mut_ptr() as *mut _,
+            return_length,
+            &mut return_length as *mut _,
+        )
+        .is_err()
+        {
+            return None;
+        }
+        buffer.set_len(buf_len);
+        buffer.push(0);
+        Some(buffer)
     }
-    buffer.set_len(buf_len);
-    buffer.push(0);
-    Some(buffer)
 }
 
 unsafe fn get_cmdline_from_buffer(buffer: PCWSTR) -> Vec<String> {
-    // Get argc and argv from the command line
-    let mut argc = MaybeUninit::<i32>::uninit();
-    let argv_p = CommandLineToArgvW(buffer, argc.as_mut_ptr());
-    if argv_p.is_null() {
-        return Vec::new();
+    unsafe {
+        // Get argc and argv from the command line
+        let mut argc = MaybeUninit::<i32>::uninit();
+        let argv_p = CommandLineToArgvW(buffer, argc.as_mut_ptr());
+        if argv_p.is_null() {
+            return Vec::new();
+        }
+        let argc = argc.assume_init();
+        let argv = std::slice::from_raw_parts(argv_p, argc as usize);
+
+        let mut res = Vec::new();
+        for arg in argv {
+            res.push(String::from_utf16_lossy(arg.as_wide()));
+        }
+
+        let _err = LocalFree(HLOCAL(argv_p as _).into());
+
+        res
     }
-    let argc = argc.assume_init();
-    let argv = std::slice::from_raw_parts(argv_p, argc as usize);
-
-    let mut res = Vec::new();
-    for arg in argv {
-        res.push(String::from_utf16_lossy(arg.as_wide()));
-    }
-
-    let _err = LocalFree(HLOCAL(argv_p as _));
-
-    res
 }
 
 unsafe fn get_process_params(
     handle: HANDLE,
 ) -> Result<(Vec<String>, Vec<String>, PathBuf), &'static str> {
-    if !cfg!(target_pointer_width = "64") {
-        return Err("Non 64 bit targets are not supported");
-    }
+    unsafe {
+        if !cfg!(target_pointer_width = "64") {
+            return Err("Non 64 bit targets are not supported");
+        }
 
-    // First check if target process is running in wow64 compatibility emulator
-    let mut pwow32info = MaybeUninit::<*const c_void>::uninit();
-    if NtQueryInformationProcess(
-        handle,
-        ProcessWow64Information,
-        pwow32info.as_mut_ptr().cast(),
-        size_of::<*const c_void>() as u32,
-        null_mut(),
-    )
-    .is_err()
-    {
-        return Err("Unable to check WOW64 information about the process");
-    }
-    let pwow32info = pwow32info.assume_init();
-
-    if pwow32info.is_null() {
-        // target is a 64 bit process
-
-        let mut pbasicinfo = MaybeUninit::<PROCESS_BASIC_INFORMATION>::uninit();
+        // First check if target process is running in wow64 compatibility emulator
+        let mut pwow32info = MaybeUninit::<*const c_void>::uninit();
         if NtQueryInformationProcess(
             handle,
-            ProcessBasicInformation,
-            pbasicinfo.as_mut_ptr().cast(),
-            size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+            ProcessWow64Information,
+            pwow32info.as_mut_ptr().cast(),
+            size_of::<*const c_void>() as u32,
             null_mut(),
         )
         .is_err()
         {
-            return Err("Unable to get basic process information");
+            return Err("Unable to check WOW64 information about the process");
         }
-        let pinfo = pbasicinfo.assume_init();
+        let pwow32info = pwow32info.assume_init();
 
-        let mut peb = MaybeUninit::<PEB>::uninit();
+        if pwow32info.is_null() {
+            // target is a 64 bit process
+
+            let mut pbasicinfo = MaybeUninit::<PROCESS_BASIC_INFORMATION>::uninit();
+            if NtQueryInformationProcess(
+                handle,
+                ProcessBasicInformation,
+                pbasicinfo.as_mut_ptr().cast(),
+                size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+                null_mut(),
+            )
+            .is_err()
+            {
+                return Err("Unable to get basic process information");
+            }
+            let pinfo = pbasicinfo.assume_init();
+
+            let mut peb = MaybeUninit::<PEB>::uninit();
+            if ReadProcessMemory(
+                handle,
+                pinfo.PebBaseAddress.cast(),
+                peb.as_mut_ptr().cast(),
+                size_of::<PEB>(),
+                None,
+            )
+            .is_err()
+            {
+                return Err("Unable to read process PEB");
+            }
+
+            let peb = peb.assume_init();
+
+            let mut proc_params = MaybeUninit::<RTL_USER_PROCESS_PARAMETERS>::uninit();
+            if ReadProcessMemory(
+                handle,
+                peb.ProcessParameters.cast(),
+                proc_params.as_mut_ptr().cast(),
+                size_of::<RTL_USER_PROCESS_PARAMETERS>(),
+                None,
+            )
+            .is_err()
+            {
+                return Err("Unable to read process parameters");
+            }
+
+            let proc_params = proc_params.assume_init();
+            return Ok((
+                get_cmd_line(&proc_params, handle),
+                get_proc_env(&proc_params, handle),
+                get_cwd(&proc_params, handle),
+            ));
+        }
+        // target is a 32 bit process in wow64 mode
+
+        let mut peb32 = MaybeUninit::<PEB32>::uninit();
         if ReadProcessMemory(
             handle,
-            pinfo.PebBaseAddress.cast(),
-            peb.as_mut_ptr().cast(),
-            size_of::<PEB>(),
+            pwow32info,
+            peb32.as_mut_ptr().cast(),
+            size_of::<PEB32>(),
             None,
         )
         .is_err()
         {
-            return Err("Unable to read process PEB");
+            return Err("Unable to read PEB32");
         }
+        let peb32 = peb32.assume_init();
 
-        let peb = peb.assume_init();
-
-        let mut proc_params = MaybeUninit::<RTL_USER_PROCESS_PARAMETERS>::uninit();
+        let mut proc_params = MaybeUninit::<RTL_USER_PROCESS_PARAMETERS32>::uninit();
         if ReadProcessMemory(
             handle,
-            peb.ProcessParameters.cast(),
+            peb32.ProcessParameters as *mut _,
             proc_params.as_mut_ptr().cast(),
-            size_of::<RTL_USER_PROCESS_PARAMETERS>(),
+            size_of::<RTL_USER_PROCESS_PARAMETERS32>(),
             None,
         )
         .is_err()
         {
-            return Err("Unable to read process parameters");
+            return Err("Unable to read 32 bit process parameters");
         }
-
         let proc_params = proc_params.assume_init();
-        return Ok((
+        Ok((
             get_cmd_line(&proc_params, handle),
             get_proc_env(&proc_params, handle),
             get_cwd(&proc_params, handle),
-        ));
+        ))
     }
-    // target is a 32 bit process in wow64 mode
-
-    let mut peb32 = MaybeUninit::<PEB32>::uninit();
-    if ReadProcessMemory(
-        handle,
-        pwow32info,
-        peb32.as_mut_ptr().cast(),
-        size_of::<PEB32>(),
-        None,
-    )
-    .is_err()
-    {
-        return Err("Unable to read PEB32");
-    }
-    let peb32 = peb32.assume_init();
-
-    let mut proc_params = MaybeUninit::<RTL_USER_PROCESS_PARAMETERS32>::uninit();
-    if ReadProcessMemory(
-        handle,
-        peb32.ProcessParameters as *mut _,
-        proc_params.as_mut_ptr().cast(),
-        size_of::<RTL_USER_PROCESS_PARAMETERS32>(),
-        None,
-    )
-    .is_err()
-    {
-        return Err("Unable to read 32 bit process parameters");
-    }
-    let proc_params = proc_params.assume_init();
-    Ok((
-        get_cmd_line(&proc_params, handle),
-        get_proc_env(&proc_params, handle),
-        get_cwd(&proc_params, handle),
-    ))
 }
 
 static WINDOWS_8_1_OR_NEWER: LazyLock<bool> = LazyLock::new(|| unsafe {
@@ -747,7 +755,7 @@ fn get_proc_env<T: RtlUserProcessParameters>(params: &T, handle: HANDLE) -> Vec<
             let mut begin = 0;
             while let Some(offset) = raw_env[begin..].iter().position(|&c| c == 0) {
                 let end = begin + offset;
-                if raw_env[begin..end].iter().any(|&c| c == equals) {
+                if raw_env[begin..end].contains(&equals) {
                     result.push(
                         OsString::from_wide(&raw_env[begin..end])
                             .to_string_lossy()
@@ -951,11 +959,11 @@ fn get_name(psid: PSID) -> Option<(String, String)> {
         let mut cc_domainname = 0;
         let mut pe_use = SID_NAME_USE::default();
         let _ = LookupAccountSidW(
-            PCWSTR::null(),
+            None,
             psid,
-            PWSTR::null(),
+            None,
             &mut cc_name,
-            PWSTR::null(),
+            None,
             &mut cc_domainname,
             &mut pe_use,
         );
@@ -969,11 +977,11 @@ fn get_name(psid: PSID) -> Option<(String, String)> {
         name.set_len(cc_name as usize);
         domainname.set_len(cc_domainname as usize);
         if LookupAccountSidW(
-            PCWSTR::null(),
+            None,
             psid,
-            PWSTR::from_raw(name.as_mut_ptr()),
+            PWSTR::from_raw(name.as_mut_ptr()).into(),
             &mut cc_name,
-            PWSTR::from_raw(domainname.as_mut_ptr()),
+            PWSTR::from_raw(domainname.as_mut_ptr()).into(),
             &mut cc_domainname,
             &mut pe_use,
         )

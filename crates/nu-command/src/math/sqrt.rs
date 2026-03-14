@@ -1,9 +1,10 @@
+use crate::math::utils::ensure_bounded;
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathSqrt;
 
-impl Command for SubCommand {
+impl Command for MathSqrt {
     fn name(&self) -> &str {
         "math sqrt"
     }
@@ -16,6 +17,7 @@ impl Command for SubCommand {
                     Type::List(Box::new(Type::Number)),
                     Type::List(Box::new(Type::Float)),
                 ),
+                (Type::Range, Type::List(Box::new(Type::Number))),
             ])
             .allow_variants_without_examples(true)
             .category(Category::Math)
@@ -42,8 +44,12 @@ impl Command for SubCommand {
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
+        }
+        if let PipelineData::Value(ref v @ Value::Range { ref val, .. }, ..) = input {
+            let span = v.span();
+            ensure_bounded(val, span, head)?;
         }
         input.map(move |value| operate(value, head), engine_state.signals())
     }
@@ -56,8 +62,12 @@ impl Command for SubCommand {
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
+        }
+        if let PipelineData::Value(ref v @ Value::Range { ref val, .. }, ..) = input {
+            let span = v.span();
+            ensure_bounded(val, span, head)?;
         }
         input.map(
             move |value| operate(value, head),
@@ -65,9 +75,9 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Compute the square root of each number in a list",
+            description: "Compute the square root of each number in a list.",
             example: "[9 16] | math sqrt",
             result: Some(Value::list(
                 vec![Value::test_float(3.0), Value::test_float(4.0)],
@@ -124,9 +134,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathSqrt)
     }
 }

@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value as SerdeValue};
+use serde_json::{Map, Value as SerdeValue, json};
 
 /// JsonFlattener is the main driver when flattening JSON
 /// # Examples
@@ -31,7 +31,7 @@ pub struct JsonFlattener<'a> {
     pub preserve_arrays: bool,
 }
 
-impl<'a> Default for JsonFlattener<'a> {
+impl Default for JsonFlattener<'_> {
     fn default() -> Self {
         JsonFlattener {
             separator: ".",
@@ -56,7 +56,7 @@ impl<'a> Default for JsonFlattener<'a> {
 ///
 /// let flattened_example = flattener.flatten(&example);
 /// ```
-impl<'a> JsonFlattener<'a> {
+impl JsonFlattener<'_> {
     /// Returns a flattener with the default arguments
     /// # Examples
     /// ```

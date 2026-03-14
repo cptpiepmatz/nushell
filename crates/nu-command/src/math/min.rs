@@ -1,13 +1,13 @@
 use crate::math::{
-    reducers::{reducer_for, Reduce},
+    reducers::{Reduce, reducer_for},
     utils::run_with_function,
 };
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathMin;
 
-impl Command for SubCommand {
+impl Command for MathMin {
     fn name(&self) -> &str {
         "math min"
     }
@@ -58,15 +58,15 @@ impl Command for SubCommand {
         run_with_function(call, input, minimum)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Compute the minimum of a list of numbers",
+                description: "Compute the minimum of a list of numbers.",
                 example: "[-50 100 25] | math min",
                 result: Some(Value::test_int(-50)),
             },
             Example {
-                description: "Compute the minima of the columns of a table",
+                description: "Compute the minima of the columns of a table.",
                 example: "[{a: 1 b: 3} {a: 2 b: -1}] | math min",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
@@ -74,7 +74,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "Find the minimum of a list of arbitrary values (Warning: Weird)",
+                description: "Find the minimum of a list of arbitrary values (Warning: Weird).",
                 example: "[-50 'hello' true] | math min",
                 result: Some(Value::test_bool(true)),
             },
@@ -92,9 +92,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathMin)
     }
 }

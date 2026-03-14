@@ -24,7 +24,7 @@ impl Command for DecodeHex {
             .rest(
                 "rest",
                 SyntaxShape::CellPath,
-                "For a data structure input, decode data at the given cell paths",
+                "For a data structure input, decode data at the given cell paths.",
             )
             .category(Category::Formats)
     }
@@ -33,7 +33,7 @@ impl Command for DecodeHex {
         "Hex decode a value."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Hex decode a value and output as binary",
@@ -70,7 +70,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        crate::test_examples(DecodeHex)
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(DecodeHex)
     }
 }

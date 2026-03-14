@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicU32, Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, atomic::AtomicU32};
 
 use nu_protocol::{ShellError, Span};
 use nu_system::ForegroundGuard;
@@ -32,7 +32,7 @@ impl PluginProcess {
         self.pid
     }
 
-    fn lock_mutable(&self) -> Result<MutexGuard<MutablePart>, ShellError> {
+    fn lock_mutable(&self) -> Result<MutexGuard<'_, MutablePart>, ShellError> {
         self.mutable.lock().map_err(|_| ShellError::NushellFailed {
             msg: "the PluginProcess mutable lock has been poisoned".into(),
         })

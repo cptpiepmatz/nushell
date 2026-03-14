@@ -33,15 +33,20 @@ impl Command for Continue {
         &self,
         _engine_state: &EngineState,
         _stack: &mut Stack,
-        call: &Call,
+        _call: &Call,
         _input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
-        Err(ShellError::Continue { span: call.head })
+        // This is compiled specially by the IR compiler. The code here is never used when
+        // running in IR mode.
+        eprintln!(
+            "Tried to execute 'run' for the 'continue' command: this code path should never be reached in IR mode"
+        );
+        unreachable!()
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Continue a loop from the next iteration",
+            description: "Continue a loop from the next iteration.",
             example: r#"for i in 1..10 { if $i == 5 { continue }; print $i }"#,
             result: None,
         }]

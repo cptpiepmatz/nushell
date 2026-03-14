@@ -58,7 +58,6 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             Interleave,
             Items,
             Join,
-            SplitBy,
             Take,
             Merge,
             MergeDeep,
@@ -71,7 +70,6 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             ParEach,
             ChunkBy,
             Prepend,
-            Range,
             Reduce,
             Reject,
             Rename,
@@ -80,6 +78,7 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             Skip,
             SkipUntil,
             SkipWhile,
+            Slice,
             Sort,
             SortBy,
             SplitList,
@@ -98,6 +97,7 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
 
         // Misc
         bind_command! {
+            DeleteVar,
             Panic,
             Source,
             Tutor,
@@ -145,6 +145,7 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             HelpCommands,
             HelpModules,
             HelpOperators,
+            HelpPipeAndRedirect,
             HelpEscapes,
         };
 
@@ -152,6 +153,8 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
         bind_command! {
             Ast,
             Debug,
+            DebugEnv,
+            DebugExperimentalOptions,
             DebugInfo,
             DebugProfile,
             Explain,
@@ -169,7 +172,7 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
         };
 
         #[cfg(all(feature = "os", windows))]
-        bind_command! { RegistryQuery }
+        bind_command! { Registry, RegistryQuery }
 
         #[cfg(all(
             feature = "os",
@@ -187,6 +190,9 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
 
         // Strings
         bind_command! {
+            Ansi,
+            AnsiLink,
+            AnsiStrip,
             Char,
             Decode,
             Encode,
@@ -198,7 +204,9 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             EncodeBase32Hex,
             DecodeBase64,
             EncodeBase64,
+            Detect,
             DetectColumns,
+            DetectType,
             Parse,
             Split,
             SplitChars,
@@ -211,6 +219,7 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             StrDistance,
             StrDowncase,
             StrEndswith,
+            StrEscapeRegex,
             StrExpand,
             StrJoin,
             StrReplace,
@@ -247,11 +256,17 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
         };
 
         // Platform
+        #[cfg(all(feature = "os", not(target_arch = "wasm32")))]
+        if nu_experimental::NATIVE_CLIP.get() {
+            bind_command! {
+                ClipCommand,
+                ClipCopy,
+                ClipPaste,
+            };
+        }
+
         #[cfg(feature = "os")]
         bind_command! {
-            Ansi,
-            AnsiLink,
-            AnsiStrip,
             Clear,
             Du,
             Input,
@@ -269,14 +284,16 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
         #[cfg(all(unix, feature = "os"))]
         bind_command! { ULimit };
 
+        #[cfg(all(unix, feature = "os"))]
+        bind_command! { UMask };
+
         // Date
         bind_command! {
             Date,
+            DateFromHuman,
             DateHumanize,
             DateListTimezones,
             DateNow,
-            DateToRecord,
-            DateToTable,
             DateToTimezone,
         };
 
@@ -299,8 +316,8 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             FromTsv,
             FromXlsx,
             FromXml,
-            FromYaml,
-            FromYml,
+            FROM_YAML,
+            FROM_YML,
             To,
             ToCsv,
             ToJson,
@@ -314,7 +331,8 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             Upsert,
             Where,
             ToXml,
-            ToYaml,
+            TO_YAML,
+            TO_YML,
         };
 
         // Viewers
@@ -404,7 +422,9 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             HttpPost,
             HttpPut,
             HttpOptions,
+            HttpPool,
             Port,
+            VersionCheck,
         }
         bind_command! {
             Url,
@@ -422,7 +442,6 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
             Random,
             RandomBool,
             RandomChars,
-            RandomDice,
             RandomFloat,
             RandomInt,
             RandomUuid,
@@ -448,7 +467,25 @@ pub fn add_shell_command_context(mut engine_state: EngineState) -> EngineState {
         // Experimental
         bind_command! {
             IsAdmin,
+            JobSpawn,
+            JobList,
+            JobKill,
+            JobId,
+            JobDescribe,
+            Job,
         };
+
+        #[cfg(not(target_family = "wasm"))]
+        bind_command! {
+            JobSend,
+            JobRecv,
+            JobFlush,
+        }
+
+        #[cfg(all(unix, feature = "os"))]
+        bind_command! {
+            JobUnfreeze,
+        }
 
         // Removed
         bind_command! {

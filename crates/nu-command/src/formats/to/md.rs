@@ -1,10 +1,56 @@
 use indexmap::IndexMap;
 use nu_cmd_base::formats::to::delimited::merge_descriptors;
 use nu_engine::command_prelude::*;
-use nu_protocol::Config;
+use nu_protocol::{Config, ast::PathMember};
+use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct ToMd;
+
+/// Defines how lists should be formatted in Markdown output
+#[derive(Clone, Copy, Default, PartialEq)]
+enum ListStyle {
+    /// No list markers, just plain text separated by newlines
+    None,
+    /// Ordered list using "1. ", "2. ", etc.
+    Ordered,
+    /// Unordered list using "* " (default)
+    #[default]
+    Unordered,
+}
+
+impl ListStyle {
+    const OPTIONS: &[&'static str] = &["ordered", "unordered", "none"];
+
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "ordered" => Some(Self::Ordered),
+            "unordered" => Some(Self::Unordered),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+struct ToMdOptions {
+    pretty: bool,
+    per_element: bool,
+    center: Option<Vec<CellPath>>,
+    escape_md: bool,
+    escape_html: bool,
+    list_style: ListStyle,
+}
+
+/// Special markdown element types that can be represented as single-field records
+const SPECIAL_MARKDOWN_HEADERS: &[&str] = &["h1", "h2", "h3", "blockquote"];
+
+/// Check if a record represents a special markdown element (h1, h2, h3, blockquote)
+fn is_special_markdown_record(record: &nu_protocol::Record) -> bool {
+    record.len() == 1
+        && record.get_index(0).is_some_and(|(header, _)| {
+            SPECIAL_MARKDOWN_HEADERS.contains(&header.to_ascii_lowercase().as_str())
+        })
+}
 
 impl Command for ToMd {
     fn name(&self) -> &str {
@@ -16,13 +62,36 @@ impl Command for ToMd {
             .input_output_types(vec![(Type::Any, Type::String)])
             .switch(
                 "pretty",
-                "Formats the Markdown table to vertically align items",
+                "Formats the Markdown table to vertically align items.",
                 Some('p'),
             )
             .switch(
                 "per-element",
-                "treat each row as markdown syntax element",
+                "Treat each row as markdown syntax element.",
                 Some('e'),
+            )
+            .named(
+                "center",
+                SyntaxShape::List(Box::new(SyntaxShape::CellPath)),
+                "Formats the Markdown table to center given columns.",
+                Some('c'),
+            )
+            .switch(
+                "escape-md",
+                "Escapes Markdown special characters.",
+                Some('m'),
+            )
+            .switch("escape-html", "Escapes HTML special characters.", Some('t'))
+            .switch(
+                "escape-all",
+                "Escapes both Markdown and HTML special characters.",
+                Some('a'),
+            )
+            .named(
+                "list",
+                SyntaxShape::String,
+                "Format lists as 'ordered' (1. 2. 3.), 'unordered' (* * *), or 'none'. Default: unordered.",
+                Some('l'),
             )
             .category(Category::Formats)
     }
@@ -31,31 +100,71 @@ impl Command for ToMd {
         "Convert table into simple Markdown."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Outputs an MD string representing the contents of this table",
+                description: "Outputs an MD string representing the contents of this table.",
                 example: "[[foo bar]; [1 2]] | to md",
-                result: Some(Value::test_string("|foo|bar|\n|-|-|\n|1|2|\n")),
-            },
-            Example {
-                description: "Optionally, output a formatted markdown string",
-                example: "[[foo bar]; [1 2]] | to md --pretty",
                 result: Some(Value::test_string(
-                    "| foo | bar |\n| --- | --- |\n| 1   | 2   |\n",
+                    "| foo | bar |\n| --- | --- |\n| 1 | 2 |",
                 )),
             },
             Example {
-                description: "Treat each row as a markdown element",
+                description: "Optionally, output a formatted markdown string.",
+                example: "[[foo bar]; [1 2]] | to md --pretty",
+                result: Some(Value::test_string(
+                    "| foo | bar |\n| --- | --- |\n| 1   | 2   |",
+                )),
+            },
+            Example {
+                description: "Treat each row as a markdown element.",
                 example: r#"[{"H1": "Welcome to Nushell" } [[foo bar]; [1 2]]] | to md --per-element --pretty"#,
                 result: Some(Value::test_string(
                     "# Welcome to Nushell\n| foo | bar |\n| --- | --- |\n| 1   | 2   |",
                 )),
             },
             Example {
-                description: "Render a list",
-                example: "[0 1 2] | to md --pretty",
-                result: Some(Value::test_string("0\n1\n2")),
+                description: "Render a list (unordered by default).",
+                example: "[0 1 2] | to md",
+                result: Some(Value::test_string("* 0\n* 1\n* 2")),
+            },
+            Example {
+                description: "Separate list into markdown tables.",
+                example: "[ {foo: 1, bar: 2} {foo: 3, bar: 4} {foo: 5}] | to md --per-element",
+                result: Some(Value::test_string(
+                    "| foo | bar |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\n| foo |\n| --- |\n| 5 |",
+                )),
+            },
+            Example {
+                description: "Center a column of a markdown table.",
+                example: "[ {foo: 1, bar: 2} {foo: 3, bar: 4}] | to md --pretty --center [bar]",
+                result: Some(Value::test_string(
+                    "| foo | bar |\n| --- |:---:|\n| 1   |  2  |\n| 3   |  4  |",
+                )),
+            },
+            Example {
+                description: "Escape markdown special characters.",
+                example: r#"[ {foo: "_1_", bar: "\# 2"} {foo: "[3]", bar: "4|5"}] | to md --escape-md"#,
+                result: Some(Value::test_string(
+                    "| foo | bar |\n| --- | --- |\n| \\_1\\_ | \\# 2 |\n| \\[3\\] | 4\\|5 |",
+                )),
+            },
+            Example {
+                description: "Escape html special characters.",
+                example: r#"[ {a: p, b: "<p>Welcome to nushell</p>"}] | to md --escape-html"#,
+                result: Some(Value::test_string(
+                    "| a | b |\n| --- | --- |\n| p | &lt;p&gt;Welcome to nushell&lt;&#x2f;p&gt; |",
+                )),
+            },
+            Example {
+                description: "Render a list as an ordered markdown list.",
+                example: "[one two three] | to md --list ordered",
+                result: Some(Value::test_string("1. one\n2. two\n3. three")),
+            },
+            Example {
+                description: "Render a list without markers.",
+                example: "[one two three] | to md --list none",
+                result: Some(Value::test_string("one\ntwo\nthree")),
             },
         ]
     }
@@ -68,17 +177,47 @@ impl Command for ToMd {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
+
         let pretty = call.has_flag(engine_state, stack, "pretty")?;
         let per_element = call.has_flag(engine_state, stack, "per-element")?;
+        let escape_md = call.has_flag(engine_state, stack, "escape-md")?;
+        let escape_html = call.has_flag(engine_state, stack, "escape-html")?;
+        let escape_both = call.has_flag(engine_state, stack, "escape-all")?;
+        let center: Option<Vec<CellPath>> = call.get_flag(engine_state, stack, "center")?;
+        let list_style_str: Option<Spanned<String>> = call.get_flag(engine_state, stack, "list")?;
+
+        let list_style = match &list_style_str {
+            Some(spanned) => {
+                ListStyle::from_str(&spanned.item).ok_or_else(|| ShellError::InvalidValue {
+                    valid: format!("one of {}", ListStyle::OPTIONS.join(", ")),
+                    actual: spanned.item.clone(),
+                    span: spanned.span,
+                })?
+            }
+            None => ListStyle::default(),
+        };
+
         let config = stack.get_config(engine_state);
-        to_md(input, pretty, per_element, &config, head)
+
+        to_md(
+            input,
+            ToMdOptions {
+                pretty,
+                per_element,
+                center,
+                escape_md: escape_md || escape_both,
+                escape_html: escape_html || escape_both,
+                list_style,
+            },
+            &config,
+            head,
+        )
     }
 }
 
 fn to_md(
     input: PipelineData,
-    pretty: bool,
-    per_element: bool,
+    options: ToMdOptions,
     config: &Config,
     head: Span,
 ) -> Result<PipelineData, ShellError> {
@@ -88,71 +227,258 @@ fn to_md(
         .unwrap_or_default()
         .with_content_type(Some("text/markdown".into()));
 
+    // Collect input to check if it's a simple list (no records/tables)
+    let values: Vec<Value> = input.into_iter().collect();
+
+    // Check if input is a simple list (no records, lists, or tables)
+    // Tables in nushell can be represented as List of Records or List of Lists
+    let is_simple_list = !values
+        .iter()
+        .any(|v| matches!(v, Value::Record { .. } | Value::List { .. }));
+
+    // For simple lists, use list_style formatting
+    if is_simple_list {
+        let result = values
+            .into_iter()
+            .enumerate()
+            .map(|(idx, val)| {
+                format_list_item(
+                    val,
+                    idx,
+                    options.list_style,
+                    options.escape_md,
+                    options.escape_html,
+                    config,
+                )
+            })
+            .collect::<Vec<String>>()
+            .join("")
+            .trim()
+            .to_string();
+        return Ok(Value::string(result, head).into_pipeline_data_with_metadata(Some(metadata)));
+    }
+
+    // For tables/records, use the grouping logic
+    let input = Value::list(values, head).into_pipeline_data();
     let (grouped_input, single_list) = group_by(input, head, config);
-    if per_element || single_list {
+    if options.per_element || single_list {
         return Ok(Value::string(
             grouped_input
                 .into_iter()
-                .map(move |val| match val {
-                    Value::List { .. } => table(val.into_pipeline_data(), pretty, config),
-                    other => fragment(other, pretty, config),
+                .scan(0usize, |list_idx, val| {
+                    Some(match &val {
+                        Value::List { .. } => {
+                            format!(
+                                "{}\n\n",
+                                table(
+                                    val.into_pipeline_data(),
+                                    options.pretty,
+                                    &options.center,
+                                    options.escape_md,
+                                    options.escape_html,
+                                    config
+                                )
+                            )
+                        }
+                        // For records, check if it's a special markdown element (h1, h2, etc.)
+                        Value::Record { val: record, .. } => {
+                            if is_special_markdown_record(record) {
+                                // Special markdown elements use fragment() directly
+                                fragment(
+                                    val,
+                                    options.pretty,
+                                    &options.center,
+                                    options.escape_md,
+                                    options.escape_html,
+                                    config,
+                                )
+                            } else {
+                                // Regular records are rendered as tables
+                                format!(
+                                    "{}\n\n",
+                                    fragment(
+                                        val,
+                                        options.pretty,
+                                        &options.center,
+                                        options.escape_md,
+                                        options.escape_html,
+                                        config
+                                    )
+                                )
+                            }
+                        }
+                        _ => {
+                            let result = format_list_item(
+                                val,
+                                *list_idx,
+                                options.list_style,
+                                options.escape_md,
+                                options.escape_html,
+                                config,
+                            );
+                            *list_idx += 1;
+                            result
+                        }
+                    })
                 })
                 .collect::<Vec<String>>()
-                .join(""),
+                .join("")
+                .trim(),
             head,
         )
         .into_pipeline_data_with_metadata(Some(metadata)));
     }
-    Ok(Value::string(table(grouped_input, pretty, config), head)
-        .into_pipeline_data_with_metadata(Some(metadata)))
+    Ok(Value::string(
+        table(
+            grouped_input,
+            options.pretty,
+            &options.center,
+            options.escape_md,
+            options.escape_html,
+            config,
+        ),
+        head,
+    )
+    .into_pipeline_data_with_metadata(Some(metadata)))
 }
 
-fn fragment(input: Value, pretty: bool, config: &Config) -> String {
+/// Formats a single list item with the appropriate list marker based on list_style
+fn format_list_item(
+    input: Value,
+    index: usize,
+    list_style: ListStyle,
+    escape_md: bool,
+    escape_html: bool,
+    config: &Config,
+) -> String {
+    let value_string = input.to_expanded_string("|", config);
+    let escaped = escape_value(value_string, escape_md, escape_html, false);
+
+    match list_style {
+        ListStyle::Ordered => format!("{}. {}\n", index + 1, escaped),
+        ListStyle::Unordered => format!("* {}\n", escaped),
+        ListStyle::None => format!("{}\n", escaped),
+    }
+}
+
+fn escape_markdown_characters(input: String, escape_md: bool, for_table: bool) -> String {
+    let mut output = String::with_capacity(input.len());
+    for ch in input.chars() {
+        let must_escape = match ch {
+            '\\' => true,
+            '|' if for_table => true,
+            '`' | '*' | '_' | '{' | '}' | '[' | ']' | '(' | ')' | '<' | '>' | '#' | '+' | '-'
+            | '.' | '!'
+                if escape_md =>
+            {
+                true
+            }
+            _ => false,
+        };
+
+        if must_escape {
+            output.push('\\');
+        }
+        output.push(ch);
+    }
+    output
+}
+
+/// Escapes a value string with optional HTML and Markdown escaping
+fn escape_value(value: String, escape_md: bool, escape_html: bool, for_table: bool) -> String {
+    escape_markdown_characters(
+        if escape_html {
+            v_htmlescape::escape(&value).to_string()
+        } else {
+            value
+        },
+        escape_md,
+        for_table,
+    )
+}
+
+fn fragment(
+    input: Value,
+    pretty: bool,
+    center: &Option<Vec<CellPath>>,
+    escape_md: bool,
+    escape_html: bool,
+    config: &Config,
+) -> String {
     let mut out = String::new();
 
     if let Value::Record { val, .. } = &input {
         match val.get_index(0) {
-            Some((header, data)) if val.len() == 1 => {
+            Some((header, data)) if is_special_markdown_record(val) => {
+                // SAFETY: is_special_markdown_record already validated the header matches one of these
                 let markup = match header.to_ascii_lowercase().as_ref() {
-                    "h1" => "# ".to_string(),
-                    "h2" => "## ".to_string(),
-                    "h3" => "### ".to_string(),
-                    "blockquote" => "> ".to_string(),
-                    _ => return table(input.into_pipeline_data(), pretty, config),
+                    "h1" => "# ",
+                    "h2" => "## ",
+                    "h3" => "### ",
+                    "blockquote" => "> ",
+                    _ => "> ", // Fallback for any future validated headers not yet listed explicitly
                 };
 
-                out.push_str(&markup);
-                out.push_str(&data.to_expanded_string("|", config));
+                let value_string = data.to_expanded_string("|", config);
+                out.push_str(markup);
+                out.push_str(&escape_value(value_string, escape_md, escape_html, false));
             }
-            _ => out = table(input.into_pipeline_data(), pretty, config),
+            _ => {
+                out = table(
+                    input.into_pipeline_data(),
+                    pretty,
+                    center,
+                    escape_md,
+                    escape_html,
+                    config,
+                )
+            }
         }
     } else {
-        out = input.to_expanded_string("|", config)
+        let value_string = input.to_expanded_string("|", config);
+        out = escape_value(value_string, escape_md, escape_html, false);
     }
 
     out.push('\n');
     out
 }
 
-fn collect_headers(headers: &[String]) -> (Vec<String>, Vec<usize>) {
+fn collect_headers(headers: &[String], escape_md: bool) -> (Vec<String>, Vec<usize>) {
     let mut escaped_headers: Vec<String> = Vec::new();
     let mut column_widths: Vec<usize> = Vec::new();
 
     if !headers.is_empty() && (headers.len() > 1 || !headers[0].is_empty()) {
         for header in headers {
-            let escaped_header_string = v_htmlescape::escape(header).to_string();
+            let escaped_header_string = escape_markdown_characters(
+                v_htmlescape::escape(header).to_string(),
+                escape_md,
+                true,
+            );
             column_widths.push(escaped_header_string.len());
             escaped_headers.push(escaped_header_string);
         }
     } else {
-        column_widths = vec![0; headers.len()]
+        column_widths = vec![0; headers.len()];
     }
 
     (escaped_headers, column_widths)
 }
 
-fn table(input: PipelineData, pretty: bool, config: &Config) -> String {
-    let vec_of_values = input.into_iter().collect::<Vec<Value>>();
+fn table(
+    input: PipelineData,
+    pretty: bool,
+    center: &Option<Vec<CellPath>>,
+    escape_md: bool,
+    escape_html: bool,
+    config: &Config,
+) -> String {
+    let vec_of_values = input
+        .into_iter()
+        .flat_map(|val| match val {
+            Value::List { vals, .. } => vals,
+            other => vec![other],
+        })
+        .collect::<Vec<Value>>();
     let mut headers = merge_descriptors(&vec_of_values);
 
     let mut empty_header_index = 0;
@@ -169,7 +495,7 @@ fn table(input: PipelineData, pretty: bool, config: &Config) -> String {
         }
     }
 
-    let (escaped_headers, mut column_widths) = collect_headers(&headers);
+    let (escaped_headers, mut column_widths) = collect_headers(&headers, escape_md);
 
     let mut escaped_rows: Vec<Vec<String>> = Vec::new();
 
@@ -185,12 +511,24 @@ fn table(input: PipelineData, pretty: bool, config: &Config) -> String {
                         .cloned()
                         .unwrap_or_else(|| Value::nothing(span))
                         .to_expanded_string(", ", config);
-                    let new_column_width = value_string.len();
+                    let escaped_string = escape_markdown_characters(
+                        if escape_html {
+                            v_htmlescape::escape(&value_string).to_string()
+                        } else {
+                            value_string
+                        },
+                        escape_md,
+                        true,
+                    );
 
-                    escaped_row.push(value_string);
+                    let new_column_width = escaped_string.len();
+                    escaped_row.push(escaped_string);
 
                     if column_widths[i] < new_column_width {
                         column_widths[i] = new_column_width;
+                    }
+                    if column_widths[i] < 3 {
+                        column_widths[i] = 3;
                     }
                 }
             }
@@ -204,17 +542,21 @@ fn table(input: PipelineData, pretty: bool, config: &Config) -> String {
         escaped_rows.push(escaped_row);
     }
 
-    let output_string = if (column_widths.is_empty() || column_widths.iter().all(|x| *x == 0))
+    if (column_widths.is_empty() || column_widths.iter().all(|x| *x == 0))
         && escaped_rows.is_empty()
     {
         String::from("")
     } else {
-        get_output_string(&escaped_headers, &escaped_rows, &column_widths, pretty)
-            .trim()
-            .to_string()
-    };
-
-    output_string
+        get_output_string(
+            &escaped_headers,
+            &escaped_rows,
+            &column_widths,
+            pretty,
+            center,
+        )
+        .trim()
+        .to_string()
+    }
 }
 
 pub fn group_by(values: PipelineData, head: Span, config: &Config) -> (PipelineData, bool) {
@@ -255,37 +597,66 @@ fn get_output_string(
     rows: &[Vec<String>],
     column_widths: &[usize],
     pretty: bool,
+    center: &Option<Vec<CellPath>>,
 ) -> String {
     let mut output_string = String::new();
+
+    let mut to_center: HashSet<String> = HashSet::new();
+    if let Some(center_vec) = center.as_ref() {
+        for cell_path in center_vec {
+            if let Some(PathMember::String { val, .. }) = cell_path
+                .members
+                .iter()
+                .find(|member| matches!(member, PathMember::String { .. }))
+            {
+                to_center.insert(val.clone());
+            }
+        }
+    }
 
     if !headers.is_empty() {
         output_string.push('|');
 
         for i in 0..headers.len() {
+            output_string.push(' ');
             if pretty {
-                output_string.push(' ');
-                output_string.push_str(&get_padded_string(
-                    headers[i].clone(),
-                    column_widths[i],
-                    ' ',
-                ));
-                output_string.push(' ');
+                if center.is_some() && to_center.contains(&headers[i]) {
+                    output_string.push_str(&get_centered_string(
+                        headers[i].clone(),
+                        column_widths[i],
+                        ' ',
+                    ));
+                } else {
+                    output_string.push_str(&get_padded_string(
+                        headers[i].clone(),
+                        column_widths[i],
+                        ' ',
+                    ));
+                }
             } else {
                 output_string.push_str(&headers[i]);
             }
 
-            output_string.push('|');
+            output_string.push_str(" |");
         }
 
         output_string.push_str("\n|");
 
-        for &col_width in column_widths.iter().take(headers.len()) {
+        for i in 0..headers.len() {
+            let centered_column = center.is_some() && to_center.contains(&headers[i]);
+            let border_char = if centered_column { ':' } else { ' ' };
             if pretty {
-                output_string.push(' ');
-                output_string.push_str(&get_padded_string(String::from("-"), col_width, '-'));
-                output_string.push(' ');
+                output_string.push(border_char);
+                output_string.push_str(&get_padded_string(
+                    String::from("-"),
+                    column_widths[i],
+                    '-',
+                ));
+                output_string.push(border_char);
+            } else if centered_column {
+                output_string.push_str(":---:");
             } else {
-                output_string.push('-');
+                output_string.push_str(" --- ");
             }
 
             output_string.push('|');
@@ -300,16 +671,30 @@ fn get_output_string(
         }
 
         for i in 0..row.len() {
+            if !headers.is_empty() {
+                output_string.push(' ');
+            }
+
             if pretty && column_widths.get(i).is_some() {
-                output_string.push(' ');
-                output_string.push_str(&get_padded_string(row[i].clone(), column_widths[i], ' '));
-                output_string.push(' ');
+                if center.is_some() && to_center.contains(&headers[i]) {
+                    output_string.push_str(&get_centered_string(
+                        row[i].clone(),
+                        column_widths[i],
+                        ' ',
+                    ));
+                } else {
+                    output_string.push_str(&get_padded_string(
+                        row[i].clone(),
+                        column_widths[i],
+                        ' ',
+                    ));
+                }
             } else {
                 output_string.push_str(&row[i]);
             }
 
             if !headers.is_empty() {
-                output_string.push('|');
+                output_string.push_str(" |");
             }
         }
 
@@ -317,6 +702,24 @@ fn get_output_string(
     }
 
     output_string
+}
+
+fn get_centered_string(text: String, desired_length: usize, padding_character: char) -> String {
+    let total_padding = if text.len() > desired_length {
+        0
+    } else {
+        desired_length - text.len()
+    };
+
+    let repeat_left = total_padding / 2;
+    let repeat_right = total_padding - repeat_left;
+
+    format!(
+        "{}{}{}",
+        padding_character.to_string().repeat(repeat_left),
+        text,
+        padding_character.to_string().repeat(repeat_right)
+    )
 }
 
 fn get_padded_string(text: String, desired_length: usize, padding_character: char) -> String {
@@ -339,7 +742,7 @@ mod tests {
 
     use super::*;
     use nu_cmd_lang::eval_pipeline_without_terminal_expression;
-    use nu_protocol::{record, Config, IntoPipelineData, Value};
+    use nu_protocol::{Config, IntoPipelineData, Value, casing::Casing, record};
 
     fn one(string: &str) -> String {
         string
@@ -353,10 +756,8 @@ mod tests {
     }
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ToMd {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ToMd)
     }
 
     #[test]
@@ -365,7 +766,10 @@ mod tests {
             "H1" => Value::test_string("Ecuador"),
         });
 
-        assert_eq!(fragment(value, false, &Config::default()), "# Ecuador\n");
+        assert_eq!(
+            fragment(value, false, &None, false, false, &Config::default()),
+            "# Ecuador\n"
+        );
     }
 
     #[test]
@@ -374,7 +778,10 @@ mod tests {
             "H2" => Value::test_string("Ecuador"),
         });
 
-        assert_eq!(fragment(value, false, &Config::default()), "## Ecuador\n");
+        assert_eq!(
+            fragment(value, false, &None, false, false, &Config::default()),
+            "## Ecuador\n"
+        );
     }
 
     #[test]
@@ -383,7 +790,10 @@ mod tests {
             "H3" => Value::test_string("Ecuador"),
         });
 
-        assert_eq!(fragment(value, false, &Config::default()), "### Ecuador\n");
+        assert_eq!(
+            fragment(value, false, &None, false, false, &Config::default()),
+            "### Ecuador\n"
+        );
     }
 
     #[test]
@@ -392,7 +802,10 @@ mod tests {
             "BLOCKQUOTE" => Value::test_string("Ecuador"),
         });
 
-        assert_eq!(fragment(value, false, &Config::default()), "> Ecuador\n");
+        assert_eq!(
+            fragment(value, false, &None, false, false, &Config::default()),
+            "> Ecuador\n"
+        );
     }
 
     #[test]
@@ -413,26 +826,36 @@ mod tests {
             table(
                 value.clone().into_pipeline_data(),
                 false,
+                &None,
+                false,
+                false,
                 &Config::default()
             ),
             one(r#"
-            |country|
-            |-|
-            |Ecuador|
-            |New Zealand|
-            |USA|
-        "#)
+            | country |
+            | --- |
+            | Ecuador |
+            | New Zealand |
+            | USA |
+            "#)
         );
 
         assert_eq!(
-            table(value.into_pipeline_data(), true, &Config::default()),
+            table(
+                value.into_pipeline_data(),
+                true,
+                &None,
+                false,
+                false,
+                &Config::default()
+            ),
             one(r#"
             | country     |
             | ----------- |
             | Ecuador     |
             | New Zealand |
             | USA         |
-        "#)
+            "#)
         );
     }
 
@@ -453,14 +876,329 @@ mod tests {
             table(
                 value.clone().into_pipeline_data(),
                 false,
+                &None,
+                false,
+                false,
                 &Config::default()
             ),
             one(r#"
-            ||foo|
-            |-|-|
-            |1|2|
-            |3|4|
-        "#)
+            |  | foo |
+            | --- | --- |
+            | 1 | 2 |
+            | 3 | 4 |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_empty_row_value() {
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "foo" => Value::test_string("1"),
+                "bar" => Value::test_string("2"),
+            }),
+            Value::test_record(record! {
+                "foo" => Value::test_string("3"),
+                "bar" => Value::test_string("4"),
+            }),
+            Value::test_record(record! {
+                "foo" => Value::test_string("5"),
+                "bar" => Value::test_string(""),
+            }),
+        ]);
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                false,
+                &None,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | foo | bar |
+            | --- | --- |
+            | 1 | 2 |
+            | 3 | 4 |
+            | 5 |  |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_center_column() {
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "foo" => Value::test_string("1"),
+                "bar" => Value::test_string("2"),
+            }),
+            Value::test_record(record! {
+                "foo" => Value::test_string("3"),
+                "bar" => Value::test_string("4"),
+            }),
+            Value::test_record(record! {
+                "foo" => Value::test_string("5"),
+                "bar" => Value::test_string("6"),
+            }),
+        ]);
+
+        let center_columns = Value::test_list(vec![Value::test_cell_path(CellPath {
+            members: vec![PathMember::test_string(
+                "bar".into(),
+                false,
+                Casing::Sensitive,
+            )],
+        })]);
+
+        let cell_path: Vec<CellPath> = center_columns
+            .into_list()
+            .unwrap()
+            .into_iter()
+            .map(|v| v.into_cell_path().unwrap())
+            .collect();
+
+        let center: Option<Vec<CellPath>> = Some(cell_path);
+
+        // With pretty
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                true,
+                &center,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | foo | bar |
+            | --- |:---:|
+            | 1   |  2  |
+            | 3   |  4  |
+            | 5   |  6  |
+            "#)
+        );
+
+        // Without pretty
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                false,
+                &center,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | foo | bar |
+            | --- |:---:|
+            | 1 | 2 |
+            | 3 | 4 |
+            | 5 | 6 |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_empty_center_column() {
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "foo" => Value::test_string("1"),
+                "bar" => Value::test_string("2"),
+            }),
+            Value::test_record(record! {
+                "foo" => Value::test_string("3"),
+                "bar" => Value::test_string("4"),
+            }),
+            Value::test_record(record! {
+                "foo" => Value::test_string("5"),
+                "bar" => Value::test_string("6"),
+            }),
+        ]);
+
+        let center: Option<Vec<CellPath>> = Some(vec![]);
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                true,
+                &center,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | foo | bar |
+            | --- | --- |
+            | 1   | 2   |
+            | 3   | 4   |
+            | 5   | 6   |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_center_multiple_columns() {
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "command" => Value::test_string("ls"),
+                "input" => Value::test_string("."),
+                "output" => Value::test_string("file.txt"),
+            }),
+            Value::test_record(record! {
+                "command" => Value::test_string("echo"),
+                "input" => Value::test_string("'hi'"),
+                "output" => Value::test_string("hi"),
+            }),
+            Value::test_record(record! {
+                "command" => Value::test_string("cp"),
+                "input" => Value::test_string("a.txt"),
+                "output" => Value::test_string("b.txt"),
+            }),
+        ]);
+
+        let center_columns = Value::test_list(vec![
+            Value::test_cell_path(CellPath {
+                members: vec![PathMember::test_string(
+                    "command".into(),
+                    false,
+                    Casing::Sensitive,
+                )],
+            }),
+            Value::test_cell_path(CellPath {
+                members: vec![PathMember::test_string(
+                    "output".into(),
+                    false,
+                    Casing::Sensitive,
+                )],
+            }),
+        ]);
+
+        let cell_path: Vec<CellPath> = center_columns
+            .into_list()
+            .unwrap()
+            .into_iter()
+            .map(|v| v.into_cell_path().unwrap())
+            .collect();
+
+        let center: Option<Vec<CellPath>> = Some(cell_path);
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                true,
+                &center,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | command | input |  output  |
+            |:-------:| ----- |:--------:|
+            |   ls    | .     | file.txt |
+            |  echo   | 'hi'  |    hi    |
+            |   cp    | a.txt |  b.txt   |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_center_non_existing_column() {
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "name" => Value::test_string("Alice"),
+                "age" => Value::test_string("30"),
+            }),
+            Value::test_record(record! {
+                "name" => Value::test_string("Bob"),
+                "age" => Value::test_string("5"),
+            }),
+            Value::test_record(record! {
+                "name" => Value::test_string("Charlie"),
+                "age" => Value::test_string("20"),
+            }),
+        ]);
+
+        let center_columns = Value::test_list(vec![Value::test_cell_path(CellPath {
+            members: vec![PathMember::test_string(
+                "none".into(),
+                false,
+                Casing::Sensitive,
+            )],
+        })]);
+
+        let cell_path: Vec<CellPath> = center_columns
+            .into_list()
+            .unwrap()
+            .into_iter()
+            .map(|v| v.into_cell_path().unwrap())
+            .collect();
+
+        let center: Option<Vec<CellPath>> = Some(cell_path);
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                true,
+                &center,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | name    | age |
+            | ------- | --- |
+            | Alice   | 30  |
+            | Bob     | 5   |
+            | Charlie | 20  |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_center_complex_cell_path() {
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "k" => Value::test_string("version"),
+                "v" => Value::test_string("0.104.1"),
+            }),
+            Value::test_record(record! {
+                "k" => Value::test_string("build_time"),
+                "v" => Value::test_string("2025-05-28 11:00:45 +01:00"),
+            }),
+        ]);
+
+        let center_columns = Value::test_list(vec![Value::test_cell_path(CellPath {
+            members: vec![
+                PathMember::test_int(1, false),
+                PathMember::test_string("v".into(), false, Casing::Sensitive),
+            ],
+        })]);
+
+        let cell_path: Vec<CellPath> = center_columns
+            .into_list()
+            .unwrap()
+            .into_iter()
+            .map(|v| v.into_cell_path().unwrap())
+            .collect();
+
+        let center: Option<Vec<CellPath>> = Some(cell_path);
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                true,
+                &center,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | k          |             v              |
+            | ---------- |:--------------------------:|
+            | version    |          0.104.1           |
+            | build_time | 2025-05-28 11:00:45 +01:00 |
+            "#)
         );
     }
 
@@ -484,15 +1222,324 @@ mod tests {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = "{a: 1 b: 2} | to md  | metadata | get content_type";
+        let cmd = "{a: 1 b: 2} | to md  | metadata | get content_type | $in";
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(record!("content_type" => Value::test_string("text/markdown"))),
+            Value::test_string("text/markdown"),
             result.expect("There should be a result")
         );
+    }
+
+    #[test]
+    fn test_escape_md_characters() {
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "name|label" => Value::test_string("orderColumns"),
+                "type*" => Value::test_string("'asc' | 'desc' | 'none'"),
+            }),
+            Value::test_record(record! {
+                "name|label" => Value::test_string("_ref_value"),
+                "type*" => Value::test_string("RefObject<SampleTableRef | null>"),
+            }),
+            Value::test_record(record! {
+                "name|label" => Value::test_string("onChange"),
+                "type*" => Value::test_string("(val: string) => void\\"),
+            }),
+        ]);
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                false,
+                &None,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | name\|label | type* |
+            | --- | --- |
+            | orderColumns | 'asc' \| 'desc' \| 'none' |
+            | _ref_value | RefObject<SampleTableRef \| null> |
+            | onChange | (val: string) => void\\ |
+            "#)
+        );
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                false,
+                &None,
+                true,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | name\|label | type\* |
+            | --- | --- |
+            | orderColumns | 'asc' \| 'desc' \| 'none' |
+            | \_ref\_value | RefObject\<SampleTableRef \| null\> |
+            | onChange | \(val: string\) =\> void\\ |
+            "#)
+        );
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                true,
+                &None,
+                false,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | name\|label  | type*                             |
+            | ------------ | --------------------------------- |
+            | orderColumns | 'asc' \| 'desc' \| 'none'         |
+            | _ref_value   | RefObject<SampleTableRef \| null> |
+            | onChange     | (val: string) => void\\           |
+            "#)
+        );
+
+        assert_eq!(
+            table(
+                value.into_pipeline_data(),
+                true,
+                &None,
+                true,
+                false,
+                &Config::default()
+            ),
+            one(r#"
+            | name\|label  | type\*                              |
+            | ------------ | ----------------------------------- |
+            | orderColumns | 'asc' \| 'desc' \| 'none'           |
+            | \_ref\_value | RefObject\<SampleTableRef \| null\> |
+            | onChange     | \(val: string\) =\> void\\          |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_escape_html_characters() {
+        let value = Value::test_list(vec![Value::test_record(record! {
+            "tag" => Value::test_string("table"),
+            "code" => Value::test_string(r#"<table><tr><td scope="row">Chris</td><td>HTML tables</td><td>22</td></tr><tr><td scope="row">Dennis</td><td>Web accessibility</td><td>45</td></tr></table>"#),
+        })]);
+
+        assert_eq!(
+            table(
+                value.clone().into_pipeline_data(),
+                false,
+                &None,
+                false,
+                true,
+                &Config::default()
+            ),
+            one(r#"
+            | tag | code |
+            | --- | --- |
+            | table | &lt;table&gt;&lt;tr&gt;&lt;td scope=&quot;row&quot;&gt;Chris&lt;&#x2f;td&gt;&lt;td&gt;HTML tables&lt;&#x2f;td&gt;&lt;td&gt;22&lt;&#x2f;td&gt;&lt;&#x2f;tr&gt;&lt;tr&gt;&lt;td scope=&quot;row&quot;&gt;Dennis&lt;&#x2f;td&gt;&lt;td&gt;Web accessibility&lt;&#x2f;td&gt;&lt;td&gt;45&lt;&#x2f;td&gt;&lt;&#x2f;tr&gt;&lt;&#x2f;table&gt; |
+            "#)
+        );
+
+        assert_eq!(
+            table(
+                value.into_pipeline_data(),
+                true,
+                &None,
+                false,
+                true,
+                &Config::default()
+            ),
+            one(r#"
+            | tag   | code                                                                                                                                                                                                                                                                                                                                    |
+            | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+            | table | &lt;table&gt;&lt;tr&gt;&lt;td scope=&quot;row&quot;&gt;Chris&lt;&#x2f;td&gt;&lt;td&gt;HTML tables&lt;&#x2f;td&gt;&lt;td&gt;22&lt;&#x2f;td&gt;&lt;&#x2f;tr&gt;&lt;tr&gt;&lt;td scope=&quot;row&quot;&gt;Dennis&lt;&#x2f;td&gt;&lt;td&gt;Web accessibility&lt;&#x2f;td&gt;&lt;td&gt;45&lt;&#x2f;td&gt;&lt;&#x2f;tr&gt;&lt;&#x2f;table&gt; |
+            "#)
+        );
+    }
+
+    #[test]
+    fn test_list_ordered() {
+        let value = Value::test_list(vec![
+            Value::test_string("one"),
+            Value::test_string("two"),
+            Value::test_string("three"),
+        ]);
+
+        let result = to_md(
+            value.into_pipeline_data(),
+            ToMdOptions {
+                pretty: false,
+                per_element: false,
+                center: None,
+                escape_md: false,
+                escape_html: false,
+                list_style: ListStyle::Ordered,
+            },
+            &Config::default(),
+            Span::test_data(),
+        )
+        .unwrap()
+        .into_value(Span::test_data())
+        .unwrap()
+        .into_string()
+        .unwrap();
+
+        assert_eq!(result, "1. one\n2. two\n3. three");
+    }
+
+    #[test]
+    fn test_list_unordered() {
+        let value = Value::test_list(vec![
+            Value::test_string("apple"),
+            Value::test_string("banana"),
+            Value::test_string("cherry"),
+        ]);
+
+        let result = to_md(
+            value.into_pipeline_data(),
+            ToMdOptions {
+                pretty: false,
+                per_element: false,
+                center: None,
+                escape_md: false,
+                escape_html: false,
+                list_style: ListStyle::Unordered,
+            },
+            &Config::default(),
+            Span::test_data(),
+        )
+        .unwrap()
+        .into_value(Span::test_data())
+        .unwrap()
+        .into_string()
+        .unwrap();
+
+        assert_eq!(result, "* apple\n* banana\n* cherry");
+    }
+
+    #[test]
+    fn test_list_with_escape_md() {
+        let value = Value::test_list(vec![
+            Value::test_string("*bold*"),
+            Value::test_string("[link]"),
+        ]);
+
+        let result = to_md(
+            value.into_pipeline_data(),
+            ToMdOptions {
+                pretty: false,
+                per_element: false,
+                center: None,
+                escape_md: true,
+                escape_html: false,
+                list_style: ListStyle::Unordered,
+            },
+            &Config::default(),
+            Span::test_data(),
+        )
+        .unwrap()
+        .into_value(Span::test_data())
+        .unwrap()
+        .into_string()
+        .unwrap();
+
+        assert_eq!(result, "* \\*bold\\*\n* \\[link\\]");
+    }
+
+    #[test]
+    fn test_list_none() {
+        let value = Value::test_list(vec![
+            Value::test_string("one"),
+            Value::test_string("two"),
+            Value::test_string("three"),
+        ]);
+
+        let result = to_md(
+            value.into_pipeline_data(),
+            ToMdOptions {
+                pretty: false,
+                per_element: false,
+                center: None,
+                escape_md: false,
+                escape_html: false,
+                list_style: ListStyle::None,
+            },
+            &Config::default(),
+            Span::test_data(),
+        )
+        .unwrap()
+        .into_value(Span::test_data())
+        .unwrap()
+        .into_string()
+        .unwrap();
+
+        assert_eq!(result, "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn test_empty_list() {
+        let value = Value::test_list(vec![]);
+
+        let result = to_md(
+            value.into_pipeline_data(),
+            ToMdOptions {
+                pretty: false,
+                per_element: false,
+                center: None,
+                escape_md: false,
+                escape_html: false,
+                list_style: ListStyle::Unordered,
+            },
+            &Config::default(),
+            Span::test_data(),
+        )
+        .unwrap()
+        .into_value(Span::test_data())
+        .unwrap()
+        .into_string()
+        .unwrap();
+
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_mixed_input_ordered() {
+        // Test that list numbering is continuous even with h1/tables mixed in
+        let value = Value::test_list(vec![
+            Value::test_record(record! {
+                "h1" => Value::test_string("Title"),
+            }),
+            Value::test_string("first"),
+            Value::test_string("second"),
+        ]);
+
+        let result = to_md(
+            value.into_pipeline_data(),
+            ToMdOptions {
+                pretty: false,
+                per_element: true,
+                center: None,
+                escape_md: false,
+                escape_html: false,
+                list_style: ListStyle::Ordered,
+            },
+            &Config::default(),
+            Span::test_data(),
+        )
+        .unwrap()
+        .into_value(Span::test_data())
+        .unwrap()
+        .into_string()
+        .unwrap();
+
+        // h1 should not affect numbering; items should be 1. and 2.
+        assert_eq!(result, "# Title\n1. first\n2. second");
     }
 }

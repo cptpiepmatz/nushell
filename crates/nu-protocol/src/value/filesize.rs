@@ -1,15 +1,18 @@
-use crate::{Config, FromValue, IntoValue, ShellError, Span, Type, Value};
-use byte_unit::UnitType;
-use nu_utils::get_system_locale;
-use num_format::ToFormattedString;
+use crate::{FromValue, IntoValue, ShellError, Span, Type, Value};
+use num_format::{Locale, WriteFormatted};
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt,
+    char,
+    fmt::{self, Write},
     iter::Sum,
     ops::{Add, Mul, Neg, Sub},
     str::FromStr,
 };
 use thiserror::Error;
+
+pub const SUPPORTED_FILESIZE_UNITS: [&str; 13] = [
+    "B", "kB", "MB", "GB", "TB", "PB", "EB", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB",
+];
 
 /// A signed number of bytes.
 ///
@@ -66,11 +69,79 @@ impl Filesize {
     }
 
     /// Returns a [`Filesize`] representing the sign of `self`.
-    /// - 0 if the filesize is zero
-    /// - 1 if the filesize is positive
-    /// - -1 if the filesize is negative
+    /// - 0 if the file size is zero
+    /// - 1 if the file size is positive
+    /// - -1 if the file size is negative
     pub const fn signum(self) -> Self {
         Self(self.0.signum())
+    }
+
+    /// Returns the largest [`FilesizeUnit`] with a metric prefix that is smaller than or equal to `self`.
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{Filesize, FilesizeUnit};
+    ///
+    /// let filesize = Filesize::from(FilesizeUnit::KB);
+    /// assert_eq!(filesize.largest_metric_unit(), FilesizeUnit::KB);
+    ///
+    /// let filesize = Filesize::new(FilesizeUnit::KB.as_bytes() as i64 - 1);
+    /// assert_eq!(filesize.largest_metric_unit(), FilesizeUnit::B);
+    ///
+    /// let filesize = Filesize::from(FilesizeUnit::KiB);
+    /// assert_eq!(filesize.largest_metric_unit(), FilesizeUnit::KB);
+    /// ```
+    pub const fn largest_metric_unit(&self) -> FilesizeUnit {
+        const KB: u64 = FilesizeUnit::KB.as_bytes();
+        const MB: u64 = FilesizeUnit::MB.as_bytes();
+        const GB: u64 = FilesizeUnit::GB.as_bytes();
+        const TB: u64 = FilesizeUnit::TB.as_bytes();
+        const PB: u64 = FilesizeUnit::PB.as_bytes();
+        const EB: u64 = FilesizeUnit::EB.as_bytes();
+
+        match self.0.unsigned_abs() {
+            0..KB => FilesizeUnit::B,
+            KB..MB => FilesizeUnit::KB,
+            MB..GB => FilesizeUnit::MB,
+            GB..TB => FilesizeUnit::GB,
+            TB..PB => FilesizeUnit::TB,
+            PB..EB => FilesizeUnit::PB,
+            EB.. => FilesizeUnit::EB,
+        }
+    }
+
+    /// Returns the largest [`FilesizeUnit`] with a binary prefix that is smaller than or equal to `self`.
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{Filesize, FilesizeUnit};
+    ///
+    /// let filesize = Filesize::from(FilesizeUnit::KiB);
+    /// assert_eq!(filesize.largest_binary_unit(), FilesizeUnit::KiB);
+    ///
+    /// let filesize = Filesize::new(FilesizeUnit::KiB.as_bytes() as i64 - 1);
+    /// assert_eq!(filesize.largest_binary_unit(), FilesizeUnit::B);
+    ///
+    /// let filesize = Filesize::from(FilesizeUnit::MB);
+    /// assert_eq!(filesize.largest_binary_unit(), FilesizeUnit::KiB);
+    /// ```
+    pub const fn largest_binary_unit(&self) -> FilesizeUnit {
+        const KIB: u64 = FilesizeUnit::KiB.as_bytes();
+        const MIB: u64 = FilesizeUnit::MiB.as_bytes();
+        const GIB: u64 = FilesizeUnit::GiB.as_bytes();
+        const TIB: u64 = FilesizeUnit::TiB.as_bytes();
+        const PIB: u64 = FilesizeUnit::PiB.as_bytes();
+        const EIB: u64 = FilesizeUnit::EiB.as_bytes();
+
+        match self.0.unsigned_abs() {
+            0..KIB => FilesizeUnit::B,
+            KIB..MIB => FilesizeUnit::KiB,
+            MIB..GIB => FilesizeUnit::MiB,
+            GIB..TIB => FilesizeUnit::GiB,
+            TIB..PIB => FilesizeUnit::TiB,
+            PIB..EIB => FilesizeUnit::PiB,
+            EIB.. => FilesizeUnit::EiB,
+        }
     }
 }
 
@@ -266,18 +337,17 @@ impl Sum<Filesize> for Option<Filesize> {
 
 impl fmt::Display for Filesize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format_filesize(*self, "auto", Some(false)).fmt(f)
+        write!(f, "{}", FilesizeFormatter::new().format(*self))
     }
 }
 
 /// All the possible filesize units for a [`Filesize`].
 ///
-/// This type contains both units with metric (SI) decimal prefixes which are powers of 10 (e.g., kB = 1000 bytes)
+/// This type contains both units with metric (SI) prefixes which are powers of 10 (e.g., kB = 1000 bytes)
 /// and units with binary prefixes which are powers of 2 (e.g., KiB = 1024 bytes).
 ///
-/// The number of bytes in a [`FilesizeUnit`] can be obtained using
-/// [`as_bytes`](FilesizeUnit::as_bytes).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The number of bytes in a [`FilesizeUnit`] can be obtained using [`as_bytes`](Self::as_bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FilesizeUnit {
     /// One byte
     B,
@@ -334,9 +404,13 @@ impl FilesizeUnit {
         Filesize::new(self.as_bytes() as i64)
     }
 
-    /// Returns the abbreviated unit for a [`FilesizeUnit`] as a [`str`].
+    /// Returns the symbol [`str`] for a [`FilesizeUnit`].
     ///
-    /// The abbreviated unit is exactly the same as the enum case name in Rust code.
+    /// The symbol is exactly the same as the enum case name in Rust code except for
+    /// [`FilesizeUnit::KB`] which is `kB`.
+    ///
+    /// The returned string is the same exact string needed for a successful call to
+    /// [`parse`](str::parse) for a [`FilesizeUnit`].
     ///
     /// # Examples
     /// ```
@@ -344,6 +418,7 @@ impl FilesizeUnit {
     /// assert_eq!(FilesizeUnit::B.as_str(), "B");
     /// assert_eq!(FilesizeUnit::KB.as_str(), "kB");
     /// assert_eq!(FilesizeUnit::KiB.as_str(), "KiB");
+    /// assert_eq!(FilesizeUnit::KB.as_str().parse(), Ok(FilesizeUnit::KB));
     /// ```
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -363,10 +438,10 @@ impl FilesizeUnit {
         }
     }
 
-    /// Returns `true` if a [`FilesizeUnit`] has a metric (SI) decimal prefix (a power of 10).
+    /// Returns `true` if a [`FilesizeUnit`] has a metric (SI) prefix (a power of 10).
     ///
     /// Note that this returns `true` for [`FilesizeUnit::B`] as well.
-    pub const fn is_decimal(&self) -> bool {
+    pub const fn is_metric(&self) -> bool {
         match self {
             Self::B | Self::KB | Self::MB | Self::GB | Self::TB | Self::PB | Self::EB => true,
             Self::KiB | Self::MiB | Self::GiB | Self::TiB | Self::PiB | Self::EiB => false,
@@ -390,7 +465,13 @@ impl From<FilesizeUnit> for Filesize {
     }
 }
 
-/// An error returned when failing to parse a [`FilesizeUnit`].
+impl fmt::Display for FilesizeUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The error returned when failing to parse a [`FilesizeUnit`].
 ///
 /// This occurs when the string being parsed does not exactly match the name of one of the
 /// enum cases in [`FilesizeUnit`].
@@ -399,7 +480,7 @@ pub struct ParseFilesizeUnitError(());
 
 impl fmt::Display for ParseFilesizeUnitError {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(fmt, "invalid filesize unit")
+        write!(fmt, "invalid file size unit")
     }
 }
 
@@ -426,104 +507,376 @@ impl FromStr for FilesizeUnit {
     }
 }
 
-impl fmt::Display for FilesizeUnit {
+/// The different file size unit display formats for a [`FilesizeFormatter`].
+///
+/// To see more information about each possible format, see the documentation for each of the enum
+/// cases of [`FilesizeUnitFormat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FilesizeUnitFormat {
+    /// [`Metric`](Self::Metric) will make a [`FilesizeFormatter`] use the
+    /// [`largest_metric_unit`](Filesize::largest_metric_unit) of a [`Filesize`] when formatting it.
+    Metric,
+    /// [`Binary`](Self::Binary) will make a [`FilesizeFormatter`] use the
+    /// [`largest_binary_unit`](Filesize::largest_binary_unit) of a [`Filesize`] when formatting it.
+    Binary,
+    /// [`FilesizeUnitFormat::Unit`] will make a [`FilesizeFormatter`] use the provided
+    /// [`FilesizeUnit`] when formatting all [`Filesize`]s.
+    Unit(FilesizeUnit),
+}
+
+impl FilesizeUnitFormat {
+    /// Returns a string representation of a [`FilesizeUnitFormat`].
+    ///
+    /// The returned string is the same exact string needed for a successful call to
+    /// [`parse`](str::parse) for a [`FilesizeUnitFormat`].
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{FilesizeUnit, FilesizeUnitFormat};
+    /// assert_eq!(FilesizeUnitFormat::Metric.as_str(), "metric");
+    /// assert_eq!(FilesizeUnitFormat::Binary.as_str(), "binary");
+    /// assert_eq!(FilesizeUnitFormat::Unit(FilesizeUnit::KB).as_str(), "kB");
+    /// assert_eq!(FilesizeUnitFormat::Metric.as_str().parse(), Ok(FilesizeUnitFormat::Metric));
+    /// ```
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Metric => "metric",
+            Self::Binary => "binary",
+            Self::Unit(unit) => unit.as_str(),
+        }
+    }
+
+    /// Returns `true` for [`FilesizeUnitFormat::Metric`] or if the underlying [`FilesizeUnit`]
+    /// is metric according to [`FilesizeUnit::is_metric`].
+    ///
+    /// Note that this returns `true` for [`FilesizeUnit::B`] as well.
+    pub const fn is_metric(&self) -> bool {
+        match self {
+            Self::Metric => true,
+            Self::Binary => false,
+            Self::Unit(unit) => unit.is_metric(),
+        }
+    }
+
+    /// Returns `true` for [`FilesizeUnitFormat::Binary`] or if the underlying [`FilesizeUnit`]
+    /// is binary according to [`FilesizeUnit::is_binary`].
+    ///
+    /// Note that this returns `true` for [`FilesizeUnit::B`] as well.
+    pub const fn is_binary(&self) -> bool {
+        match self {
+            Self::Metric => false,
+            Self::Binary => true,
+            Self::Unit(unit) => unit.is_binary(),
+        }
+    }
+}
+
+impl From<FilesizeUnit> for FilesizeUnitFormat {
+    fn from(unit: FilesizeUnit) -> Self {
+        Self::Unit(unit)
+    }
+}
+
+impl fmt::Display for FilesizeUnitFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(f)
+        f.write_str(self.as_str())
     }
 }
 
-pub fn format_filesize_from_conf(filesize: Filesize, config: &Config) -> String {
-    // We need to take into account config.filesize_metric so, if someone asks for KB
-    // and filesize_metric is false, return KiB
-    format_filesize(
-        filesize,
-        &config.filesize.format,
-        Some(config.filesize.metric),
-    )
+/// The error returned when failing to parse a [`FilesizeUnitFormat`].
+///
+/// This occurs when the string being parsed does not exactly match any of:
+/// - `metric`
+/// - `binary`
+/// - The name of any of the enum cases in [`FilesizeUnit`]. The exception is [`FilesizeUnit::KB`] which must be `kB`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Error)]
+pub struct ParseFilesizeUnitFormatError(());
+
+impl fmt::Display for ParseFilesizeUnitFormatError {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "invalid file size unit format")
+    }
 }
 
-// filesize_metric is explicit when printed a value according to user config;
-// other places (such as `format filesize`) don't.
-pub fn format_filesize(
-    filesize: Filesize,
-    format_value: &str,
-    filesize_metric: Option<bool>,
-) -> String {
-    // Allow the user to specify how they want their numbers formatted
+impl FromStr for FilesizeUnitFormat {
+    type Err = ParseFilesizeUnitFormatError;
 
-    // When format_value is "auto" or an invalid value, the returned ByteUnit doesn't matter
-    // and is always B.
-    let filesize_unit = get_filesize_format(format_value, filesize_metric);
-    let byte = byte_unit::Byte::from_u64(filesize.0.unsigned_abs());
-    let adj_byte = if let Some(unit) = filesize_unit {
-        byte.get_adjusted_unit(unit)
-    } else {
-        // When filesize_metric is None, format_value should never be "auto", so this
-        // unwrap_or() should always work.
-        byte.get_appropriate_unit(if filesize_metric.unwrap_or(false) {
-            UnitType::Decimal
-        } else {
-            UnitType::Binary
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "metric" => Self::Metric,
+            "binary" => Self::Binary,
+            s => Self::Unit(s.parse().map_err(|_| ParseFilesizeUnitFormatError(()))?),
         })
-    };
+    }
+}
 
-    match adj_byte.get_unit() {
-        byte_unit::Unit::B => {
-            let locale = get_system_locale();
-            let locale_byte = adj_byte.get_value() as u64;
-            let locale_byte_string = locale_byte.to_formatted_string(&locale);
-            let locale_signed_byte_string = if filesize.is_negative() {
-                format!("-{locale_byte_string}")
-            } else {
-                locale_byte_string
-            };
+/// A configurable formatter for [`Filesize`]s.
+///
+/// [`FilesizeFormatter`] is a builder struct that you can modify via the following methods:
+/// - [`unit`](Self::unit)
+/// - [`show_unit`](Self::show_unit)
+/// - [`precision`](Self::precision)
+/// - [`locale`](Self::locale)
+///
+/// For more information, see the documentation for each of those methods.
+///
+/// # Examples
+/// ```
+/// # use nu_protocol::{Filesize, FilesizeFormatter, FilesizeUnit};
+/// # use num_format::Locale;
+/// let filesize = Filesize::from_unit(4, FilesizeUnit::KiB).unwrap();
+/// let formatter = FilesizeFormatter::new();
+///
+/// assert_eq!(formatter.unit(FilesizeUnit::B).format(filesize).to_string(), "4096 B");
+/// assert_eq!(formatter.unit(FilesizeUnit::KiB).format(filesize).to_string(), "4 KiB");
+/// assert_eq!(formatter.precision(2).format(filesize).to_string(), "4.09 kB");
+/// assert_eq!(
+///     formatter
+///         .unit(FilesizeUnit::B)
+///         .locale(Locale::en)
+///         .format(filesize)
+///         .to_string(),
+///     "4,096 B",
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FilesizeFormatter {
+    unit: FilesizeUnitFormat,
+    show_unit: bool,
+    precision: Option<usize>,
+    locale: Locale,
+}
 
-            if filesize_unit.is_none() {
-                format!("{locale_signed_byte_string} B")
-            } else {
-                locale_signed_byte_string
-            }
+impl FilesizeFormatter {
+    /// Create a new, default [`FilesizeFormatter`].
+    ///
+    /// The default formatter has:
+    /// - a [`unit`](Self::unit) of [`FilesizeUnitFormat::Metric`].
+    /// - a [`show_unit`](Self::show_unit) of `true`.
+    /// - a [`precision`](Self::precision) of `None`.
+    /// - a [`locale`](Self::locale) of [`Locale::en_US_POSIX`]
+    ///   (a very plain format with no thousands separators).
+    pub fn new() -> Self {
+        FilesizeFormatter {
+            unit: FilesizeUnitFormat::Metric,
+            show_unit: true,
+            precision: None,
+            locale: Locale::en_US_POSIX,
         }
-        _ => {
-            if filesize.is_negative() {
-                format!("-{:.1}", adj_byte)
-            } else {
-                format!("{:.1}", adj_byte)
-            }
+    }
+
+    /// Set the [`FilesizeUnitFormat`] used by the formatter.
+    ///
+    /// A [`FilesizeUnit`] or a [`FilesizeUnitFormat`] can be provided to this method.
+    /// [`FilesizeUnitFormat::Metric`] and [`FilesizeUnitFormat::Binary`] will use a unit of an
+    /// appropriate scale for each [`Filesize`], whereas providing a [`FilesizeUnit`] will use that
+    /// unit to format all [`Filesize`]s.
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{Filesize, FilesizeFormatter, FilesizeUnit, FilesizeUnitFormat};
+    /// let formatter = FilesizeFormatter::new().precision(1);
+    ///
+    /// let filesize = Filesize::from_unit(4, FilesizeUnit::KiB).unwrap();
+    /// assert_eq!(formatter.unit(FilesizeUnit::B).format(filesize).to_string(), "4096 B");
+    /// assert_eq!(formatter.unit(FilesizeUnitFormat::Binary).format(filesize).to_string(), "4.0 KiB");
+    ///
+    /// let filesize = Filesize::from_unit(4, FilesizeUnit::MiB).unwrap();
+    /// assert_eq!(formatter.unit(FilesizeUnitFormat::Metric).format(filesize).to_string(), "4.1 MB");
+    /// assert_eq!(formatter.unit(FilesizeUnitFormat::Binary).format(filesize).to_string(), "4.0 MiB");
+    /// ```
+    pub fn unit(mut self, unit: impl Into<FilesizeUnitFormat>) -> Self {
+        self.unit = unit.into();
+        self
+    }
+
+    /// Sets whether to show or omit the file size unit in the formatted output.
+    ///
+    /// This setting can be used to disable the unit formatting from [`FilesizeFormatter`]
+    /// and instead provide your own.
+    ///
+    /// Note that the [`FilesizeUnitFormat`] provided to [`unit`](Self::unit) is still used to
+    /// format the numeric portion of a [`Filesize`]. So, setting `show_unit` to `false` is only
+    /// recommended for [`FilesizeUnitFormat::Unit`], since this will keep the unit the same
+    /// for all [`Filesize`]s. [`FilesizeUnitFormat::Metric`] and [`FilesizeUnitFormat::Binary`],
+    /// on the other hand, will adapt the unit to match the magnitude of each formatted [`Filesize`].
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{Filesize, FilesizeFormatter, FilesizeUnit};
+    /// let filesize = Filesize::from_unit(4, FilesizeUnit::KiB).unwrap();
+    /// let formatter = FilesizeFormatter::new().show_unit(false);
+    ///
+    /// assert_eq!(formatter.unit(FilesizeUnit::B).format(filesize).to_string(), "4096");
+    /// assert_eq!(format!("{} KB", formatter.unit(FilesizeUnit::KiB).format(filesize)), "4 KB");
+    /// ```
+    pub fn show_unit(self, show_unit: bool) -> Self {
+        Self { show_unit, ..self }
+    }
+
+    /// Set the number of digits to display after the decimal place.
+    ///
+    /// Note that digits after the decimal place will never be shown if:
+    /// - [`unit`](Self::unit) is [`FilesizeUnit::B`],
+    /// - [`unit`](Self::unit) is [`FilesizeUnitFormat::Metric`] and the number of bytes
+    ///   is less than [`FilesizeUnit::KB`]
+    /// - [`unit`](Self::unit) is [`FilesizeUnitFormat::Binary`] and the number of bytes
+    ///   is less than [`FilesizeUnit::KiB`].
+    ///
+    /// Additionally, the precision specified in the format string
+    /// (i.e., [`std::fmt::Formatter::precision`]) will take precedence if is specified.
+    /// If the format string precision and the [`FilesizeFormatter`]'s precision are both `None`,
+    /// then all digits after the decimal place, if any, are shown.
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{Filesize, FilesizeFormatter, FilesizeUnit, FilesizeUnitFormat};
+    /// let filesize = Filesize::from_unit(4, FilesizeUnit::KiB).unwrap();
+    /// let formatter = FilesizeFormatter::new();
+    ///
+    /// assert_eq!(formatter.precision(2).format(filesize).to_string(), "4.09 kB");
+    /// assert_eq!(formatter.precision(0).format(filesize).to_string(), "4 kB");
+    /// assert_eq!(formatter.precision(None).format(filesize).to_string(), "4.096 kB");
+    /// assert_eq!(
+    ///     formatter
+    ///         .precision(None)
+    ///         .unit(FilesizeUnit::KiB)
+    ///         .format(filesize)
+    ///         .to_string(),
+    ///     "4 KiB",
+    /// );
+    /// assert_eq!(
+    ///     formatter
+    ///         .unit(FilesizeUnit::B)
+    ///         .precision(2)
+    ///         .format(filesize)
+    ///         .to_string(),
+    ///     "4096 B",
+    /// );
+    /// assert_eq!(format!("{:.2}", formatter.precision(0).format(filesize)), "4.09 kB");
+    /// ```
+    pub fn precision(mut self, precision: impl Into<Option<usize>>) -> Self {
+        self.precision = precision.into();
+        self
+    }
+
+    /// Set the [`Locale`] to use when formatting the numeric portion of a [`Filesize`].
+    ///
+    /// The [`Locale`] determines the decimal place character, minus sign character,
+    /// digit grouping method, and digit separator character.
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{Filesize, FilesizeFormatter, FilesizeUnit, FilesizeUnitFormat};
+    /// # use num_format::Locale;
+    /// let filesize = Filesize::from_unit(-4, FilesizeUnit::MiB).unwrap();
+    /// let formatter = FilesizeFormatter::new().unit(FilesizeUnit::KB).precision(1);
+    ///
+    /// assert_eq!(formatter.format(filesize).to_string(), "-4194.3 kB");
+    /// assert_eq!(formatter.locale(Locale::en).format(filesize).to_string(), "-4,194.3 kB");
+    /// assert_eq!(formatter.locale(Locale::rm).format(filesize).to_string(), "\u{2212}4’194.3 kB");
+    /// let filesize = Filesize::from_unit(-4, FilesizeUnit::GiB).unwrap();
+    /// assert_eq!(formatter.locale(Locale::ta).format(filesize).to_string(), "-42,94,967.2 kB");
+    /// ```
+    pub fn locale(mut self, locale: Locale) -> Self {
+        self.locale = locale;
+        self
+    }
+
+    /// Format a [`Filesize`] into a [`FormattedFilesize`] which implements [`fmt::Display`].
+    ///
+    /// # Examples
+    /// ```
+    /// # use nu_protocol::{Filesize, FilesizeFormatter, FilesizeUnit};
+    /// let filesize = Filesize::from_unit(4, FilesizeUnit::KB).unwrap();
+    /// let formatter = FilesizeFormatter::new();
+    ///
+    /// assert_eq!(format!("{}", formatter.format(filesize)), "4 kB");
+    /// assert_eq!(formatter.format(filesize).to_string(), "4 kB");
+    /// ```
+    pub fn format(&self, filesize: Filesize) -> FormattedFilesize {
+        FormattedFilesize {
+            format: *self,
+            filesize,
         }
     }
 }
 
-/// Get the filesize unit, or None if format is "auto"
-fn get_filesize_format(
-    format_value: &str,
-    filesize_metric: Option<bool>,
-) -> Option<byte_unit::Unit> {
-    // filesize_metric always overrides the unit of filesize_format.
-    let metric = filesize_metric.unwrap_or(!format_value.ends_with("ib"));
+impl Default for FilesizeFormatter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-    if metric {
-        match format_value {
-            "b" => Some(byte_unit::Unit::B),
-            "kb" | "kib" => Some(byte_unit::Unit::KB),
-            "mb" | "mib" => Some(byte_unit::Unit::MB),
-            "gb" | "gib" => Some(byte_unit::Unit::GB),
-            "tb" | "tib" => Some(byte_unit::Unit::TB),
-            "pb" | "pib" => Some(byte_unit::Unit::TB),
-            "eb" | "eib" => Some(byte_unit::Unit::EB),
-            _ => None,
+/// The resulting struct from calling [`FilesizeFormatter::format`] on a [`Filesize`].
+///
+/// The only purpose of this struct is to implement [`fmt::Display`].
+#[derive(Debug, Clone)]
+pub struct FormattedFilesize {
+    format: FilesizeFormatter,
+    filesize: Filesize,
+}
+
+impl fmt::Display for FormattedFilesize {
+    fn fmt(&self, mut f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { filesize, format } = *self;
+        let FilesizeFormatter {
+            unit,
+            show_unit,
+            precision,
+            locale,
+        } = format;
+        let unit = match unit {
+            FilesizeUnitFormat::Metric => filesize.largest_metric_unit(),
+            FilesizeUnitFormat::Binary => filesize.largest_binary_unit(),
+            FilesizeUnitFormat::Unit(unit) => unit,
+        };
+        let Filesize(filesize) = filesize;
+        let precision = f.precision().or(precision);
+
+        let bytes = unit.as_bytes() as i64;
+        let whole = filesize / bytes;
+        let fract = (filesize % bytes).unsigned_abs();
+
+        f.write_formatted(&whole, &locale)
+            .map_err(|_| std::fmt::Error)?;
+
+        if unit != FilesizeUnit::B && precision != Some(0) && !(precision.is_none() && fract == 0) {
+            f.write_str(locale.decimal())?;
+
+            let bytes = unit.as_bytes();
+            let mut fract = fract * 10;
+            let mut i = 0;
+            loop {
+                let q = fract / bytes;
+                let r = fract % bytes;
+                // Quick soundness proof:
+                // r <= bytes                by definition of remainder `%`
+                // => 10 * r <= 10 * bytes
+                // => fract <= 10 * bytes    before next iteration, fract = r * 10
+                // => fract / bytes <= 10
+                // => q <= 10                next iteration, q = fract / bytes
+                debug_assert!(q <= 10);
+                f.write_char(char::from_digit(q as u32, 10).expect("q <= 10"))?;
+                i += 1;
+                if r == 0 || precision.is_some_and(|p| i >= p) {
+                    break;
+                }
+                fract = r * 10;
+            }
+
+            if let Some(precision) = precision {
+                for _ in 0..(precision - i) {
+                    f.write_char('0')?;
+                }
+            }
         }
-    } else {
-        match format_value {
-            "b" => Some(byte_unit::Unit::B),
-            "kb" | "kib" => Some(byte_unit::Unit::KiB),
-            "mb" | "mib" => Some(byte_unit::Unit::MiB),
-            "gb" | "gib" => Some(byte_unit::Unit::GiB),
-            "tb" | "tib" => Some(byte_unit::Unit::TiB),
-            "pb" | "pib" => Some(byte_unit::Unit::TiB),
-            "eb" | "eib" => Some(byte_unit::Unit::EiB),
-            _ => None,
+
+        if show_unit {
+            write!(f, " {unit}")?;
         }
+
+        Ok(())
     }
 }
 
@@ -533,21 +886,46 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case(1000, Some(true), "auto", "1.0 KB")]
-    #[case(1000, Some(false), "auto", "1,000 B")]
-    #[case(1000, Some(false), "kb", "1.0 KiB")]
-    #[case(3000, Some(false), "auto", "2.9 KiB")]
-    #[case(3_000_000, None, "auto", "2.9 MiB")]
-    #[case(3_000_000, None, "kib", "2929.7 KiB")]
-    fn test_filesize(
-        #[case] val: i64,
-        #[case] filesize_metric: Option<bool>,
-        #[case] filesize_format: String,
-        #[case] exp: &str,
-    ) {
+    #[case(1024, FilesizeUnit::KB, "1.024 kB")]
+    #[case(1024, FilesizeUnit::B, "1024 B")]
+    #[case(1024, FilesizeUnit::KiB, "1 KiB")]
+    #[case(3_000_000, FilesizeUnit::MB, "3 MB")]
+    #[case(3_000_000, FilesizeUnit::KB, "3000 kB")]
+    fn display_unit(#[case] bytes: i64, #[case] unit: FilesizeUnit, #[case] exp: &str) {
         assert_eq!(
             exp,
-            format_filesize(Filesize::new(val), &filesize_format, filesize_metric)
+            FilesizeFormatter::new()
+                .unit(unit)
+                .format(Filesize::new(bytes))
+                .to_string()
+        );
+    }
+
+    #[rstest]
+    #[case(1000, "1000 B")]
+    #[case(1024, "1 KiB")]
+    #[case(1025, "1.0009765625 KiB")]
+    fn display_auto_binary(#[case] val: i64, #[case] exp: &str) {
+        assert_eq!(
+            exp,
+            FilesizeFormatter::new()
+                .unit(FilesizeUnitFormat::Binary)
+                .format(Filesize::new(val))
+                .to_string()
+        );
+    }
+
+    #[rstest]
+    #[case(999, "999 B")]
+    #[case(1000, "1 kB")]
+    #[case(1024, "1.024 kB")]
+    fn display_auto_metric(#[case] val: i64, #[case] exp: &str) {
+        assert_eq!(
+            exp,
+            FilesizeFormatter::new()
+                .unit(FilesizeUnitFormat::Metric)
+                .format(Filesize::new(val))
+                .to_string()
         );
     }
 }

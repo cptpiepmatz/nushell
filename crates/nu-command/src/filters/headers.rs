@@ -11,14 +11,7 @@ impl Command for Headers {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_types(vec![
-                (Type::table(), Type::table()),
-                (
-                    // Tables with missing values are List<Any>
-                    Type::List(Box::new(Type::Any)),
-                    Type::table(),
-                ),
-            ])
+            .input_output_types(vec![(Type::table(), Type::table())])
             .category(Category::Filters)
     }
 
@@ -26,7 +19,7 @@ impl Command for Headers {
         "Use the first row of the table as column names."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Sets the column names for a table created by `split column`",
@@ -59,11 +52,12 @@ impl Command for Headers {
     fn run(
         &self,
         engine_state: &EngineState,
-        _stack: &mut Stack,
+        stack: &mut Stack,
         call: &Call,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
-        let config = engine_state.get_config();
+        let input = input.into_stream_or_original(engine_state);
+        let config = &stack.get_config(engine_state);
         let metadata = input.metadata();
         let span = input.span().unwrap_or(call.head);
         let value = input.into_value(span)?;
@@ -178,9 +172,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Headers {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Headers)
     }
 }

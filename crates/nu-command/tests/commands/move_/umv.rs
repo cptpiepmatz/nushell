@@ -1,4 +1,4 @@
-use nu_test_support::fs::{files_exist_at, Stub::EmptyFile, Stub::FileWithContent};
+use nu_test_support::fs::{Stub::EmptyFile, Stub::FileWithContent, files_exist_at};
 use nu_test_support::nu;
 use nu_test_support::playground::Playground;
 use rstest::rstest;
@@ -202,7 +202,7 @@ fn errors_if_source_doesnt_exist() {
             cwd: dirs.test(),
             "mv non-existing-file test_folder/"
         );
-        assert!(actual.err.contains("Directory not found"));
+        assert!(actual.err.contains("nu::shell::io::not_found"));
     })
 }
 
@@ -231,6 +231,7 @@ fn errors_if_destination_doesnt_exist() {
         );
 
         assert!(actual.err.contains("failed to access"));
+        assert!(actual.err.contains("Not a directory"));
     })
 }
 
@@ -249,9 +250,11 @@ fn errors_if_multiple_sources_but_destination_not_a_directory() {
             "mv file?.txt not_a_dir"
         );
 
-        assert!(actual
-            .err
-            .contains("Can only move multiple sources if destination is a directory"));
+        assert!(
+            actual
+                .err
+                .contains("Can only move multiple sources if destination is a directory")
+        );
     })
 }
 
@@ -278,6 +281,7 @@ fn errors_if_moving_to_itself() {
             cwd: dirs.test(),
             "mv mydir mydir/mydir_2/"
         );
+
         assert!(actual.err.contains("cannot move"));
         assert!(actual.err.contains("to a subdirectory"));
     });
@@ -400,6 +404,7 @@ fn mv_directory_with_same_name() {
                  mv testdir ..
             "#
         );
+
         assert!(actual.err.contains("Directory not empty"));
     })
 }
@@ -420,29 +425,31 @@ fn mv_change_case_of_directory() {
         let original_dir = String::from("somedir");
         let new_dir = String::from("SomeDir");
 
-        let _actual = nu!(
+        #[allow(unused)]
+        let actual = nu!(
             cwd: dirs.test(),
             format!("mv {original_dir} {new_dir}")
         );
 
-        // Doing this instead of `Path::exists()` because we need to check file existence in
-        // a case-sensitive way. `Path::exists()` is understandably case-insensitive on NTFS
-        let _files_in_test_directory: Vec<String> = std::fs::read_dir(dirs.test())
-            .unwrap()
-            .map(|de| de.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        assert!(
-            !_files_in_test_directory.contains(&original_dir)
-                && _files_in_test_directory.contains(&new_dir)
-        );
+        {
+            // Doing this instead of `Path::exists()` because we need to check file existence in
+            // a case-sensitive way. `Path::exists()` is understandably case-insensitive on NTFS
+            let files_in_test_directory: Vec<String> = std::fs::read_dir(dirs.test())
+                .unwrap()
+                .map(|de| de.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
 
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        assert!(files_exist_at(&["somefile.txt"], dirs.test().join(new_dir)));
+            assert!(
+                !files_in_test_directory.contains(&original_dir)
+                    && files_in_test_directory.contains(&new_dir)
+            );
+
+            assert!(files_exist_at(&["somefile.txt"], dirs.test().join(new_dir)));
+        }
 
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        _actual.err.contains("to a subdirectory of itself");
+        actual.err.contains("to a subdirectory of itself");
     })
 }
 
@@ -456,24 +463,27 @@ fn mv_change_case_of_file() {
         let original_file_name = String::from("somefile.txt");
         let new_file_name = String::from("SomeFile.txt");
 
-        let _actual = nu!(
+        #[allow(unused)]
+        let actual = nu!(
             cwd: dirs.test(),
             format!("mv {original_file_name} -f {new_file_name}")
         );
 
-        // Doing this instead of `Path::exists()` because we need to check file existence in
-        // a case-sensitive way. `Path::exists()` is understandably case-insensitive on NTFS
-        let _files_in_test_directory: Vec<String> = std::fs::read_dir(dirs.test())
-            .unwrap()
-            .map(|de| de.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        assert!(
-            !_files_in_test_directory.contains(&original_file_name)
-                && _files_in_test_directory.contains(&new_file_name)
-        );
+        {
+            // Doing this instead of `Path::exists()` because we need to check file existence in
+            // a case-sensitive way. `Path::exists()` is understandably case-insensitive on NTFS
+            let files_in_test_directory: Vec<String> = std::fs::read_dir(dirs.test())
+                .unwrap()
+                .map(|de| de.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            assert!(
+                !files_in_test_directory.contains(&original_file_name)
+                    && files_in_test_directory.contains(&new_file_name)
+            );
+        }
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        _actual.err.contains("are the same file");
+        actual.err.contains("are the same file");
     })
 }
 
@@ -513,12 +523,7 @@ fn test_mv_no_clobber() {
         sandbox.with_files(&[EmptyFile(file_a)]);
         sandbox.with_files(&[EmptyFile(file_b)]);
 
-        let _ = nu!(
-            cwd: dirs.test(),
-            "mv -n {} {}",
-            file_a,
-            file_b,
-        );
+        let _ = nu!(cwd: dirs.test(), format!("mv -n {file_a} {file_b}"));
 
         let file_count = nu!(
             cwd: dirs.test(),
@@ -546,13 +551,15 @@ fn mv_with_no_target() {
             cwd: dirs.test(),
             "mv a",
         );
-        assert!(actual.err.contains(
-            format!(
-                "Missing destination path operand after {}",
-                dirs.test().join("a").display()
+        assert!(
+            actual.err.contains(
+                format!(
+                    "Missing destination path operand after {}",
+                    dirs.test().join("a").display()
+                )
+                .as_str()
             )
-            .as_str()
-        ));
+        );
     })
 }
 
@@ -572,9 +579,11 @@ fn mv_files_with_glob_metachars(#[case] src_name: &str) {
 
         let actual = nu!(
             cwd: dirs.test(),
-            "mv '{}' {}",
-            src.display(),
-            "hello_world_dest"
+            format!(
+                "mv '{}' {}",
+                src.display(),
+                "hello_world_dest"
+            )
         );
 
         assert!(actual.err.is_empty());
@@ -598,9 +607,11 @@ fn mv_files_with_glob_metachars_when_input_are_variables(#[case] src_name: &str)
 
         let actual = nu!(
             cwd: dirs.test(),
-            "let f = '{}'; mv $f {}",
-            src.display(),
-            "hello_world_dest"
+            format!(
+                "let f = '{}'; mv $f {}",
+                src.display(),
+                "hello_world_dest"
+            )
         );
 
         assert!(actual.err.is_empty());
@@ -634,8 +645,8 @@ fn mv_with_cd() {
 }
 
 #[test]
-fn test_cp_inside_glob_metachars_dir() {
-    Playground::setup("open_files_inside_glob_metachars_dir", |dirs, sandbox| {
+fn test_mv_inside_glob_metachars_dir() {
+    Playground::setup("uv_files_inside_glob_metachars_dir", |dirs, sandbox| {
         let sub_dir = "test[]";
         sandbox
             .within(sub_dir)
@@ -652,6 +663,35 @@ fn test_cp_inside_glob_metachars_dir() {
             dirs.test().join(sub_dir)
         ));
         assert!(files_exist_at(&["test_file.txt"], dirs.test()));
+    });
+}
+
+#[test]
+fn test_mv_wildcards() {
+    Playground::setup("uv_with_wildcards", |dirs, sandbox| {
+        let sub_dir = "test[]";
+        sandbox
+            .within(sub_dir)
+            .with_files(&[FileWithContent(".a", "hello")]);
+
+        let actual = nu!(
+            cwd: dirs.test().join(sub_dir),
+            "mv * ../",
+        );
+        // by default, wildcard don't match dot files.
+        assert!(actual.err.contains("File not found"));
+        assert!(files_exist_at(&[".a"], dirs.test().join(sub_dir)));
+        assert!(!files_exist_at(&[".a"], dirs.test()));
+
+        // unless `-a` flag is provided.
+        let actual = nu!(
+            cwd: dirs.test().join(sub_dir),
+            "mv -a * ../",
+        );
+        // by default, wildcard don't match dot files.
+        assert!(actual.err.is_empty());
+        assert!(!files_exist_at(&[".a"], dirs.test().join(sub_dir)));
+        assert!(files_exist_at(&[".a"], dirs.test()));
     });
 }
 

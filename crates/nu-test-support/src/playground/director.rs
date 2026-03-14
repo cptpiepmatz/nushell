@@ -1,5 +1,5 @@
-use super::nu_process::*;
 use super::EnvironmentVariable;
+use super::nu_process::*;
 use std::ffi::OsString;
 use std::fmt;
 use std::fmt::Write;
@@ -103,7 +103,8 @@ impl Executable for Director {
                     .stdout(Stdio::piped())
                     // .stdin(Stdio::piped())
                     .stderr(Stdio::piped())
-                    .arg(format!("-c '{commands}'"))
+                    .arg("-c")
+                    .arg(commands)
                     .spawn()
                     .expect("It should be possible to run tests");
 

@@ -1,6 +1,6 @@
 use crate::{
-    values::{CustomValueSupport, NuLazyFrame},
     PolarsPlugin,
+    values::{CustomValueSupport, NuLazyFrame, PolarsPluginType},
 };
 
 use crate::values::NuDataFrame;
@@ -30,25 +30,33 @@ impl PluginCommand for ConcatDF {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .switch("no-parallel", "Disable parallel execution", None)
-            .switch("rechunk", "Rechunk the resulting dataframe", None)
-            .switch("to-supertypes", "Cast to supertypes", None)
-            .switch("diagonal", "Concatenate dataframes diagonally", None)
+            .switch("no-parallel", "Disable parallel execution.", None)
+            .switch("rechunk", "Rechunk the resulting dataframe.", None)
+            .switch("to-supertypes", "Cast to supertypes.", None)
+            .switch("diagonal", "Concatenate dataframes diagonally.", None)
+            .switch(
+                "no-maintain-order",
+                "Do not maintain order. The default behavior is to maintain order.",
+                None,
+            )
             .switch(
                 "from-partitioned-ds",
-                "Concatenate dataframes from a partitioned dataset",
+                "Concatenate dataframes from a partitioned dataset.",
                 None,
             )
             .rest(
                 "dataframes",
                 SyntaxShape::Any,
-                "The dataframes to concatenate",
+                "The dataframes to concatenate.",
             )
-            .input_output_type(Type::Any, Type::Custom("dataframe".into()))
+            .input_output_types(vec![
+                (Type::Any, PolarsPluginType::NuDataFrame.into()),
+                (Type::Any, PolarsPluginType::NuLazyFrame.into()),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Concatenates two dataframes with the dataframe in the pipeline.",
@@ -93,8 +101,11 @@ impl PluginCommand for ConcatDF {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let maybe_df = NuLazyFrame::try_from_pipeline_coerce(plugin, input, call.head).ok();
-        command_lazy(plugin, engine, call, maybe_df).map_err(LabeledError::from)
+        command_lazy(plugin, engine, call, maybe_df)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 
@@ -109,6 +120,7 @@ fn command_lazy(
     let to_supertypes = call.has_flag("to-supertypes")?;
     let diagonal = call.has_flag("diagonal")?;
     let from_partitioned_ds = call.has_flag("from-partitioned-ds")?;
+    let maintain_order = !call.has_flag("no-maintain-order")?;
     let mut dataframes = call
         .rest::<Value>(0)?
         .iter()
@@ -133,6 +145,8 @@ fn command_lazy(
             to_supertypes,
             diagonal,
             from_partitioned_ds,
+            maintain_order,
+            ..Default::default()
         };
 
         let res: NuLazyFrame = polars::prelude::concat(&dataframes, args)

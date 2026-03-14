@@ -51,14 +51,14 @@ impl Command for DecodeBase64 {
     }
 
     fn description(&self) -> &str {
-        "Decode a Base64 value."
+        "Decode a Base64-encoded value."
     }
 
     fn extra_description(&self) -> &str {
         EXTRA_USAGE
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Decode a Base64 string",
@@ -131,7 +131,7 @@ impl Command for EncodeBase64 {
         EXTRA_USAGE
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Encode a string with Base64",
@@ -182,12 +182,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples_decode() {
-        crate::test_examples(DecodeBase64)
+    fn test_examples_decode() -> nu_test_support::Result {
+        nu_test_support::test().examples(DecodeBase64)
     }
 
     #[test]
-    fn test_examples_encode() {
-        crate::test_examples(EncodeBase64)
+    fn test_examples_encode() -> nu_test_support::Result {
+        nu_test_support::test().examples(EncodeBase64)
     }
 }

@@ -1,11 +1,11 @@
 use super::Director;
 use crate::fs::{self, Stub};
-use nu_glob::glob;
+use nu_glob::{Uninterruptible, glob};
 #[cfg(not(target_arch = "wasm32"))]
 use nu_path::Path;
 use nu_path::{AbsolutePath, AbsolutePathBuf};
 use std::str;
-use tempfile::{tempdir, TempDir};
+use tempfile::{TempDir, tempdir};
 
 #[derive(Default, Clone, Debug)]
 pub struct EnvironmentVariable {
@@ -31,7 +31,7 @@ pub struct Playground<'a> {
     dirs: &'a Dirs,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Dirs {
     pub root: AbsolutePathBuf,
     pub test: AbsolutePathBuf,
@@ -52,7 +52,7 @@ impl Dirs {
     }
 }
 
-impl<'a> Playground<'a> {
+impl Playground<'_> {
     pub fn root(&self) -> &AbsolutePath {
         &self.dirs.root
     }
@@ -70,7 +70,7 @@ impl<'a> Playground<'a> {
         self
     }
 
-    pub fn setup(topic: &str, block: impl FnOnce(Dirs, &mut Playground)) {
+    pub fn setup<R>(topic: &str, block: impl FnOnce(Dirs, &mut Playground) -> R) -> R {
         let temp = tempdir().expect("Could not create a tempdir");
 
         let root = AbsolutePathBuf::try_from(temp.path())
@@ -106,7 +106,7 @@ impl<'a> Playground<'a> {
             dirs: &dirs,
         };
 
-        block(dirs.clone(), &mut playground);
+        block(dirs.clone(), &mut playground)
     }
 
     pub fn with_config(&mut self, source_file: AbsolutePathBuf) -> &mut Self {
@@ -187,7 +187,7 @@ impl<'a> Playground<'a> {
                 let mut permission_set = false;
                 let mut write_able = true;
                 let (file_name, contents) = match *f {
-                    Stub::EmptyFile(name) => (name, "fake data".to_string()),
+                    Stub::EmptyFile(name) => (name, String::new()),
                     Stub::FileWithContent(name, content) => (name, content.to_string()),
                     Stub::FileWithContentToBeTrimmed(name, content) => (
                         name,
@@ -231,7 +231,7 @@ impl<'a> Playground<'a> {
     }
 
     pub fn glob_vec(pattern: &str) -> Vec<std::path::PathBuf> {
-        let glob = glob(pattern);
+        let glob = glob(pattern, Uninterruptible);
 
         glob.expect("invalid pattern")
             .map(|path| {

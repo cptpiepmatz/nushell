@@ -22,17 +22,17 @@ impl Command for ToXml {
             .named(
                 "indent",
                 SyntaxShape::Int,
-                "Formats the XML text with the provided indentation setting",
+                "Formats the XML text with the provided indentation setting.",
                 Some('i'),
             )
             .switch(
                 "partial-escape",
-                "Only escape mandatory characters in text and attributes",
+                "Only escape mandatory characters in text and attributes.",
                 Some('p'),
             )
             .switch(
                 "self-closed",
-                "Output empty tags as self closing",
+                "Output empty tags as self closing.",
                 Some('s'),
             )
             .category(Category::Formats)
@@ -49,43 +49,39 @@ To represent different types of entries different values must be written to this
 Additionally any field which is: empty record, empty list or null, can be omitted."#
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Outputs an XML string representing the contents of this table",
+                description: "Outputs an XML string representing the contents of this table.",
                 example: r#"{tag: note attributes: {} content : [{tag: remember attributes: {} content : [{tag: null attributes: null content : Event}]}]} | to xml"#,
                 result: Some(Value::test_string(
                     "<note><remember>Event</remember></note>",
                 )),
             },
             Example {
-                description: "When formatting xml null and empty record fields can be omitted and strings can be written without a wrapping record",
+                description: "When formatting xml null and empty record fields can be omitted and strings can be written without a wrapping record.",
                 example: r#"{tag: note content : [{tag: remember content : [Event]}]} | to xml"#,
                 result: Some(Value::test_string(
                     "<note><remember>Event</remember></note>",
                 )),
             },
             Example {
-                description: "Optionally, formats the text with a custom indentation setting",
+                description: "Optionally, formats the text with a custom indentation setting.",
                 example: r#"{tag: note content : [{tag: remember content : [Event]}]} | to xml --indent 3"#,
                 result: Some(Value::test_string(
                     "<note>\n   <remember>Event</remember>\n</note>",
                 )),
             },
             Example {
-                description: "Produce less escaping sequences in resulting xml",
+                description: "Produce less escaping sequences in resulting xml.",
                 example: r#"{tag: note attributes: {a: "'qwe'\\"} content: ["\"'"]} | to xml --partial-escape"#,
-                result: Some(Value::test_string(
-                    r#"<note a="'qwe'\">"'</note>"#
-                ))
+                result: Some(Value::test_string(r#"<note a="'qwe'\">"'</note>"#)),
             },
             Example {
-                description: "Save space using self-closed tags",
+                description: "Save space using self-closed tags.",
                 example: r#"{tag: root content: [[tag]; [a] [b] [c]]} | to xml --self-closed"#,
-                result: Some(Value::test_string(
-                    r#"<root><a/><b/><c/></root>"#
-                ))
-            }
+                result: Some(Value::test_string(r#"<root><a/><b/><c/></root>"#)),
+            },
         ]
     }
 
@@ -163,13 +159,13 @@ impl Job {
         }
     }
 
-    fn partial_escape_attribute(raw: &str) -> Cow<[u8]> {
+    fn partial_escape_attribute(raw: &str) -> Cow<'_, [u8]> {
         let bytes = raw.as_bytes();
         let mut escaped: Vec<u8> = Vec::new();
         let mut iter = bytes.iter().enumerate();
         let mut pos = 0;
         while let Some((new_pos, byte)) =
-            iter.find(|(_, &ch)| matches!(ch, b'<' | b'>' | b'&' | b'"'))
+            iter.find(|(_, ch)| matches!(ch, b'<' | b'>' | b'&' | b'"'))
         {
             escaped.extend_from_slice(&bytes[pos..new_pos]);
             match byte {
@@ -210,14 +206,13 @@ impl Job {
         if let Value::Record { val: record, .. } = &entry {
             if let Some(bad_column) = Self::find_invalid_column(record) {
                 return Err(ShellError::CantConvert {
-                to_type: "XML".into(),
-                from_type: "record".into(),
-                span: entry_span,
-                help: Some(format!(
-                    "Invalid column \"{}\" in xml entry. Only \"{}\", \"{}\" and \"{}\" are permitted",
-                    bad_column, COLUMN_TAG_NAME, COLUMN_ATTRS_NAME, COLUMN_CONTENT_NAME
-                )),
-            });
+                    to_type: "XML".into(),
+                    from_type: "record".into(),
+                    span: entry_span,
+                    help: Some(format!(
+                        "Invalid column \"{bad_column}\" in xml entry. Only \"{COLUMN_TAG_NAME}\", \"{COLUMN_ATTRS_NAME}\" and \"{COLUMN_CONTENT_NAME}\" are permitted"
+                    )),
+                });
             }
             // If key is not found it is assumed to be nothing. This way
             // user can write a tag like {tag: a content: [...]} instead
@@ -326,7 +321,7 @@ impl Job {
             self.write_processing_instruction(entry_span, tag, attrs, content)
         } else {
             // Allow tag to have no attributes or content for short hand input
-            // alternatives like {tag: a attributes: {} content: []}, {tag: a attribbutes: null
+            // alternatives like {tag: a attributes: {} content: []}, {tag: a attributes: null
             // content: null}, {tag: a}. See to_xml_entry for more
             let attrs = match attrs {
                 Value::Record { val, .. } => val.into_owned(),
@@ -403,7 +398,7 @@ impl Job {
             });
         }
 
-        let content_text = format!("{} {}", tag, content);
+        let content_text = format!("{tag} {content}");
         // PI content must NOT be escaped
         // https://www.w3.org/TR/xml/#sec-pi
         let pi_content = BytesPI::new(content_text.as_str());
@@ -432,8 +427,7 @@ impl Job {
                 from_type: Type::record().to_string(),
                 span: tag_span,
                 help: Some(format!(
-                    "Incorrect tag name {}, tag name can not start with ! or ?",
-                    tag
+                    "Incorrect tag name {tag}, tag name can not start with ! or ?"
                 )),
             });
         }
@@ -519,10 +513,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ToXml {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ToXml)
     }
 
     #[test]
@@ -544,14 +536,14 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = "{tag: note attributes: {} content : [{tag: remember attributes: {} content : [{tag: null attributes: null content : Event}]}]} | to xml | metadata | get content_type";
+        let cmd = "{tag: note attributes: {} content : [{tag: remember attributes: {} content : [{tag: null attributes: null content : Event}]}]} | to xml | metadata | get content_type | $in";
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(record!("content_type" => Value::test_string("application/xml"))),
+            Value::test_string("application/xml"),
             result.expect("There should be a result")
         );
     }

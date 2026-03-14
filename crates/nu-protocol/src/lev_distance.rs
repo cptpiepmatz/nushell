@@ -19,7 +19,7 @@ use std::cmp;
 pub fn lev_distance(a: &str, b: &str, limit: usize) -> Option<usize> {
     let n = a.chars().count();
     let m = b.chars().count();
-    let min_dist = if n < m { m - n } else { n - m };
+    let min_dist = m.abs_diff(n);
 
     if min_dist > limit {
         return None;
@@ -76,7 +76,7 @@ pub fn lev_distance_with_substrings(a: &str, b: &str, limit: usize) -> Option<us
     // Check one isn't less than half the length of the other. If this is true then there is a
     // big difference in length.
     let big_len_diff = (n * 2) < m || (m * 2) < n;
-    let len_diff = if n < m { m - n } else { n - m };
+    let len_diff = m.abs_diff(n);
     let lev = lev_distance(a, b, limit + len_diff)?;
 
     // This is the crux, subtracting length difference means exact substring matches will now be 0
@@ -88,17 +88,13 @@ pub fn lev_distance_with_substrings(a: &str, b: &str, limit: usize) -> Option<us
         1 // Exact substring match, but not a total word match so return non-zero
     } else if !big_len_diff {
         // Not a big difference in length, discount cost of length difference
-        score + (len_diff + 1) / 2
+        score + len_diff.div_ceil(2)
     } else {
         // A big difference in length, add back the difference in length to the score
         score + len_diff
     };
 
-    if score <= limit {
-        Some(score)
-    } else {
-        None
-    }
+    if score <= limit { Some(score) } else { None }
 }
 
 /// Finds the best match for given word in the given iterator where substrings are meaningful.

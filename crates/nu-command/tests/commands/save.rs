@@ -1,6 +1,6 @@
-use nu_test_support::fs::{file_contents, Stub};
+use nu_test_support::fs::{Stub, file_contents};
+use nu_test_support::nu;
 use nu_test_support::playground::Playground;
-use nu_test_support::{nu, pipeline};
 use std::io::Write;
 
 #[test]
@@ -96,9 +96,11 @@ fn save_stderr_and_stdout_to_same_file() {
             do -c {nu -n -c 'nu --testbin echo_env FOO; nu --testbin echo_env_stderr BAZ'} | save -r save_test_5/new-file.txt --stderr save_test_5/new-file.txt
             "#,
         );
-        assert!(actual
-            .err
-            .contains("can't save both input and stderr input to the same file"));
+        assert!(
+            actual
+                .err
+                .contains("can't save both input and stderr input to the same file")
+        );
     })
 }
 
@@ -329,82 +331,74 @@ fn save_file_correct_relative_path() {
 #[test]
 fn save_same_file_with_extension() {
     Playground::setup("save_test_16", |dirs, _sandbox| {
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            "
-                echo 'world'
-                | save --raw hello.md;
-                open --raw hello.md
-                | save --raw --force hello.md
-            "
-            )
-        );
+        let actual = nu!(cwd: dirs.test(), "
+            echo 'world'
+            | save --raw hello.md;
+            open --raw hello.md
+            | save --raw --force hello.md
+        ");
 
-        assert!(actual
-            .err
-            .contains("pipeline input and output are the same file"));
+        assert!(
+            actual
+                .err
+                .contains("pipeline input and output are the same file")
+        );
     })
 }
 
 #[test]
 fn save_same_file_with_extension_pipeline() {
     Playground::setup("save_test_17", |dirs, _sandbox| {
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            "
-                echo 'world'
-                | save --raw hello.md;
-                open --raw hello.md
-                | prepend 'hello'
-                | save --raw --force hello.md
-            "
-            )
-        );
+        let actual = nu!(cwd: dirs.test(), "
+            echo 'world'
+            | save --raw hello.md;
+            open --raw hello.md
+            | prepend 'hello'
+            | save --raw --force hello.md
+        ");
 
-        assert!(actual
-            .err
-            .contains("pipeline input and output are the same file"));
+        assert!(
+            actual
+                .err
+                .contains("pipeline input and output are the same file")
+        );
     })
 }
 
 #[test]
 fn save_same_file_without_extension() {
     Playground::setup("save_test_18", |dirs, _sandbox| {
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            "
-                echo 'world'
-                | save hello;
-                open hello
-                | save --force hello
-            "
-            )
-        );
+        let actual = nu!(cwd: dirs.test(), "
+            echo 'world'
+            | save hello;
+            open hello
+            | save --force hello
+        ");
 
-        assert!(actual
-            .err
-            .contains("pipeline input and output are the same file"));
+        assert!(
+            actual
+                .err
+                .contains("pipeline input and output are the same file")
+        );
     })
 }
 
 #[test]
 fn save_same_file_without_extension_pipeline() {
     Playground::setup("save_test_19", |dirs, _sandbox| {
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            "
-                echo 'world'
-                | save hello;
-                open hello
-                | prepend 'hello'
-                | save --force hello
-            "
-            )
-        );
+        let actual = nu!(cwd: dirs.test(), "
+            echo 'world'
+            | save hello;
+            open hello
+            | prepend 'hello'
+            | save --force hello
+        ");
 
-        assert!(actual
-            .err
-            .contains("pipeline input and output are the same file"));
+        assert!(
+            actual
+                .err
+                .contains("pipeline input and output are the same file")
+        );
     })
 }
 
@@ -413,12 +407,10 @@ fn save_with_custom_converter() {
     Playground::setup("save_with_custom_converter", |dirs, _| {
         let file = dirs.test().join("test.ndjson");
 
-        nu!(cwd: dirs.test(), pipeline(
-            r#"
-                def "to ndjson" []: any -> string { each { to json --raw } | to text --no-newline } ;
-                {a: 1, b: 2} | save test.ndjson
-            "#
-        ));
+        nu!(cwd: dirs.test(), r#"
+            def "to ndjson" []: any -> string { each { to json --raw } | to text --no-newline } ;
+            {a: 1, b: 2} | save test.ndjson
+        "#);
 
         let actual = file_contents(file);
         assert_eq!(actual, r#"{"a":1,"b":2}"#);
@@ -428,17 +420,15 @@ fn save_with_custom_converter() {
 #[test]
 fn save_same_file_with_collect() {
     Playground::setup("save_test_20", |dirs, _sandbox| {
-        let actual = nu!(
-            cwd: dirs.test(), pipeline("
-                echo 'world'
-                | save hello;
-                open hello
-                | prepend 'hello'
-                | collect
-                | save --force hello;
-                open hello
-            ")
-        );
+        let actual = nu!(cwd: dirs.test(), "
+            echo 'world'
+            | save hello;
+            open hello
+            | prepend 'hello'
+            | collect
+            | save --force hello;
+            open hello
+        ");
         assert!(actual.status.success());
         assert_eq!("helloworld", actual.out);
     })
@@ -447,18 +437,16 @@ fn save_same_file_with_collect() {
 #[test]
 fn save_same_file_with_collect_and_filter() {
     Playground::setup("save_test_21", |dirs, _sandbox| {
-        let actual = nu!(
-            cwd: dirs.test(), pipeline("
-                echo 'world'
-                | save hello;
-                open hello
-                | prepend 'hello'
-                | collect
-                | filter { true }
-                | save --force hello;
-                open hello
-            ")
-        );
+        let actual = nu!(cwd: dirs.test(), "
+            echo 'world'
+            | save hello;
+            open hello
+            | prepend 'hello'
+            | collect
+            | filter { true }
+            | save --force hello;
+            open hello
+        ");
         assert!(actual.status.success());
         assert_eq!("helloworld", actual.out);
     })
@@ -524,4 +512,46 @@ fn parent_redirection_doesnt_affect_save() {
         let actual = file_contents(dirs.test().join("empty_file"));
         assert_eq!(actual.trim_end(), "");
     })
+}
+
+#[test]
+fn save_missing_parent_dir() {
+    Playground::setup("save_test_24", |dirs, sandbox| {
+        sandbox.with_files(&[]);
+
+        let actual = nu!(
+            cwd: dirs.root(),
+            r#"'hello' | save save_test_24/foobar/hello.txt"#,
+        );
+
+        assert!(actual.err.contains("nu::shell::io::directory_not_found"));
+        assert!(actual.err.contains("foobar' does not exist"));
+    })
+}
+
+#[test]
+fn save_missing_ancestor_dir() {
+    Playground::setup("save_test_24", |dirs, sandbox| {
+        sandbox.with_files(&[]);
+
+        std::fs::create_dir(dirs.test().join("foo"))
+            .expect("should have been able to create subdir for test");
+
+        let actual = nu!(
+            cwd: dirs.root(),
+            r#"'hello' | save save_test_24/foo/bar/baz/hello.txt"#,
+        );
+
+        assert!(actual.err.contains("nu::shell::io::directory_not_found"));
+        assert!(actual.err.contains("bar' does not exist"));
+    })
+}
+
+#[test]
+fn force_save_to_dir() {
+    let actual = nu!(cwd: "crates/nu-command/tests/commands", r#"
+        "aaa" | save -f ..
+        "#);
+
+    assert!(actual.err.contains("nu::shell::io::is_a_directory"));
 }

@@ -25,7 +25,7 @@ impl Command for OverlayHide {
             .named(
                 "keep-env",
                 SyntaxShape::List(Box::new(SyntaxShape::String)),
-                "List of environment variables to keep in the next activated overlay",
+                "List of environment variables to keep in the next activated overlay.",
                 Some('e'),
             )
             .category(Category::Core)
@@ -76,7 +76,7 @@ impl Command for OverlayHide {
                         return Err(ShellError::EnvVarNotFoundAtRuntime {
                             envvar_name: name.item,
                             span: name.span,
-                        })
+                        });
                     }
                 }
             }
@@ -86,19 +86,24 @@ impl Command for OverlayHide {
             vec![]
         };
 
+        // also restore env vars which has been hidden
+        let env_vars_to_restore = stack.get_hidden_env_vars(&overlay_name.item, engine_state);
         stack.remove_overlay(&overlay_name.item);
+        for (name, val) in env_vars_to_restore {
+            stack.add_env_var(name, val);
+        }
 
         for (name, val) in env_vars_to_keep {
             stack.add_env_var(name, val);
         }
-
+        stack.update_config(engine_state)?;
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Keep a custom command after hiding the overlay",
+                description: "Keep a custom command after hiding the overlay.",
                 example: r#"module spam { export def foo [] { "foo" } }
     overlay use spam
     def bar [] { "bar" }
@@ -108,21 +113,21 @@ impl Command for OverlayHide {
                 result: None,
             },
             Example {
-                description: "Hide an overlay created from a file",
+                description: "Hide an overlay created from a file.",
                 example: r#"'export alias f = "foo"' | save spam.nu
     overlay use spam.nu
     overlay hide spam"#,
                 result: None,
             },
             Example {
-                description: "Hide the last activated overlay",
+                description: "Hide the last activated overlay.",
                 example: r#"module spam { export-env { $env.FOO = "foo" } }
     overlay use spam
     overlay hide"#,
                 result: None,
             },
             Example {
-                description: "Keep the current working directory when removing an overlay",
+                description: "Keep the current working directory when removing an overlay.",
                 example: r#"overlay new spam
     cd some-dir
     overlay hide --keep-env [ PWD ] spam"#,

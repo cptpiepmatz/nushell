@@ -1,5 +1,9 @@
 use nu_engine::command_prelude::*;
+use nu_protocol::shell_error::io::IoError;
 use std::{collections::VecDeque, io::Read};
+
+#[cfg(feature = "sqlite")]
+use crate::database::SQLiteQueryBuilder;
 
 #[derive(Clone)]
 pub struct Last;
@@ -26,6 +30,8 @@ impl Command for Last {
                 SyntaxShape::Int,
                 "Starting from the back, the number of rows to return.",
             )
+            .allow_variants_without_examples(true)
+            .switch("strict", "Throw an error if input is empty.", Some('s'))
             .category(Category::Filters)
     }
 
@@ -33,11 +39,11 @@ impl Command for Last {
         "Return only the last several rows of the input. Counterpart of `first`. Opposite of `drop`."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "[1,2,3] | last 2",
-                description: "Return the last 2 items of a list/table",
+                description: "Return the last 2 items of a list/table.",
                 result: Some(Value::list(
                     vec![Value::test_int(2), Value::test_int(3)],
                     Span::test_data(),
@@ -45,17 +51,17 @@ impl Command for Last {
             },
             Example {
                 example: "[1,2,3] | last",
-                description: "Return the last item of a list/table",
+                description: "Return the last item of a list/table.",
                 result: Some(Value::test_int(3)),
             },
             Example {
                 example: "0x[01 23 45] | last 2",
-                description: "Return the last 2 bytes of a binary value",
+                description: "Return the last 2 bytes of a binary value.",
                 result: Some(Value::binary(vec![0x23, 0x45], Span::test_data())),
             },
             Example {
                 example: "1..3 | last",
-                description: "Return the last item of a range",
+                description: "Return the last item of a range.",
                 result: Some(Value::test_int(3)),
             },
         ]
@@ -70,6 +76,7 @@ impl Command for Last {
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         let rows: Option<Spanned<i64>> = call.opt(engine_state, stack, 0)?;
+        let strict_mode = call.has_flag(engine_state, stack, "strict")?;
 
         // FIXME: Please read the FIXME message in `first.rs`'s `first_helper` implementation.
         // It has the same issue.
@@ -99,7 +106,7 @@ impl Command for Last {
                 let mut buf = VecDeque::new();
 
                 for row in iterator {
-                    engine_state.signals().check(head)?;
+                    engine_state.signals().check(&head)?;
                     if buf.len() == rows {
                         buf.pop_front();
                     }
@@ -109,8 +116,12 @@ impl Command for Last {
                 if return_single_element {
                     if let Some(last) = buf.pop_back() {
                         Ok(last.into_pipeline_data())
-                    } else {
+                    } else if strict_mode {
                         Err(ShellError::AccessEmptyContent { span: head })
+                    } else {
+                        // There are no values, so return nothing instead of an error so
+                        // that users can pipe this through 'default' if they want to.
+                        Ok(Value::nothing(head).into_pipeline_data_with_metadata(metadata))
                     }
                 } else {
                     Ok(Value::list(buf.into(), head).into_pipeline_data_with_metadata(metadata))
@@ -123,8 +134,12 @@ impl Command for Last {
                         if return_single_element {
                             if let Some(v) = vals.pop() {
                                 Ok(v.into_pipeline_data())
-                            } else {
+                            } else if strict_mode {
                                 Err(ShellError::AccessEmptyContent { span: head })
+                            } else {
+                                // There are no values, so return nothing instead of an error so
+                                // that users can pipe this through 'default' if they want to.
+                                Ok(Value::nothing(head).into_pipeline_data_with_metadata(metadata))
                             }
                         } else {
                             let i = vals.len().saturating_sub(rows);
@@ -136,8 +151,12 @@ impl Command for Last {
                         if return_single_element {
                             if let Some(val) = val.pop() {
                                 Ok(Value::int(val.into(), span).into_pipeline_data())
-                            } else {
+                            } else if strict_mode {
                                 Err(ShellError::AccessEmptyContent { span: head })
+                            } else {
+                                // There are no values, so return nothing instead of an error so
+                                // that users can pipe this through 'default' if they want to.
+                                Ok(Value::nothing(head).into_pipeline_data_with_metadata(metadata))
                             }
                         } else {
                             let i = val.len().saturating_sub(rows);
@@ -147,6 +166,67 @@ impl Command for Last {
                     }
                     // Propagate errors by explicitly matching them before the final case.
                     Value::Error { error, .. } => Err(*error),
+                    #[cfg(feature = "sqlite")]
+                    // Pushdown optimization: handle 'last' on SQLiteQueryBuilder for lazy SQL execution
+                    Value::Custom {
+                        val: custom_val,
+                        internal_span,
+                        ..
+                    } => {
+                        if let Some(table) =
+                            custom_val.as_any().downcast_ref::<SQLiteQueryBuilder>()
+                        {
+                            if return_single_element {
+                                // For single element, ORDER BY rowid DESC LIMIT 1
+                                let new_table = table
+                                    .clone()
+                                    .with_order_by("rowid DESC".to_string())
+                                    .with_limit(1);
+                                let result = new_table.execute(head)?;
+                                let value = result.into_value(head)?;
+                                if let Value::List { vals, .. } = value {
+                                    if let Some(val) = vals.into_iter().next() {
+                                        Ok(val.into_pipeline_data())
+                                    } else if strict_mode {
+                                        Err(ShellError::AccessEmptyContent { span: head })
+                                    } else {
+                                        // There are no values, so return nothing instead of an error so
+                                        // that users can pipe this through 'default' if they want to.
+                                        Ok(Value::nothing(head)
+                                            .into_pipeline_data_with_metadata(metadata))
+                                    }
+                                } else {
+                                    Err(ShellError::NushellFailed {
+                                        msg: "Expected list from SQLiteQueryBuilder".into(),
+                                    })
+                                }
+                            } else {
+                                // For multiple, ORDER BY rowid DESC LIMIT rows
+                                let new_table = table
+                                    .clone()
+                                    .with_order_by("rowid DESC".to_string())
+                                    .with_limit(rows as i64);
+                                let result = new_table.execute(head)?;
+                                let value = result.into_value(head)?;
+
+                                if let Value::List { mut vals, .. } = value {
+                                    // Reverse the results to restore original order
+                                    vals.reverse();
+                                    Ok(Value::list(vals, head)
+                                        .into_pipeline_data_with_metadata(metadata))
+                                } else {
+                                    Ok(value.into_pipeline_data_with_metadata(metadata))
+                                }
+                            }
+                        } else {
+                            Err(ShellError::OnlySupportsThisInputType {
+                                exp_input_type: "list, binary or range".into(),
+                                wrong_type: custom_val.type_name(),
+                                dst_span: head,
+                                src_span: internal_span,
+                            })
+                        }
+                    }
                     other => Err(ShellError::OnlySupportsThisInputType {
                         exp_input_type: "list, binary or range".into(),
                         wrong_type: other.get_type().to_string(),
@@ -165,7 +245,7 @@ impl Command for Last {
                         let mut buf = VecDeque::with_capacity(rows + TAKE as usize);
                         loop {
                             let taken = std::io::copy(&mut (&mut reader).take(TAKE), &mut buf)
-                                .err_span(span)?;
+                                .map_err(|err| IoError::new(err, span, None))?;
                             if buf.len() > rows {
                                 buf.drain(..(buf.len() - rows));
                             }
@@ -176,8 +256,13 @@ impl Command for Last {
                                         return Ok(
                                             Value::int(buf[0] as i64, head).into_pipeline_data()
                                         );
-                                    } else {
+                                    } else if strict_mode {
                                         return Err(ShellError::AccessEmptyContent { span: head });
+                                    } else {
+                                        // There are no values, so return nothing instead of an error so
+                                        // that users can pipe this through 'default' if they want to.
+                                        return Ok(Value::nothing(head)
+                                            .into_pipeline_data_with_metadata(metadata));
                                     }
                                 } else {
                                     return Ok(Value::binary(buf, head).into_pipeline_data());
@@ -185,7 +270,7 @@ impl Command for Last {
                             }
                         }
                     } else {
-                        Ok(PipelineData::Empty)
+                        Ok(PipelineData::empty())
                     }
                 } else {
                     Err(ShellError::OnlySupportsThisInputType {
@@ -211,9 +296,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Last {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Last)
     }
 }

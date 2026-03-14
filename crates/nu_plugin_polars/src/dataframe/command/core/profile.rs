@@ -1,14 +1,14 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    record, Category, Example, LabeledError, PipelineData, ShellError, Signature, Type, Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Value, record,
 };
 
 use crate::{
-    values::{
-        cant_convert_err, CustomValueSupport, NuDataFrame, NuLazyFrame, PolarsPluginObject,
-        PolarsPluginType,
-    },
     PolarsPlugin,
+    values::{
+        CustomValueSupport, NuDataFrame, NuLazyFrame, PolarsPluginObject, PolarsPluginType,
+        cant_convert_err,
+    },
 };
 
 pub struct ProfileDF;
@@ -22,10 +22,16 @@ impl PluginCommand for ProfileDF {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
@@ -39,7 +45,7 @@ impl PluginCommand for ProfileDF {
 The units of the timings are microseconds."#
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Profile a lazy dataframe",
             example: r#"[[a b]; [1 2] [1 4] [2 6] [2 4]]
@@ -63,6 +69,7 @@ The units of the timings are microseconds."#
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         match PolarsPluginObject::try_from_value(plugin, &value)? {
             PolarsPluginObject::NuDataFrame(df) => command_lazy(plugin, engine, call, df.lazy()),
@@ -73,6 +80,7 @@ The units of the timings are microseconds."#
             )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 
@@ -105,5 +113,5 @@ fn command_lazy(
         call.head,
     );
 
-    Ok(PipelineData::Value(result, None))
+    Ok(PipelineData::value(result, None))
 }

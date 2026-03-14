@@ -1,28 +1,36 @@
 mod file_type;
 mod nu_dataframe;
+mod nu_dtype;
 mod nu_expression;
 mod nu_lazyframe;
 mod nu_lazygroupby;
 mod nu_schema;
+mod nu_selector;
 mod nu_when;
 pub mod utils;
 
+use crate::{Cacheable, PolarsPlugin};
+use nu_dtype::custom_value::NuDataTypeCustomValue;
+use nu_plugin::EngineInterface;
+use nu_protocol::{
+    CustomValue, PipelineData, ShellError, Span, Spanned, Type, Value, ast::Operator,
+};
+use nu_schema::custom_value::NuSchemaCustomValue;
 use std::{cmp::Ordering, fmt};
+use uuid::Uuid;
 
 pub use file_type::PolarsFileType;
 pub use nu_dataframe::{Axis, Column, NuDataFrame, NuDataFrameCustomValue};
+pub use nu_dtype::NuDataType;
+pub use nu_dtype::{datatype_list, str_to_dtype, str_to_time_unit};
 pub use nu_expression::{NuExpression, NuExpressionCustomValue};
 pub use nu_lazyframe::{NuLazyFrame, NuLazyFrameCustomValue};
 pub use nu_lazygroupby::{NuLazyGroupBy, NuLazyGroupByCustomValue};
-use nu_plugin::EngineInterface;
-use nu_protocol::{ast::Operator, CustomValue, PipelineData, ShellError, Span, Spanned, Value};
-pub use nu_schema::{str_to_dtype, NuSchema};
+pub use nu_schema::NuSchema;
+pub use nu_selector::{NuSelector, NuSelectorCustomValue};
 pub use nu_when::{NuWhen, NuWhenCustomValue, NuWhenType};
-use uuid::Uuid;
 
-use crate::{Cacheable, PolarsPlugin};
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolarsPluginType {
     NuDataFrame,
     NuLazyFrame,
@@ -30,6 +38,44 @@ pub enum PolarsPluginType {
     NuLazyGroupBy,
     NuWhen,
     NuPolarsTestData,
+    NuDataType,
+    NuSchema,
+    NuSelector,
+}
+
+impl PolarsPluginType {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::NuDataFrame => "polars_dataframe",
+            Self::NuLazyFrame => "polars_lazyframe",
+            Self::NuExpression => "polars_expression",
+            Self::NuLazyGroupBy => "polars_group_by",
+            Self::NuWhen => "polars_when",
+            Self::NuPolarsTestData => "polars_test_data",
+            Self::NuDataType => "polars_datatype",
+            Self::NuSchema => "polars_schema",
+            Self::NuSelector => "polars_selector",
+        }
+    }
+
+    pub fn types() -> &'static [PolarsPluginType] {
+        &[
+            PolarsPluginType::NuDataFrame,
+            PolarsPluginType::NuLazyFrame,
+            PolarsPluginType::NuExpression,
+            PolarsPluginType::NuLazyGroupBy,
+            PolarsPluginType::NuWhen,
+            PolarsPluginType::NuDataType,
+            PolarsPluginType::NuSchema,
+            PolarsPluginType::NuSelector,
+        ]
+    }
+}
+
+impl From<PolarsPluginType> for Type {
+    fn from(pt: PolarsPluginType) -> Self {
+        Type::Custom(pt.type_name().into())
+    }
 }
 
 impl fmt::Display for PolarsPluginType {
@@ -41,6 +87,9 @@ impl fmt::Display for PolarsPluginType {
             Self::NuLazyGroupBy => write!(f, "NuLazyGroupBy"),
             Self::NuWhen => write!(f, "NuWhen"),
             Self::NuPolarsTestData => write!(f, "NuPolarsTestData"),
+            Self::NuDataType => write!(f, "NuDataType"),
+            Self::NuSchema => write!(f, "NuSchema"),
+            Self::NuSelector => write!(f, "NuSelector"),
         }
     }
 }
@@ -53,6 +102,9 @@ pub enum PolarsPluginObject {
     NuLazyGroupBy(NuLazyGroupBy),
     NuWhen(NuWhen),
     NuPolarsTestData(Uuid, String),
+    NuDataType(NuDataType),
+    NuSchema(NuSchema),
+    NuSelector(NuSelector),
 }
 
 impl PolarsPluginObject {
@@ -70,6 +122,12 @@ impl PolarsPluginObject {
             NuLazyGroupBy::try_from_value(plugin, value).map(PolarsPluginObject::NuLazyGroupBy)
         } else if NuWhen::can_downcast(value) {
             NuWhen::try_from_value(plugin, value).map(PolarsPluginObject::NuWhen)
+        } else if NuSchema::can_downcast(value) {
+            NuSchema::try_from_value(plugin, value).map(PolarsPluginObject::NuSchema)
+        } else if NuDataType::can_downcast(value) {
+            NuDataType::try_from_value(plugin, value).map(PolarsPluginObject::NuDataType)
+        } else if NuSelector::can_downcast(value) {
+            NuSelector::try_from_value(plugin, value).map(PolarsPluginObject::NuSelector)
         } else {
             Err(cant_convert_err(
                 value,
@@ -79,6 +137,9 @@ impl PolarsPluginObject {
                     PolarsPluginType::NuExpression,
                     PolarsPluginType::NuLazyGroupBy,
                     PolarsPluginType::NuWhen,
+                    PolarsPluginType::NuDataType,
+                    PolarsPluginType::NuSchema,
+                    PolarsPluginType::NuSelector,
                 ],
             ))
         }
@@ -101,6 +162,9 @@ impl PolarsPluginObject {
             Self::NuLazyGroupBy(_) => PolarsPluginType::NuLazyGroupBy,
             Self::NuWhen(_) => PolarsPluginType::NuWhen,
             Self::NuPolarsTestData(_, _) => PolarsPluginType::NuPolarsTestData,
+            Self::NuDataType(_) => PolarsPluginType::NuDataType,
+            Self::NuSchema(_) => PolarsPluginType::NuSchema,
+            Self::NuSelector(_) => PolarsPluginType::NuSelector,
         }
     }
 
@@ -112,6 +176,9 @@ impl PolarsPluginObject {
             PolarsPluginObject::NuLazyGroupBy(lg) => lg.id,
             PolarsPluginObject::NuWhen(w) => w.id,
             PolarsPluginObject::NuPolarsTestData(id, _) => *id,
+            PolarsPluginObject::NuDataType(dt) => dt.id,
+            PolarsPluginObject::NuSchema(schema) => schema.id,
+            PolarsPluginObject::NuSelector(selector) => selector.id,
         }
     }
 
@@ -125,6 +192,9 @@ impl PolarsPluginObject {
             PolarsPluginObject::NuPolarsTestData(id, s) => {
                 Value::string(format!("{id}:{s}"), Span::test_data())
             }
+            PolarsPluginObject::NuDataType(dt) => dt.into_value(span),
+            PolarsPluginObject::NuSchema(schema) => schema.into_value(span),
+            PolarsPluginObject::NuSelector(selector) => selector.into_value(span),
         }
     }
 
@@ -150,6 +220,9 @@ pub enum CustomValueType {
     NuExpression(NuExpressionCustomValue),
     NuLazyGroupBy(NuLazyGroupByCustomValue),
     NuWhen(NuWhenCustomValue),
+    NuDataType(NuDataTypeCustomValue),
+    NuSchema(NuSchemaCustomValue),
+    NuSelector(NuSelectorCustomValue),
 }
 
 impl CustomValueType {
@@ -160,6 +233,9 @@ impl CustomValueType {
             CustomValueType::NuExpression(e_cv) => e_cv.id,
             CustomValueType::NuLazyGroupBy(lg_cv) => lg_cv.id,
             CustomValueType::NuWhen(w_cv) => w_cv.id,
+            CustomValueType::NuDataType(dt_cv) => dt_cv.id,
+            CustomValueType::NuSchema(schema_cv) => schema_cv.id,
+            CustomValueType::NuSelector(selector_cv) => selector_cv.id,
         }
     }
 
@@ -174,6 +250,12 @@ impl CustomValueType {
             Ok(CustomValueType::NuLazyGroupBy(lg_cv.clone()))
         } else if let Some(w_cv) = val.as_any().downcast_ref::<NuWhenCustomValue>() {
             Ok(CustomValueType::NuWhen(w_cv.clone()))
+        } else if let Some(dt_cv) = val.as_any().downcast_ref::<NuDataTypeCustomValue>() {
+            Ok(CustomValueType::NuDataType(dt_cv.clone()))
+        } else if let Some(schema_cv) = val.as_any().downcast_ref::<NuSchemaCustomValue>() {
+            Ok(CustomValueType::NuSchema(schema_cv.clone()))
+        } else if let Some(selector_cv) = val.as_any().downcast_ref::<NuSelectorCustomValue>() {
+            Ok(CustomValueType::NuSelector(selector_cv.clone()))
         } else {
             Err(ShellError::CantConvert {
                 to_type: "physical type".into(),
@@ -217,13 +299,16 @@ pub trait PolarsPluginCustomValue: CustomValue {
         &self,
         _plugin: &PolarsPlugin,
         _engine: &EngineInterface,
-        _lhs_span: Span,
+        lhs_span: Span,
         operator: Spanned<Operator>,
         _right: Value,
     ) -> Result<Value, ShellError> {
-        Err(ShellError::UnsupportedOperator {
-            operator: operator.item,
-            span: operator.span,
+        Err(ShellError::OperatorUnsupportedType {
+            op: operator.item,
+            unsupported: Type::Custom(self.type_name().into()),
+            op_span: operator.span,
+            unsupported_span: lhs_span,
+            help: None,
         })
     }
 
@@ -371,9 +456,207 @@ pub trait CustomValueSupport: Cacheable {
         engine: &EngineInterface,
         span: Span,
     ) -> Result<PipelineData, ShellError> {
-        Ok(PipelineData::Value(
+        Ok(PipelineData::value(
             self.cache_and_to_value(plugin, engine, span)?,
             None,
         ))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use polars::prelude::{DataType, TimeUnit, UnknownKind};
+    use polars_compute::decimal::DEC128_MAX_PREC;
+
+    use crate::command::datetime::timezone_utc;
+
+    use super::*;
+
+    #[test]
+    fn test_dtype_str_to_schema_simple_types() {
+        let dtype = "bool";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Boolean;
+        assert_eq!(schema, expected);
+
+        let dtype = "u8";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::UInt8;
+        assert_eq!(schema, expected);
+
+        let dtype = "u16";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::UInt16;
+        assert_eq!(schema, expected);
+
+        let dtype = "u32";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::UInt32;
+        assert_eq!(schema, expected);
+
+        let dtype = "u64";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::UInt64;
+        assert_eq!(schema, expected);
+
+        let dtype = "i8";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Int8;
+        assert_eq!(schema, expected);
+
+        let dtype = "i16";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Int16;
+        assert_eq!(schema, expected);
+
+        let dtype = "i32";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Int32;
+        assert_eq!(schema, expected);
+
+        let dtype = "i64";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Int64;
+        assert_eq!(schema, expected);
+
+        let dtype = "str";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::String;
+        assert_eq!(schema, expected);
+
+        let dtype = "binary";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Binary;
+        assert_eq!(schema, expected);
+
+        let dtype = "date";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Date;
+        assert_eq!(schema, expected);
+
+        let dtype = "time";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Time;
+        assert_eq!(schema, expected);
+
+        let dtype = "null";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Null;
+        assert_eq!(schema, expected);
+
+        let dtype = "unknown";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Unknown(UnknownKind::Any);
+        assert_eq!(schema, expected);
+
+        let dtype = "object";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Object("unknown");
+        assert_eq!(schema, expected);
+    }
+
+    #[test]
+    fn test_dtype_str_schema_datetime() {
+        let dtype = "datetime<ms, *>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Datetime(TimeUnit::Milliseconds, None);
+        assert_eq!(schema, expected);
+
+        let dtype = "datetime<us, *>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Datetime(TimeUnit::Microseconds, None);
+        assert_eq!(schema, expected);
+
+        let dtype = "datetime<μs, *>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Datetime(TimeUnit::Microseconds, None);
+        assert_eq!(schema, expected);
+
+        let dtype = "datetime<ns, *>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Datetime(TimeUnit::Nanoseconds, None);
+        assert_eq!(schema, expected);
+
+        let dtype = "datetime<ms, UTC>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Datetime(TimeUnit::Milliseconds, Some(timezone_utc()));
+        assert_eq!(schema, expected);
+
+        let dtype = "invalid";
+        let schema = str_to_dtype(dtype, Span::unknown());
+        assert!(schema.is_err())
+    }
+
+    #[test]
+    fn test_dtype_str_schema_duration() {
+        let dtype = "duration<ms>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Duration(TimeUnit::Milliseconds);
+        assert_eq!(schema, expected);
+
+        let dtype = "duration<us>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Duration(TimeUnit::Microseconds);
+        assert_eq!(schema, expected);
+
+        let dtype = "duration<μs>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Duration(TimeUnit::Microseconds);
+        assert_eq!(schema, expected);
+
+        let dtype = "duration<ns>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Duration(TimeUnit::Nanoseconds);
+        assert_eq!(schema, expected);
+    }
+
+    #[test]
+    fn test_dtype_str_schema_decimal() {
+        let dtype = "decimal<7,2>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Decimal(7usize, 2usize);
+        assert_eq!(schema, expected);
+
+        // "*" is not a permitted value for scale
+        let dtype = "decimal<7,*>";
+        let schema = str_to_dtype(dtype, Span::unknown());
+        assert!(matches!(schema, Err(ShellError::GenericError { .. })));
+
+        let dtype = "decimal<*,2>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::Decimal(DEC128_MAX_PREC, 2usize);
+        assert_eq!(schema, expected);
+    }
+
+    #[test]
+    fn test_dtype_str_to_schema_list_types() {
+        let dtype = "list<i32>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::List(Box::new(DataType::Int32));
+        assert_eq!(schema, expected);
+
+        let dtype = "list<duration<ms>>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::List(Box::new(DataType::Duration(TimeUnit::Milliseconds)));
+        assert_eq!(schema, expected);
+
+        let dtype = "list<datetime<ms, *>>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::List(Box::new(DataType::Datetime(TimeUnit::Milliseconds, None)));
+        assert_eq!(schema, expected);
+
+        let dtype = "list<decimal<7,2>>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::List(Box::new(DataType::Decimal(7usize, 2usize)));
+        assert_eq!(schema, expected);
+
+        let dtype = "list<decimal<*,2>>";
+        let schema = str_to_dtype(dtype, Span::unknown()).unwrap();
+        let expected = DataType::List(Box::new(DataType::Decimal(DEC128_MAX_PREC, 2usize)));
+        assert_eq!(schema, expected);
+
+        let dtype = "list<decimal<7,*>>";
+        let schema = str_to_dtype(dtype, Span::unknown());
+        assert!(matches!(schema, Err(ShellError::GenericError { .. })));
     }
 }

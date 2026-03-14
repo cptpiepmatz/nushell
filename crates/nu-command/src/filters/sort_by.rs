@@ -1,4 +1,4 @@
-use nu_engine::{command_prelude::*, ClosureEval};
+use nu_engine::{ClosureEval, command_prelude::*};
 
 use crate::Comparator;
 
@@ -29,20 +29,20 @@ impl Command for SortBy {
                 ]),
                 "The cell path(s) or closure(s) to compare elements by.",
             )
-            .switch("reverse", "Sort in reverse order", Some('r'))
+            .switch("reverse", "Sort in reverse order.", Some('r'))
             .switch(
                 "ignore-case",
-                "Sort string-based data case-insensitively",
+                "Sort string-based data case-insensitively.",
                 Some('i'),
             )
             .switch(
                 "natural",
-                "Sort alphanumeric string-based data naturally (1, 9, 10, 99, 100, ...)",
+                "Sort alphanumeric string-based data naturally (1, 9, 10, 99, 100, ...).",
                 Some('n'),
             )
             .switch(
                 "custom",
-                "Use closures to specify a custom sort order, rather than to compute a comparison key",
+                "Use closures to specify a custom sort order, rather than to compute a comparison key.",
                 Some('c'),
             )
             .allow_variants_without_examples(true)
@@ -53,20 +53,20 @@ impl Command for SortBy {
         "Sort by the given cell path or closure."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Sort files by modified date",
+                description: "Sort files by modified date.",
                 example: "ls | sort-by modified",
                 result: None,
             },
             Example {
-                description: "Sort files by name (case-insensitive)",
+                description: "Sort files by name (case-insensitive).",
                 example: "ls | sort-by name --ignore-case",
                 result: None,
             },
             Example {
-                description: "Sort a table by a column (reversed order)",
+                description: "Sort a table by a column (reversed order).",
                 example: "[[fruit count]; [apple 9] [pear 3] [orange 7]] | sort-by fruit --reverse",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -84,31 +84,31 @@ impl Command for SortBy {
                 ])),
             },
             Example {
-                description: "Sort by a nested value",
+                description: "Sort by a nested value.",
                 example: "[[name info]; [Cairo {founded: 969}] [Kyoto {founded: 794}]] | sort-by info.founded",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
-                        "name" => Value::test_string("Kyoto"),
-                        "info" => Value::test_record(
-                            record! { "founded" => Value::test_int(794) },
-                        )}),
+                    "name" => Value::test_string("Kyoto"),
+                    "info" => Value::test_record(
+                        record! { "founded" => Value::test_int(794) },
+                    )}),
                     Value::test_record(record! {
-                        "name" => Value::test_string("Cairo"),
-                        "info" => Value::test_record(
-                            record! { "founded" => Value::test_int(969) },
-                        )})
+                    "name" => Value::test_string("Cairo"),
+                    "info" => Value::test_record(
+                        record! { "founded" => Value::test_int(969) },
+                    )}),
                 ])),
             },
             Example {
-                description: "Sort by the last value in a list",
+                description: "Sort by the last value in a list.",
                 example: "[[2 50] [10 1]] | sort-by { last }",
                 result: Some(Value::test_list(vec![
                     Value::test_list(vec![Value::test_int(10), Value::test_int(1)]),
-                    Value::test_list(vec![Value::test_int(2), Value::test_int(50)])
-                ]))
+                    Value::test_list(vec![Value::test_int(2), Value::test_int(50)]),
+                ])),
             },
             Example {
-                description: "Sort in a custom order",
+                description: "Sort in a custom order.",
                 example: "[7 3 2 8 4] | sort-by -c {|a, b| $a < $b}",
                 result: Some(Value::test_list(vec![
                     Value::test_int(2),
@@ -116,8 +116,8 @@ impl Command for SortBy {
                     Value::test_int(4),
                     Value::test_int(7),
                     Value::test_int(8),
-                ]))
-            }
+                ])),
+            },
         ]
     }
 
@@ -177,12 +177,10 @@ impl Command for SortBy {
 
 #[cfg(test)]
 mod test {
-    use crate::{test_examples_with_commands, Last};
-
     use super::*;
 
     #[test]
-    fn test_examples() {
-        test_examples_with_commands(SortBy {}, &[&Last]);
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(SortBy)
     }
 }

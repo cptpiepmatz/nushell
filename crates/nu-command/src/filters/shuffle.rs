@@ -1,5 +1,5 @@
 use nu_engine::command_prelude::*;
-use rand::{prelude::SliceRandom, thread_rng};
+use rand::{prelude::SliceRandom, rng};
 
 #[derive(Clone)]
 pub struct Shuffle;
@@ -31,7 +31,7 @@ impl Command for Shuffle {
     ) -> Result<PipelineData, ShellError> {
         let metadata = input.metadata();
         let mut values = input.into_iter_strict(call.head)?.collect::<Vec<_>>();
-        values.shuffle(&mut thread_rng());
+        values.shuffle(&mut rng());
         let iter = values.into_iter();
         Ok(iter.into_pipeline_data_with_metadata(
             call.head,
@@ -40,9 +40,9 @@ impl Command for Shuffle {
         ))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Shuffle rows randomly (execute it several times and see the difference)",
+            description: "Shuffle rows randomly (execute it several times and see the difference).",
             example: r#"[[version patch]; ['1.0.0' false] ['3.0.1' true] ['2.0.0' false]] | shuffle"#,
             result: None,
         }]

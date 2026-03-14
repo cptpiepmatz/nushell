@@ -1,11 +1,11 @@
 use nu_protocol::{
+    DeclId, GetSpan, Span, SyntaxShape, VarId,
     ast::{
         Argument, Block, Expr, Expression, ExternalArgument, ImportPatternMember, ListItem,
         MatchPattern, PathMember, Pattern, Pipeline, PipelineElement, PipelineRedirection,
         RecordItem,
     },
     engine::StateWorkingSet,
-    DeclId, Span, SyntaxShape, VarId,
 };
 use std::fmt::{Display, Formatter, Result};
 
@@ -18,7 +18,10 @@ pub enum FlatShape {
     Custom(DeclId),
     DateTime,
     Directory,
-    External,
+    // The stored span contains the call's head if this call is through an alias:
+    // This is only different from the name of the called external command,
+    // and is only useful for its location (not its contents).
+    External(Box<Span>),
     ExternalArg,
     ExternalResolved,
     Filepath,
@@ -58,7 +61,7 @@ impl FlatShape {
             FlatShape::Custom(_) => "shape_custom",
             FlatShape::DateTime => "shape_datetime",
             FlatShape::Directory => "shape_directory",
-            FlatShape::External => "shape_external",
+            FlatShape::External(_) => "shape_external",
             FlatShape::ExternalArg => "shape_externalarg",
             FlatShape::ExternalResolved => "shape_external_resolved",
             FlatShape::Filepath => "shape_filepath",
@@ -183,12 +186,13 @@ fn flatten_expression_into(
     expr: &Expression,
     output: &mut Vec<(Span, FlatShape)>,
 ) {
-    if let Some(custom_completion) = &expr.custom_completion {
-        output.push((expr.span, FlatShape::Custom(*custom_completion)));
-        return;
-    }
-
     match &expr.expr {
+        Expr::AttributeBlock(ab) => {
+            for attr in &ab.attributes {
+                flatten_expression_into(working_set, &attr.expr, output);
+            }
+            flatten_expression_into(working_set, &ab.item, output);
+        }
         Expr::BinaryOp(lhs, op, rhs) => {
             flatten_expression_into(working_set, lhs, output);
             flatten_expression_into(working_set, op, output);
@@ -210,13 +214,13 @@ fn flatten_expression_into(
             let block = working_set.get_block(*block_id);
             let flattened = flatten_block(working_set, block);
 
-            if let Some(first) = flattened.first() {
-                if first.0.start > outer_span.start {
-                    output.push((
-                        Span::new(outer_span.start, first.0.start),
-                        FlatShape::Closure,
-                    ));
-                }
+            if let Some(first) = flattened.first()
+                && first.0.start > outer_span.start
+            {
+                output.push((
+                    Span::new(outer_span.start, first.0.start),
+                    FlatShape::Closure,
+                ));
             }
 
             let last = if let Some(last) = flattened.last() {
@@ -226,7 +230,8 @@ fn flatten_expression_into(
                     None
                 }
             } else {
-                None
+                // for empty closures
+                Some((outer_span, FlatShape::Closure))
             };
 
             output.extend(flattened);
@@ -239,10 +244,10 @@ fn flatten_expression_into(
 
             let flattened = flatten_block(working_set, working_set.get_block(*block_id));
 
-            if let Some(first) = flattened.first() {
-                if first.0.start > outer_span.start {
-                    output.push((Span::new(outer_span.start, first.0.start), FlatShape::Block));
-                }
+            if let Some(first) = flattened.first()
+                && first.0.start > outer_span.start
+            {
+                output.push((Span::new(outer_span.start, first.0.start), FlatShape::Block));
             }
 
             let last = if let Some(last) = flattened.last() {
@@ -319,7 +324,14 @@ fn flatten_expression_into(
         }
         Expr::ExternalCall(head, args) => {
             if let Expr::String(..) | Expr::GlobPattern(..) = &head.expr {
-                output.push((head.span, FlatShape::External));
+                // If this external call is through an alias, then head.span contains the
+                // name of the alias (needed to highlight the right thing), but we also need
+                // the name of the aliased command (to decide *how* to highlight the call).
+                // The parser actually created this head by cloning from the alias's definition
+                // and then just overwriting the `span` field - but `span_id` still points to
+                // the original span, so we can recover it from there.
+                let span = working_set.get_span(head.span_id);
+                output.push((span, FlatShape::External(Box::new(head.span))));
             } else {
                 flatten_expression_into(working_set, head, output);
             }
@@ -414,10 +426,10 @@ fn flatten_expression_into(
                     ListItem::Item(expr) => {
                         let flattened = flatten_expression(working_set, expr);
 
-                        if let Some(first) = flattened.first() {
-                            if first.0.start > last_end {
-                                output.push((Span::new(last_end, first.0.start), FlatShape::List));
-                            }
+                        if let Some(first) = flattened.first()
+                            && first.0.start > last_end
+                        {
+                            output.push((Span::new(last_end, first.0.start), FlatShape::List));
                         }
 
                         if let Some(last) = flattened.last() {
@@ -434,10 +446,10 @@ fn flatten_expression_into(
                         last_end = op_span.end;
 
                         let flattened_inner = flatten_expression(working_set, expr);
-                        if let Some(first) = flattened_inner.first() {
-                            if first.0.start > last_end {
-                                output.push((Span::new(last_end, first.0.start), FlatShape::List));
-                            }
+                        if let Some(first) = flattened_inner.first()
+                            && first.0.start > last_end
+                        {
+                            output.push((Span::new(last_end, first.0.start), FlatShape::List));
                         }
                         if let Some(last) = flattened_inner.last() {
                             last_end = last.0.end;
@@ -457,18 +469,18 @@ fn flatten_expression_into(
                 flatten_expression_into(working_set, expr, &mut flattened);
             }
 
-            if let Some(first) = flattened.first() {
-                if first.0.start != expr.span.start {
-                    // If we aren't a bare word interpolation, also highlight the outer quotes
-                    output.push((
-                        Span::new(expr.span.start, expr.span.start + 2),
-                        FlatShape::StringInterpolation,
-                    ));
-                    flattened.push((
-                        Span::new(expr.span.end - 1, expr.span.end),
-                        FlatShape::StringInterpolation,
-                    ));
-                }
+            if let Some(first) = flattened.first()
+                && first.0.start != expr.span.start
+            {
+                // If we aren't a bare word interpolation, also highlight the outer quotes
+                output.push((
+                    Span::new(expr.span.start, expr.span.start + 2),
+                    FlatShape::StringInterpolation,
+                ));
+                flattened.push((
+                    Span::new(expr.span.end - 1, expr.span.end),
+                    FlatShape::StringInterpolation,
+                ));
             }
             output.extend(flattened);
         }
@@ -501,22 +513,20 @@ fn flatten_expression_into(
                         let flattened_lhs = flatten_expression(working_set, key);
                         let flattened_rhs = flatten_expression(working_set, val);
 
-                        if let Some(first) = flattened_lhs.first() {
-                            if first.0.start > last_end {
-                                output
-                                    .push((Span::new(last_end, first.0.start), FlatShape::Record));
-                            }
+                        if let Some(first) = flattened_lhs.first()
+                            && first.0.start > last_end
+                        {
+                            output.push((Span::new(last_end, first.0.start), FlatShape::Record));
                         }
                         if let Some(last) = flattened_lhs.last() {
                             last_end = last.0.end;
                         }
                         output.extend(flattened_lhs);
 
-                        if let Some(first) = flattened_rhs.first() {
-                            if first.0.start > last_end {
-                                output
-                                    .push((Span::new(last_end, first.0.start), FlatShape::Record));
-                            }
+                        if let Some(first) = flattened_rhs.first()
+                            && first.0.start > last_end
+                        {
+                            output.push((Span::new(last_end, first.0.start), FlatShape::Record));
                         }
                         if let Some(last) = flattened_rhs.last() {
                             last_end = last.0.end;
@@ -532,11 +542,10 @@ fn flatten_expression_into(
                         last_end = op_span.end;
 
                         let flattened = flatten_expression(working_set, record);
-                        if let Some(first) = flattened.first() {
-                            if first.0.start > last_end {
-                                output
-                                    .push((Span::new(last_end, first.0.start), FlatShape::Record));
-                            }
+                        if let Some(first) = flattened.first()
+                            && first.0.start > last_end
+                        {
+                            output.push((Span::new(last_end, first.0.start), FlatShape::Record));
                         }
                         if let Some(last) = flattened.last() {
                             last_end = last.0.end;
@@ -563,10 +572,10 @@ fn flatten_expression_into(
 
             for col in table.columns.as_ref() {
                 let flattened = flatten_expression(working_set, col);
-                if let Some(first) = flattened.first() {
-                    if first.0.start > last_end {
-                        output.push((Span::new(last_end, first.0.start), FlatShape::Table));
-                    }
+                if let Some(first) = flattened.first()
+                    && first.0.start > last_end
+                {
+                    output.push((Span::new(last_end, first.0.start), FlatShape::Table));
                 }
 
                 if let Some(last) = flattened.last() {
@@ -578,10 +587,10 @@ fn flatten_expression_into(
             for row in table.rows.as_ref() {
                 for expr in row.as_ref() {
                     let flattened = flatten_expression(working_set, expr);
-                    if let Some(first) = flattened.first() {
-                        if first.0.start > last_end {
-                            output.push((Span::new(last_end, first.0.start), FlatShape::Table));
-                        }
+                    if let Some(first) = flattened.first()
+                        && first.0.start > last_end
+                    {
+                        output.push((Span::new(last_end, first.0.start), FlatShape::Table));
                     }
 
                     if let Some(last) = flattened.last() {

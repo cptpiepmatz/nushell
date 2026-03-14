@@ -24,12 +24,12 @@ impl SimplePluginCommand for One {
         // The signature defines the usage of the command inside Nu, and also automatically
         // generates its help page.
         Signature::build(self.name())
-            .required("a", SyntaxShape::Int, "required integer value")
-            .required("b", SyntaxShape::String, "required string value")
-            .switch("flag", "a flag for the signature", Some('f'))
-            .optional("opt", SyntaxShape::Int, "Optional number")
-            .named("named", SyntaxShape::String, "named string", Some('n'))
-            .rest("rest", SyntaxShape::String, "rest value string")
+            .required("a", SyntaxShape::Int, "Required integer value.")
+            .required("b", SyntaxShape::String, "Required string value.")
+            .switch("flag", "A flag for the signature.", Some('f'))
+            .optional("opt", SyntaxShape::Int, "Optional number.")
+            .named("named", SyntaxShape::String, "Named string.", Some('n'))
+            .rest("rest", SyntaxShape::String, "Rest value string.")
             .category(Category::Experimental)
     }
 
@@ -37,7 +37,7 @@ impl SimplePluginCommand for One {
         vec!["example"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             example: "example one 3 bb",
             description: "running example with an int value and string value",

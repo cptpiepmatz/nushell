@@ -44,9 +44,9 @@ impl Command for DebugInfo {
         Ok(all_columns(call.head).into_pipeline_data())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "View process information",
+            description: "View process information.",
             example: "debug info",
             result: None,
         }]
@@ -54,7 +54,7 @@ impl Command for DebugInfo {
 }
 
 fn all_columns(span: Span) -> Value {
-    let rk = RefreshKind::new()
+    let rk = RefreshKind::nothing()
         .with_processes(ProcessRefreshKind::everything())
         .with_memory(MemoryRefreshKind::everything());
 

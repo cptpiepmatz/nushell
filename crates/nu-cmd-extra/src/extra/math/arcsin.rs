@@ -1,16 +1,16 @@
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathArcSin;
 
-impl Command for SubCommand {
+impl Command for MathArcSin {
     fn name(&self) -> &str {
         "math arcsin"
     }
 
     fn signature(&self) -> Signature {
         Signature::build("math arcsin")
-            .switch("degrees", "Return degrees instead of radians", Some('d'))
+            .switch("degrees", "Return degrees instead of radians.", Some('d'))
             .input_output_types(vec![
                 (Type::Number, Type::Float),
                 (
@@ -40,7 +40,7 @@ impl Command for SubCommand {
         let head = call.head;
         let use_degrees = call.has_flag(engine_state, stack, "degrees")?;
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(
@@ -49,7 +49,7 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         let pi = std::f64::consts::PI;
         vec![
             Example {
@@ -112,9 +112,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathArcSin)
     }
 }

@@ -1,14 +1,14 @@
 use crate::{
-    values::{
-        cant_convert_err, CustomValueSupport, NuExpression, PolarsPluginObject, PolarsPluginType,
-    },
     PolarsPlugin,
+    values::{
+        CustomValueSupport, NuExpression, PolarsPluginObject, PolarsPluginType, cant_convert_err,
+    },
 };
 
 use super::super::super::values::{Column, NuDataFrame};
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Type, Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Value,
 };
 use polars::prelude::IntoSeries;
 
@@ -30,18 +30,22 @@ impl PluginCommand for IsNull {
         Signature::build(self.name())
             .input_output_types(vec![
                 (
-                    Type::Custom("expression".into()),
-                    Type::Custom("expression".into()),
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
                 ),
                 (
-                    Type::Custom("dataframe".into()),
-                    Type::Custom("dataframe".into()),
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
                 ),
             ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Create mask where values are null",
@@ -80,6 +84,7 @@ impl PluginCommand for IsNull {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         match PolarsPluginObject::try_from_value(plugin, &value)? {
             PolarsPluginObject::NuDataFrame(df) => command(plugin, engine, call, df),
@@ -100,6 +105,7 @@ impl PluginCommand for IsNull {
             )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

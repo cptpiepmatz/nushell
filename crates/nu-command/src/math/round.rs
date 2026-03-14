@@ -1,9 +1,10 @@
+use crate::math::utils::ensure_bounded;
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathRound;
 
-impl Command for SubCommand {
+impl Command for MathRound {
     fn name(&self) -> &str {
         "math round"
     }
@@ -16,12 +17,13 @@ impl Command for SubCommand {
                     Type::List(Box::new(Type::Number)),
                     Type::List(Box::new(Type::Number)),
                 ),
+                (Type::Range, Type::List(Box::new(Type::Number))),
             ])
             .allow_variants_without_examples(true)
             .named(
                 "precision",
                 SyntaxShape::Number,
-                "digits of precision",
+                "Digits of precision.",
                 Some('p'),
             )
             .category(Category::Math)
@@ -49,8 +51,12 @@ impl Command for SubCommand {
         let precision_param: Option<i64> = call.get_flag(engine_state, stack, "precision")?;
         let head = call.head;
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
+        }
+        if let PipelineData::Value(ref v @ Value::Range { ref val, .. }, ..) = input {
+            let span = v.span();
+            ensure_bounded(val, span, head)?;
         }
         input.map(
             move |value| operate(value, head, precision_param),
@@ -67,8 +73,12 @@ impl Command for SubCommand {
         let precision_param: Option<i64> = call.get_flag_const(working_set, "precision")?;
         let head = call.head;
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
+        }
+        if let PipelineData::Value(ref v @ Value::Range { ref val, .. }, ..) = input {
+            let span = v.span();
+            ensure_bounded(val, span, head)?;
         }
         input.map(
             move |value| operate(value, head, precision_param),
@@ -76,10 +86,10 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Apply the round function to a list of numbers",
+                description: "Apply the round function to a list of numbers.",
                 example: "[1.5 2.3 -3.1] | math round",
                 result: Some(Value::list(
                     vec![Value::test_int(2), Value::test_int(2), Value::test_int(-3)],
@@ -87,7 +97,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Apply the round function with precision specified",
+                description: "Apply the round function with precision specified.",
                 example: "[1.555 2.333 -3.111] | math round --precision 2",
                 result: Some(Value::list(
                     vec![
@@ -99,7 +109,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Apply negative precision to a list of numbers",
+                description: "Apply negative precision to a list of numbers.",
                 example: "[123, 123.3, -123.4] | math round --precision -1",
                 result: Some(Value::list(
                     vec![
@@ -124,14 +134,28 @@ fn operate(value: Value, head: Span, precision: Option<i64>) -> Value {
     };
 
     match value {
-        Value::Float { val, .. } => match precision {
-            Some(precision_number) => Value::float(
-                (val * ((10_f64).powf(precision_number as f64))).round()
-                    / (10_f64).powf(precision_number as f64),
-                span,
-            ),
-            None => Value::int(val.round() as i64, span),
-        },
+        Value::Float { val, .. } => {
+            if !val.is_finite() {
+                return Value::error(
+                    ShellError::UnsupportedInput {
+                        msg: "cannot round non-finite number".into(),
+                        input: "value originates from here".into(),
+                        msg_span: span,
+                        input_span: span,
+                    },
+                    span,
+                );
+            }
+
+            match precision {
+                Some(precision_number) => Value::float(
+                    (val * ((10_f64).powf(precision_number as f64))).round()
+                        / (10_f64).powf(precision_number as f64),
+                    span,
+                ),
+                None => Value::int(val.round() as i64, span),
+            }
+        }
         Value::Error { .. } => value,
         other => Value::error(
             ShellError::OnlySupportsThisInputType {
@@ -150,9 +174,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathRound)
     }
 }

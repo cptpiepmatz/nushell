@@ -17,6 +17,9 @@ impl Command for LoadEnv {
             .input_output_types(vec![
                 (Type::record(), Type::Nothing),
                 (Type::Nothing, Type::Nothing),
+                // FIXME Type::Any input added to disable pipeline input type checking, as run-time checks can raise undesirable type errors
+                // which aren't caught by the parser. see https://github.com/nushell/nushell/pull/14922 for more details
+                (Type::Any, Type::Nothing),
             ])
             .allow_variants_without_examples(true)
             .optional(
@@ -47,7 +50,7 @@ impl Command for LoadEnv {
                         input: "value originated from here".into(),
                         msg_span: span,
                         input_span: input.span().unwrap_or(span),
-                    })
+                    });
                 }
             },
         };
@@ -67,15 +70,15 @@ impl Command for LoadEnv {
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Load variables from an input stream",
+                description: "Load variables from an input stream.",
                 example: r#"{NAME: ABE, AGE: UNKNOWN} | load-env; $env.NAME"#,
                 result: Some(Value::test_string("ABE")),
             },
             Example {
-                description: "Load variables from an argument",
+                description: "Load variables from an argument.",
                 example: r#"load-env {NAME: ABE, AGE: UNKNOWN}; $env.NAME"#,
                 result: Some(Value::test_string("ABE")),
             },
@@ -88,9 +91,7 @@ mod tests {
     use super::LoadEnv;
 
     #[test]
-    fn examples_work_as_expected() {
-        use crate::test_examples;
-
-        test_examples(LoadEnv {})
+    fn examples_work_as_expected() -> nu_test_support::Result {
+        nu_test_support::test().examples(LoadEnv)
     }
 }

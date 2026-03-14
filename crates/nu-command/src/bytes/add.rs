@@ -1,4 +1,4 @@
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
 struct Arguments {
@@ -39,10 +39,10 @@ impl Command for BytesAdd {
             .named(
                 "index",
                 SyntaxShape::Int,
-                "index to insert binary data",
+                "Index to insert binary data.",
                 Some('i'),
             )
-            .switch("end", "add to the end of binary", Some('e'))
+            .switch("end", "Add to the end of binary.", Some('e'))
             .rest(
                 "rest",
                 SyntaxShape::CellPath,
@@ -52,7 +52,7 @@ impl Command for BytesAdd {
     }
 
     fn description(&self) -> &str {
-        "Add specified bytes to the input."
+        "Add specified bytes to the binary input."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -81,33 +81,37 @@ impl Command for BytesAdd {
         operate(add, arg, input, call.head, engine_state.signals())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Add bytes `0x[AA]` to `0x[1F FF AA AA]`",
+                description: "Add bytes `0x[AA]` to `0x[1F FF AA AA]`.",
                 example: "0x[1F FF AA AA] | bytes add 0x[AA]",
-                result: Some(Value::binary(vec![0xAA, 0x1F, 0xFF, 0xAA, 0xAA],
+                result: Some(Value::binary(
+                    vec![0xAA, 0x1F, 0xFF, 0xAA, 0xAA],
                     Span::test_data(),
                 )),
             },
             Example {
-                description: "Add bytes `0x[AA BB]` to `0x[1F FF AA AA]` at index 1",
+                description: "Add bytes `0x[AA BB]` to `0x[1F FF AA AA]` at index 1.",
                 example: "0x[1F FF AA AA] | bytes add 0x[AA BB] --index 1",
-                result: Some(Value::binary(vec![0x1F, 0xAA, 0xBB, 0xFF, 0xAA, 0xAA],
+                result: Some(Value::binary(
+                    vec![0x1F, 0xAA, 0xBB, 0xFF, 0xAA, 0xAA],
                     Span::test_data(),
                 )),
             },
             Example {
-                description: "Add bytes `0x[11]` to `0x[FF AA AA]` at the end",
+                description: "Add bytes `0x[11]` to `0x[FF AA AA]` at the end.",
                 example: "0x[FF AA AA] | bytes add 0x[11] --end",
-                result: Some(Value::binary(vec![0xFF, 0xAA, 0xAA, 0x11],
+                result: Some(Value::binary(
+                    vec![0xFF, 0xAA, 0xAA, 0x11],
                     Span::test_data(),
                 )),
             },
             Example {
-                description: "Add bytes `0x[11 22 33]` to `0x[FF AA AA]` at the end, at index 1(the index is start from end)",
+                description: "Add bytes `0x[11 22 33]` to `0x[FF AA AA]` at the end, at index 1(the index is start from end).",
                 example: "0x[FF AA BB] | bytes add 0x[11 22 33] --end --index 1",
-                result: Some(Value::binary(vec![0xFF, 0xAA, 0x11, 0x22, 0x33, 0xBB],
+                result: Some(Value::binary(
+                    vec![0xFF, 0xAA, 0x11, 0x22, 0x33, 0xBB],
                     Span::test_data(),
                 )),
             },
@@ -148,14 +152,14 @@ fn add_impl(input: &[u8], args: &Arguments, span: Span) -> Value {
                 Value::binary(result, span)
             }
         }
-        Some(mut indx) => {
+        Some(mut index) => {
             let inserted_index = if args.end {
-                input.len().saturating_sub(indx)
+                input.len().saturating_sub(index)
             } else {
-                if indx > input.len() {
-                    indx = input.len()
+                if index > input.len() {
+                    index = input.len()
                 }
-                indx
+                index
             };
             let mut result = vec![];
             let mut prev_data = input[..inserted_index].to_vec();
@@ -174,9 +178,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(BytesAdd {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(BytesAdd)
     }
 }

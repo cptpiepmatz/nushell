@@ -2,15 +2,13 @@ use csv::WriterBuilder;
 use nu_cmd_base::formats::to::delimited::merge_descriptors;
 use nu_protocol::{
     ByteStream, ByteStreamType, Config, PipelineData, ShellError, Signals, Span, Spanned, Value,
+    shell_error::io::IoError,
 };
 use std::{iter, sync::Arc};
 
 fn make_csv_error(error: csv::Error, format_name: &str, head: Span) -> ShellError {
     if let csv::ErrorKind::Io(error) = error.kind() {
-        ShellError::IOErrorSpanned {
-            msg: error.to_string(),
-            span: head,
-        }
+        IoError::new(error, head, None).into()
     } else {
         ShellError::GenericError {
             error: format!("Failed to generate {format_name} data"),
@@ -52,7 +50,7 @@ fn make_unsupported_input_error(
 ) -> ShellError {
     ShellError::UnsupportedInput {
         msg: "expected table or record".to_string(),
-        input: format!("input type: {}", r#type),
+        input: format!("input type: {type}"),
         msg_span: head,
         input_span: span,
     }
@@ -112,10 +110,10 @@ pub fn to_delimited_data(
         PipelineData::Value(Value::List { .. } | Value::Record { .. }, _) => (),
         PipelineData::Value(Value::Error { error, .. }, _) => return Err(*error),
         PipelineData::Value(other, _) => {
-            return Err(make_unsupported_input_error(other.get_type(), head, span))
+            return Err(make_unsupported_input_error(other.get_type(), head, span));
         }
         PipelineData::ByteStream(..) => {
-            return Err(make_unsupported_input_error("byte stream", head, span))
+            return Err(make_unsupported_input_error("byte stream", head, span));
         }
         PipelineData::ListStream(..) => (),
         PipelineData::Empty => (),
@@ -134,7 +132,7 @@ pub fn to_delimited_data(
                 Value::Record { val, .. } => val.columns().cloned().collect(),
                 _ => return Err(make_unsupported_input_error(value.get_type(), head, span)),
             };
-            input = PipelineData::Value(value, metadata.clone());
+            input = PipelineData::value(value, metadata.clone());
             columns
         }
     };
@@ -183,5 +181,5 @@ pub fn to_delimited_data(
         },
     );
 
-    Ok(PipelineData::ByteStream(stream, metadata))
+    Ok(PipelineData::byte_stream(stream, metadata))
 }

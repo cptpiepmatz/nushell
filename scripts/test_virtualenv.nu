@@ -19,24 +19,26 @@ let exe = $paths.1
 
 let test_lines = [
     "python -c 'import sys; print(sys.executable)'"                                  # 1
-    "python -c 'import os; import sys; v = os.environ.get("VIRTUAL_ENV"); print(v)'" # 2
+    `python -c 'import os; import sys; v = os.environ.get("VIRTUAL_ENV"); print(v)'` # 2
     $"overlay use '([$env.PWD $env_name $subdir activate.nu] | path join)'"
     "python -c 'import sys; print(sys.executable)'"                                  # 3
-    "python -c 'import os; import sys; v = os.environ.get("VIRTUAL_ENV"); print(v)'" # 4
+    `python -c 'import os; import sys; v = os.environ.get("VIRTUAL_ENV"); print(v)'` # 4
     "print $env.VIRTUAL_ENV_PROMPT"                                                  # 5
     "deactivate"
     "python -c 'import sys; print(sys.executable)'"                                  # 6
-    "python -c 'import os; import sys; v = os.environ.get("VIRTUAL_ENV"); print(v)'" # 7
+    `python -c 'import os; import sys; v = os.environ.get("VIRTUAL_ENV"); print(v)'` # 7
 ]
 
 def main [] {
+    # Normalize PWD to avoid / vs \ issues on Windows
+    let pwd = $env.PWD | path expand --no-symlink
     let orig_python_interpreter = (python -c 'import sys; print(sys.executable)')
 
     let expected = [
         $orig_python_interpreter                           # 1
         "None"                                             # 2
-        ([$env.PWD $env_name $subdir $exe] | path join)    # 3
-        ([$env.PWD $env_name] | path join)                 # 4
+        ([$pwd $env_name $subdir $exe] | path join)    # 3
+        ([$pwd $env_name] | path join)                 # 4
         $env_name                                          # 5
         $orig_python_interpreter                           # 6
         "None"                                             # 7

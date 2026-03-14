@@ -26,7 +26,7 @@ impl Command for Encode {
             .required("encoding", SyntaxShape::String, "The text encoding to use.")
             .switch(
                 "ignore-errors",
-                "when a character isn't in the given encoding, replace with a HTML entity (like `&#127880;`)",
+                "When a character isn't in the given encoding, replace with a HTML entity (like `&#127880;`).",
                 Some('i'),
             )
             .category(Category::Strings)
@@ -43,7 +43,7 @@ For a more complete list of encodings, please refer to the encoding_rs
 documentation link at https://docs.rs/encoding_rs/latest/encoding_rs/#statics"#
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Encode an UTF-8 string into Shift-JIS",
@@ -144,7 +144,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        crate::test_examples(Encode)
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Encode)
     }
 }

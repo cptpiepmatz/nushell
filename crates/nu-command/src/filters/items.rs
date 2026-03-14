@@ -1,5 +1,5 @@
 use super::utils::chain_error_with_input;
-use nu_engine::{command_prelude::*, ClosureEval};
+use nu_engine::{ClosureEval, command_prelude::*};
 use nu_protocol::engine::Closure;
 
 #[derive(Clone)]
@@ -27,7 +27,7 @@ impl Command for Items {
     }
 
     fn extra_description(&self) -> &str {
-        "This is a the fusion of `columns`, `values` and `each`."
+        "This is a fusion of `columns`, `values` and `each`."
     }
 
     fn run(
@@ -42,7 +42,7 @@ impl Command for Items {
 
         let metadata = input.metadata();
         match input {
-            PipelineData::Empty => Ok(PipelineData::Empty),
+            PipelineData::Empty => Ok(PipelineData::empty()),
             PipelineData::Value(value, ..) => {
                 let span = value.span();
                 match value {
@@ -55,7 +55,7 @@ impl Command for Items {
                                 let result = closure
                                     .add_arg(Value::string(col, span))
                                     .add_arg(val)
-                                    .run_with_input(PipelineData::Empty)
+                                    .run_with_input(PipelineData::empty())
                                     .and_then(|data| data.into_value(head));
 
                                 match result {
@@ -93,10 +93,9 @@ impl Command for Items {
         .map(|data| data.set_metadata(metadata))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            example:
-                "{ new: york, san: francisco } | items {|key, value| echo $'($key) ($value)' }",
+            example: "{ new: york, san: francisco } | items {|key, value| echo $'($key) ($value)' }",
             description: "Iterate over each key-value pair of a record",
             result: Some(Value::list(
                 vec![
@@ -114,9 +113,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Items {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Items)
     }
 }

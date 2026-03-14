@@ -1,20 +1,26 @@
-use std::{fs::File, path::Path};
+use std::{fs::File, path::PathBuf, sync::Arc};
 
+use log::debug;
 use nu_plugin::EvaluatedCall;
-use nu_protocol::{ShellError, Span, Spanned};
-use polars::prelude::{CsvWriter, SerWriter};
+use nu_protocol::{ShellError, Spanned};
+use polars::prelude::{CsvWriter, SerWriter, UnifiedSinkArgs};
 use polars_io::csv::write::{CsvWriterOptions, SerializeOptions};
 
-use crate::values::{NuDataFrame, NuLazyFrame};
+use crate::{
+    command::core::resource::Resource,
+    values::{NuDataFrame, NuLazyFrame},
+};
 
 use super::polars_file_save_error;
 
 pub(crate) fn command_lazy(
     call: &EvaluatedCall,
     lazy: &NuLazyFrame,
-    file_path: &Path,
-    file_span: Span,
+    resource: Resource,
 ) -> Result<(), ShellError> {
+    let file_span = resource.span;
+    let file_path = resource.as_string();
+    debug!("Writing csv file {file_path}");
     let delimiter: Option<Spanned<String>> = call.get_flag("csv-delimiter")?;
     let separator = delimiter
         .and_then(|d| d.item.chars().next().map(|c| c as u8))
@@ -24,24 +30,36 @@ pub(crate) fn command_lazy(
 
     let options = CsvWriterOptions {
         include_header: !no_header,
-        serialize_options: SerializeOptions {
+        serialize_options: Arc::new(SerializeOptions {
             separator,
             ..SerializeOptions::default()
-        },
+        }),
         ..CsvWriterOptions::default()
     };
 
     lazy.to_polars()
-        .sink_csv(file_path, options)
+        .sink(
+            resource.clone().into(),
+            polars::prelude::FileWriteFormat::Csv(options),
+            UnifiedSinkArgs {
+                cloud_options: resource.cloud_options.map(Arc::new),
+                ..Default::default()
+            },
+        )
+        .and_then(|l| l.collect())
         .map_err(|e| polars_file_save_error(e, file_span))
+        .map(|_| {
+            debug!("Wrote parquet file {file_path}");
+        })
 }
 
 pub(crate) fn command_eager(
     call: &EvaluatedCall,
     df: &NuDataFrame,
-    file_path: &Path,
-    file_span: Span,
+    resource: Resource,
 ) -> Result<(), ShellError> {
+    let file_span = resource.span;
+    let file_path: PathBuf = resource.as_path_buf();
     let delimiter: Option<Spanned<String>> = call.get_flag("csv-delimiter")?;
     let no_header: bool = call.has_flag("csv-no-header")?;
 

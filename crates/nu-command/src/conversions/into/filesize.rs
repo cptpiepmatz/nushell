@@ -1,12 +1,12 @@
-use nu_cmd_base::input_handler::{operate, CellPathOnlyArgs};
+use nu_cmd_base::input_handler::{CellPathOnlyArgs, operate};
 use nu_engine::command_prelude::*;
 
 use nu_utils::get_system_locale;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct IntoFilesize;
 
-impl Command for SubCommand {
+impl Command for IntoFilesize {
     fn name(&self) -> &str {
         "into filesize"
     }
@@ -52,7 +52,7 @@ impl Command for SubCommand {
     }
 
     fn description(&self) -> &str {
-        "Convert value to filesize."
+        "Convert value to a filesize."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -71,10 +71,10 @@ impl Command for SubCommand {
         operate(action, args, input, call.head, engine_state.signals())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Convert string to filesize in table",
+                description: "Convert string to filesize in table.",
                 example: r#"[[device size]; ["/dev/sda1" "200"] ["/dev/loop0" "50"]] | into filesize size"#,
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -88,27 +88,27 @@ impl Command for SubCommand {
                 ])),
             },
             Example {
-                description: "Convert string to filesize",
+                description: "Convert string to filesize.",
                 example: "'2' | into filesize",
                 result: Some(Value::test_filesize(2)),
             },
             Example {
-                description: "Convert float to filesize",
+                description: "Convert float to filesize.",
                 example: "8.3 | into filesize",
                 result: Some(Value::test_filesize(8)),
             },
             Example {
-                description: "Convert int to filesize",
+                description: "Convert int to filesize.",
                 example: "5 | into filesize",
                 result: Some(Value::test_filesize(5)),
             },
             Example {
-                description: "Convert file size to filesize",
+                description: "Convert file size to filesize.",
                 example: "4KB | into filesize",
                 result: Some(Value::test_filesize(4000)),
             },
             Example {
-                description: "Convert string with unit to filesize",
+                description: "Convert string with unit to filesize.",
                 example: "'-1KB' | into filesize",
                 result: Some(Value::test_filesize(-1000)),
             },
@@ -148,7 +148,7 @@ fn i64_from_string(a_string: &str, span: Span) -> Result<i64, ShellError> {
     let no_comma_string = a_string.replace(locale.separator(), "");
     let clean_string = no_comma_string.trim();
 
-    // Hadle negative file size
+    // Handle negative file size
     if let Some(stripped_negative_string) = clean_string.strip_prefix('-') {
         match stripped_negative_string.parse::<bytesize::ByteSize>() {
             Ok(n) => i64_from_byte_size(n, true, span),
@@ -194,9 +194,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(IntoFilesize)
     }
 }

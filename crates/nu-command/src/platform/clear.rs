@@ -1,9 +1,10 @@
 use crossterm::{
+    QueueableCommand,
     cursor::MoveTo,
     terminal::{Clear as ClearCommand, ClearType},
-    QueueableCommand,
 };
 use nu_engine::command_prelude::*;
+use nu_protocol::shell_error::io::IoError;
 
 use std::io::Write;
 
@@ -16,7 +17,7 @@ impl Command for Clear {
     }
 
     fn description(&self) -> &str {
-        "Clear the terminal."
+        "Clear the terminal screen."
     }
 
     fn extra_description(&self) -> &str {
@@ -29,7 +30,7 @@ impl Command for Clear {
             .input_output_types(vec![(Type::Nothing, Type::Nothing)])
             .switch(
                 "keep-scrollback",
-                "Do not clear the scrollback history",
+                "Do not clear the scrollback history.",
                 Some('k'),
             )
     }
@@ -41,34 +42,42 @@ impl Command for Clear {
         call: &Call,
         _input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
+        let from_io_error = IoError::factory(call.head, None);
         match call.has_flag(engine_state, stack, "keep-scrollback")? {
             true => {
                 std::io::stdout()
-                    .queue(MoveTo(0, 0))?
-                    .queue(ClearCommand(ClearType::All))?
-                    .flush()?;
+                    .queue(MoveTo(0, 0))
+                    .map_err(&from_io_error)?
+                    .queue(ClearCommand(ClearType::All))
+                    .map_err(&from_io_error)?
+                    .flush()
+                    .map_err(&from_io_error)?;
             }
             _ => {
                 std::io::stdout()
-                    .queue(MoveTo(0, 0))?
-                    .queue(ClearCommand(ClearType::All))?
-                    .queue(ClearCommand(ClearType::Purge))?
-                    .flush()?;
+                    .queue(MoveTo(0, 0))
+                    .map_err(&from_io_error)?
+                    .queue(ClearCommand(ClearType::All))
+                    .map_err(&from_io_error)?
+                    .queue(ClearCommand(ClearType::Purge))
+                    .map_err(&from_io_error)?
+                    .flush()
+                    .map_err(&from_io_error)?;
             }
         };
 
-        Ok(PipelineData::Empty)
+        Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Clear the terminal",
+                description: "Clear the terminal.",
                 example: "clear",
                 result: None,
             },
             Example {
-                description: "Clear the terminal but not its scrollback history",
+                description: "Clear the terminal but not its scrollback history.",
                 example: "clear --keep-scrollback",
                 result: None,
             },

@@ -4,15 +4,17 @@ use nu_engine::command_prelude::*;
 use serde::de::Deserialize;
 
 #[derive(Clone)]
-pub struct FromYaml;
+pub struct FromYamlLike(&'static str);
+pub const FROM_YAML: FromYamlLike = FromYamlLike("from yaml");
+pub const FROM_YML: FromYamlLike = FromYamlLike("from yml");
 
-impl Command for FromYaml {
+impl Command for FromYamlLike {
     fn name(&self) -> &str {
-        "from yaml"
+        self.0
     }
 
     fn signature(&self) -> Signature {
-        Signature::build("from yaml")
+        Signature::build(self.name())
             .input_output_types(vec![(Type::String, Type::Any)])
             .category(Category::Formats)
     }
@@ -21,8 +23,8 @@ impl Command for FromYaml {
         "Parse text as .yaml/.yml and create table."
     }
 
-    fn examples(&self) -> Vec<Example> {
-        get_examples()
+    fn examples(&self) -> Vec<Example<'_>> {
+        get_examples(self.name())
     }
 
     fn run(
@@ -34,45 +36,11 @@ impl Command for FromYaml {
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         from_yaml(input, head)
-    }
-}
-
-#[derive(Clone)]
-pub struct FromYml;
-
-impl Command for FromYml {
-    fn name(&self) -> &str {
-        "from yml"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::build("from yml")
-            .input_output_types(vec![(Type::String, Type::Any)])
-            .category(Category::Formats)
-    }
-
-    fn description(&self) -> &str {
-        "Parse text as .yaml/.yml and create table."
-    }
-
-    fn run(
-        &self,
-        _engine_state: &EngineState,
-        _stack: &mut Stack,
-        call: &Call,
-        input: PipelineData,
-    ) -> Result<PipelineData, ShellError> {
-        let head = call.head;
-        from_yaml(input, head)
-    }
-
-    fn examples(&self) -> Vec<Example> {
-        get_examples()
     }
 }
 
 fn convert_yaml_value_to_nu_value(
-    v: &serde_yml::Value,
+    v: &serde_yaml::Value,
     span: Span,
     val_span: Span,
 ) -> Result<Value, ShellError> {
@@ -83,22 +51,22 @@ fn convert_yaml_value_to_nu_value(
         input_span: val_span,
     };
     Ok(match v {
-        serde_yml::Value::Bool(b) => Value::bool(*b, span),
-        serde_yml::Value::Number(n) if n.is_i64() => {
+        serde_yaml::Value::Bool(b) => Value::bool(*b, span),
+        serde_yaml::Value::Number(n) if n.is_i64() => {
             Value::int(n.as_i64().ok_or(err_not_compatible_number)?, span)
         }
-        serde_yml::Value::Number(n) if n.is_f64() => {
+        serde_yaml::Value::Number(n) if n.is_f64() => {
             Value::float(n.as_f64().ok_or(err_not_compatible_number)?, span)
         }
-        serde_yml::Value::String(s) => Value::string(s.to_string(), span),
-        serde_yml::Value::Sequence(a) => {
+        serde_yaml::Value::String(s) => Value::string(s.to_string(), span),
+        serde_yaml::Value::Sequence(a) => {
             let result: Result<Vec<Value>, ShellError> = a
                 .iter()
                 .map(|x| convert_yaml_value_to_nu_value(x, span, val_span))
                 .collect();
             Value::list(result?, span)
         }
-        serde_yml::Value::Mapping(t) => {
+        serde_yaml::Value::Mapping(t) => {
             // Using an IndexMap ensures consistent ordering
             let mut collected = IndexMap::new();
 
@@ -111,19 +79,19 @@ fn convert_yaml_value_to_nu_value(
                     input_span: val_span,
                 };
                 match (k, v) {
-                    (serde_yml::Value::Number(k), _) => {
+                    (serde_yaml::Value::Number(k), _) => {
                         collected.insert(
                             k.to_string(),
                             convert_yaml_value_to_nu_value(v, span, val_span)?,
                         );
                     }
-                    (serde_yml::Value::Bool(k), _) => {
+                    (serde_yaml::Value::Bool(k), _) => {
                         collected.insert(
                             k.to_string(),
                             convert_yaml_value_to_nu_value(v, span, val_span)?,
                         );
                     }
-                    (serde_yml::Value::String(k), _) => {
+                    (serde_yaml::Value::String(k), _) => {
                         collected.insert(
                             k.clone(),
                             convert_yaml_value_to_nu_value(v, span, val_span)?,
@@ -132,16 +100,16 @@ fn convert_yaml_value_to_nu_value(
                     // Hard-code fix for cases where "v" is a string without quotations with double curly braces
                     // e.g. k = value
                     // value: {{ something }}
-                    // Strangely, serde_yml returns
+                    // Strangely, serde_yaml returns
                     // "value" -> Mapping(Mapping { map: {Mapping(Mapping { map: {String("something"): Null} }): Null} })
-                    (serde_yml::Value::Mapping(m), serde_yml::Value::Null) => {
+                    (serde_yaml::Value::Mapping(m), serde_yaml::Value::Null) => {
                         return m
                             .iter()
                             .take(1)
                             .collect_vec()
                             .first()
                             .and_then(|e| match e {
-                                (serde_yml::Value::String(s), serde_yml::Value::Null) => {
+                                (serde_yaml::Value::String(s), serde_yaml::Value::Null) => {
                                     Some(Value::string("{{ ".to_owned() + s.as_str() + " }}", span))
                                 }
                                 _ => None,
@@ -156,31 +124,30 @@ fn convert_yaml_value_to_nu_value(
 
             Value::record(collected.into_iter().collect(), span)
         }
-        serde_yml::Value::Tagged(t) => {
+        serde_yaml::Value::Tagged(t) => {
             let tag = &t.tag;
-            let value = match &t.value {
-                serde_yml::Value::String(s) => {
-                    let val = format!("{} {}", tag, s).trim().to_string();
+
+            match &t.value {
+                serde_yaml::Value::String(s) => {
+                    let val = format!("{tag} {s}").trim().to_string();
                     Value::string(val, span)
                 }
-                serde_yml::Value::Number(n) => {
-                    let val = format!("{} {}", tag, n).trim().to_string();
+                serde_yaml::Value::Number(n) => {
+                    let val = format!("{tag} {n}").trim().to_string();
                     Value::string(val, span)
                 }
-                serde_yml::Value::Bool(b) => {
-                    let val = format!("{} {}", tag, b).trim().to_string();
+                serde_yaml::Value::Bool(b) => {
+                    let val = format!("{tag} {b}").trim().to_string();
                     Value::string(val, span)
                 }
-                serde_yml::Value::Null => {
-                    let val = format!("{}", tag).trim().to_string();
+                serde_yaml::Value::Null => {
+                    let val = format!("{tag}").trim().to_string();
                     Value::string(val, span)
                 }
                 v => convert_yaml_value_to_nu_value(v, span, val_span)?,
-            };
-
-            value
+            }
         }
-        serde_yml::Value::Null => Value::nothing(span),
+        serde_yaml::Value::Null => Value::nothing(span),
         x => unimplemented!("Unsupported YAML case: {:?}", x),
     })
 }
@@ -188,9 +155,9 @@ fn convert_yaml_value_to_nu_value(
 pub fn from_yaml_string_to_value(s: &str, span: Span, val_span: Span) -> Result<Value, ShellError> {
     let mut documents = vec![];
 
-    for document in serde_yml::Deserializer::from_str(s) {
-        let v: serde_yml::Value =
-            serde_yml::Value::deserialize(document).map_err(|x| ShellError::UnsupportedInput {
+    for document in serde_yaml::Deserializer::from_str(s) {
+        let v: serde_yaml::Value =
+            serde_yaml::Value::deserialize(document).map_err(|x| ShellError::UnsupportedInput {
                 msg: format!("Could not load YAML: {x}"),
                 input: "value originates from here".into(),
                 msg_span: span,
@@ -206,18 +173,26 @@ pub fn from_yaml_string_to_value(s: &str, span: Span, val_span: Span) -> Result<
     }
 }
 
-pub fn get_examples() -> Vec<Example<'static>> {
+pub fn get_examples(name: &str) -> Vec<Example<'_>> {
     vec![
         Example {
-            example: "'a: 1' | from yaml",
-            description: "Converts yaml formatted string to table",
+            example: match name {
+                "from yaml" => "'a: 1' | from yaml",
+                "from yml" => "'a: 1' | from yml",
+                _ => unreachable!("only implemented for `yaml` and `yml`"),
+            },
+            description: "Converts yaml formatted string to table.",
             result: Some(Value::test_record(record! {
                 "a" => Value::test_int(1),
             })),
         },
         Example {
-            example: "'[ a: 1, b: [1, 2] ]' | from yaml",
-            description: "Converts yaml formatted string to table",
+            example: match name {
+                "from yaml" => "'[ a: 1, b: [1, 2] ]' | from yaml",
+                "from yml" => "'[ a: 1, b: [1, 2] ]' | from yml",
+                _ => unreachable!("only implemented for `yaml` and `yml`"),
+            },
+            description: "Converts yaml formatted string to table.",
             result: Some(Value::test_list(vec![
                 Value::test_record(record! {
                     "a" => Value::test_int(1),
@@ -244,6 +219,7 @@ fn from_yaml(input: PipelineData, head: Span) -> Result<PipelineData, ShellError
 
 #[cfg(test)]
 mod test {
+    use crate::Reject;
     use crate::{Metadata, MetadataSet};
 
     use super::*;
@@ -259,14 +235,14 @@ mod test {
         }
         let tt: Vec<TestCase> = vec![
             TestCase {
-                description: "Double Curly Braces With Quotes",
+                description: "Double Curly Braces With Quotes.",
                 input: r#"value: "{{ something }}""#,
                 expected: Ok(Value::test_record(record! {
                     "value" => Value::test_string("{{ something }}"),
                 })),
             },
             TestCase {
-                description: "Double Curly Braces Without Quotes",
+                description: "Double Curly Braces Without Quotes.",
                 input: r#"value: {{ something }}"#,
                 expected: Ok(Value::test_record(record! {
                     "value" => Value::test_string("{{ something }}"),
@@ -276,27 +252,26 @@ mod test {
         let config = Config::default();
         for tc in tt {
             let actual = from_yaml_string_to_value(tc.input, Span::test_data(), Span::test_data());
-            if actual.is_err() {
+            if let Ok(result) = actual {
+                assert_eq!(
+                    result.to_expanded_string("", &config),
+                    tc.expected.unwrap().to_expanded_string("", &config)
+                );
+            } else {
                 assert!(
                     tc.expected.is_err(),
                     "actual is Err for test:\nTest Description {}\nErr: {:?}",
                     tc.description,
                     actual
                 );
-            } else {
-                assert_eq!(
-                    actual.unwrap().to_expanded_string("", &config),
-                    tc.expected.unwrap().to_expanded_string("", &config)
-                );
             }
         }
     }
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(FromYaml {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(FROM_YAML)?;
+        nu_test_support::test().examples(FROM_YML)
     }
 
     #[test]
@@ -393,8 +368,8 @@ mod test {
         ];
 
         for test_case in test_cases {
-            let doc = serde_yml::Deserializer::from_str(test_case.input);
-            let v: serde_yml::Value = serde_yml::Value::deserialize(doc.last().unwrap()).unwrap();
+            let doc = serde_yaml::Deserializer::from_str(test_case.input);
+            let v: serde_yaml::Value = serde_yaml::Value::deserialize(doc.last().unwrap()).unwrap();
             let result = convert_yaml_value_to_nu_value(&v, Span::test_data(), Span::test_data());
             assert!(result.is_ok());
             assert!(result.ok().unwrap() == test_case.expected.ok().unwrap());
@@ -407,9 +382,10 @@ mod test {
         let delta = {
             let mut working_set = StateWorkingSet::new(&engine_state);
 
-            working_set.add_decl(Box::new(FromYaml {}));
+            working_set.add_decl(Box::new(FROM_YAML));
             working_set.add_decl(Box::new(Metadata {}));
             working_set.add_decl(Box::new(MetadataSet {}));
+            working_set.add_decl(Box::new(Reject {}));
 
             working_set.render()
         };
@@ -418,14 +394,16 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = r#""a: 1\nb: 2" | metadata set --content-type 'application/yaml' --datasource-ls | from yaml | metadata | $in"#;
+        let cmd = r#""a: 1\nb: 2" | metadata set --content-type 'application/yaml' --path-columns [name] | from yaml | metadata | reject span | $in"#;
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(record!("source" => Value::test_string("ls"))),
+            Value::test_record(
+                record!("path_columns" => Value::test_list(vec![Value::test_string("name")]))
+            ),
             result.expect("There should be a result")
         )
     }

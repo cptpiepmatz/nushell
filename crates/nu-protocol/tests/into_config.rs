@@ -25,22 +25,22 @@ fn config_preserved_after_do() {
 #[test]
 fn config_affected_when_mutated() {
     let actual = nu!(nu_repl_code(&[
-        r#"$env.config = { filesize: { metric: false, format:"auto" } }"#,
-        r#"$env.config = { filesize: { metric: true, format:"auto" } }"#,
-        "20mib | into string"
+        r#"$env.config = { filesize: { unit: binary } }"#,
+        r#"$env.config = { filesize: { unit: metric } }"#,
+        "20MB | into string"
     ]));
 
-    assert_eq!(actual.out, "21.0 MB");
+    assert_eq!(actual.out, "20.0 MB");
 }
 
 #[test]
 fn config_affected_when_deep_mutated() {
     let actual = nu!(cwd: "crates/nu-utils/src/default_files", nu_repl_code(&[
         r#"source default_config.nu"#,
-        r#"$env.config.filesize.metric = true"#,
-        r#"20mib | into string"#]));
+        r#"$env.config.filesize.unit = 'binary'"#,
+        r#"20MiB | into string"#]));
 
-    assert_eq!(actual.out, "21.0 MB");
+    assert_eq!(actual.out, "20.0 MiB");
 }
 
 #[test]
@@ -50,9 +50,11 @@ fn config_add_unsupported_key() {
         r#"$env.config.foo = 2"#,
         r#";"#]));
 
-    assert!(actual
-        .err
-        .contains("Unknown config option: $env.config.foo"));
+    assert!(
+        actual
+            .err
+            .contains("Unknown config option: $env.config.foo")
+    );
 }
 
 #[test]

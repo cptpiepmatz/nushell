@@ -1,16 +1,14 @@
 use super::util::try_interaction;
-#[allow(deprecated)]
-use nu_engine::{command_prelude::*, env::current_dir};
+use nu_engine::command_prelude::*;
 use nu_glob::MatchOptions;
 use nu_path::expand_path_with;
-use nu_protocol::{report_shell_error, NuGlob};
+use nu_protocol::{
+    NuGlob, report_shell_error,
+    shell_error::{self, io::IoError},
+};
 #[cfg(unix)]
 use std::os::unix::prelude::FileTypeExt;
-use std::{
-    collections::HashMap,
-    io::{Error, ErrorKind},
-    path::PathBuf,
-};
+use std::{collections::HashMap, io::Error, path::PathBuf};
 
 const TRASH_SUPPORTED: bool = cfg!(all(
     feature = "trash-support",
@@ -39,23 +37,24 @@ impl Command for Rm {
             .rest("paths", SyntaxShape::OneOf(vec![SyntaxShape::GlobPattern, SyntaxShape::String]), "The file paths(s) to remove.")
             .switch(
                 "trash",
-                "move to the platform's trash instead of permanently deleting. not used on android and ios",
+                "Move to the platform's trash instead of permanently deleting. not used on android and ios.",
                 Some('t'),
             )
             .switch(
                 "permanent",
-                "delete permanently, ignoring the 'always_trash' config option. always enabled on android and ios",
+                "Delete permanently, ignoring the 'always_trash' config option. always enabled on android and ios.",
                 Some('p'),
             )
-            .switch("recursive", "delete subdirectories recursively", Some('r'))
-            .switch("force", "suppress error when no file", Some('f'))
-            .switch("verbose", "print names of deleted files", Some('v'))
-            .switch("interactive", "ask user to confirm action", Some('i'))
+            .switch("recursive", "Delete subdirectories recursively.", Some('r'))
+            .switch("force", "Suppress error when no file.", Some('f'))
+            .switch("verbose", "Print names of deleted files.", Some('v'))
+            .switch("interactive", "Ask user to confirm action.", Some('i'))
             .switch(
                 "interactive-once",
-                "ask user to confirm action only once",
+                "Ask user to confirm action only once.",
                 Some('I'),
             )
+            .switch("all", "Remove hidden files if '*' is provided.", Some('a'))
             .category(Category::FileSystem)
     }
 
@@ -69,35 +68,34 @@ impl Command for Rm {
         rm(engine_state, stack, call)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         let mut examples = vec![Example {
-            description:
-                "Delete, or move a file to the trash (based on the 'always_trash' config option)",
+            description: "Delete, or move a file to the trash (based on the 'always_trash' config option).",
             example: "rm file.txt",
             result: None,
         }];
         if TRASH_SUPPORTED {
             examples.append(&mut vec![
                 Example {
-                    description: "Move a file to the trash",
+                    description: "Move a file to the trash.",
                     example: "rm --trash file.txt",
                     result: None,
                 },
                 Example {
                     description:
-                        "Delete a file permanently, even if the 'always_trash' config option is true",
+                        "Delete a file permanently, even if the 'always_trash' config option is true.",
                     example: "rm --permanent file.txt",
                     result: None,
                 },
             ]);
         }
         examples.push(Example {
-            description: "Delete a file, ignoring 'file not found' errors",
+            description: "Delete a file, ignoring 'file not found' errors.",
             example: "rm --force file.txt",
             result: None,
         });
         examples.push(Example {
-            description: "Delete all 0KB files in the current directory",
+            description: "Delete all 0KB files in the current directory.",
             example: "ls | where size == 0KB and type == file | each { rm $in.name } | null",
             result: None,
         });
@@ -117,7 +115,7 @@ fn rm(
     let verbose = call.has_flag(engine_state, stack, "verbose")?;
     let interactive = call.has_flag(engine_state, stack, "interactive")?;
     let interactive_once = call.has_flag(engine_state, stack, "interactive-once")? && !interactive;
-
+    let all = call.has_flag(engine_state, stack, "all")?;
     let mut paths = call.rest::<Spanned<NuGlob>>(engine_state, stack, 0)?;
 
     if paths.is_empty() {
@@ -129,13 +127,12 @@ fn rm(
 
     let mut unique_argument_check = None;
 
-    #[allow(deprecated)]
-    let currentdir_path = current_dir(engine_state, stack)?;
+    let currentdir_path = engine_state.cwd(Some(stack))?.into_std_path_buf();
 
     let home: Option<String> = nu_path::home_dir().map(|path| {
         {
             if path.exists() {
-                nu_path::canonicalize_with(&path, &currentdir_path).unwrap_or(path.into())
+                nu_path::absolute_with(&path, &currentdir_path).unwrap_or(path.into())
             } else {
                 path.into()
             }
@@ -145,14 +142,13 @@ fn rm(
     });
 
     for (idx, path) in paths.clone().into_iter().enumerate() {
-        if let Some(ref home) = home {
-            if expand_path_with(path.item.as_ref(), &currentdir_path, path.item.is_expand())
+        if let Some(ref home) = home
+            && expand_path_with(path.item.as_ref(), &currentdir_path, path.item.is_expand())
                 .to_string_lossy()
                 .as_ref()
                 == home.as_str()
-            {
-                unique_argument_check = Some(path.span);
-            }
+        {
+            unique_argument_check = Some(path.span);
         }
         let corrected_path = Spanned {
             item: match path.item {
@@ -230,6 +226,17 @@ fn rm(
     let (mut target_exists, mut empty_span) = (false, call.head);
     let mut all_targets: HashMap<PathBuf, Span> = HashMap::new();
 
+    let glob_options = if all {
+        None
+    } else {
+        let glob_options = MatchOptions {
+            require_literal_leading_dot: true,
+            ..Default::default()
+        };
+
+        Some(glob_options)
+    };
+
     for target in paths {
         let path = expand_path_with(
             target.item.as_ref(),
@@ -252,10 +259,8 @@ fn rm(
             &target,
             &currentdir_path,
             call.head,
-            Some(MatchOptions {
-                require_literal_leading_dot: true,
-                ..Default::default()
-            }),
+            glob_options,
+            engine_state.signals().clone(),
         ) {
             Ok(files) => {
                 for file in files.1 {
@@ -299,9 +304,17 @@ fn rm(
                 }
             }
             Err(e) => {
-                // glob_from may canonicalize path and return `DirectoryNotFound`
+                // glob_from may canonicalize path and return an error when a directory is not found
                 // nushell should suppress the error if `--force` is used.
-                if !(force && matches!(e, ShellError::DirectoryNotFound { .. })) {
+                if !(force
+                    && matches!(
+                        e,
+                        ShellError::Io(IoError {
+                            kind: shell_error::io::ErrorKind::Std(std::io::ErrorKind::NotFound, ..),
+                            ..
+                        })
+                    ))
+                {
                     return Err(e);
                 }
             }
@@ -332,7 +345,7 @@ fn rm(
                 inner: vec![],
             });
         } else if !confirmed {
-            return Ok(PipelineData::Empty);
+            return Ok(PipelineData::empty());
         }
     }
 
@@ -366,7 +379,7 @@ fn rm(
                 );
 
                 let result = if let Err(e) = interaction {
-                    Err(Error::new(ErrorKind::Other, &*e.to_string()))
+                    Err(Error::other(&*e.to_string()))
                 } else if interactive && !confirmed {
                     Ok(())
                 } else if TRASH_SUPPORTED && (trash || (rm_always_trash && !permanent)) {
@@ -376,7 +389,7 @@ fn rm(
                     ))]
                     {
                         trash::delete(&f).map_err(|e: trash::Error| {
-                            Error::new(ErrorKind::Other, format!("{e:?}\nTry '--permanent' flag"))
+                            Error::other(format!("{e:?}\nTry '--permanent' flag"))
                         })
                     }
 
@@ -395,13 +408,12 @@ fn rm(
                     // std::fs::remove_dir instead of std::fs::remove_file.
                     #[cfg(windows)]
                     {
-                        f.metadata().and_then(|metadata| {
-                            if metadata.is_dir() {
-                                std::fs::remove_dir(&f)
-                            } else {
-                                std::fs::remove_file(&f)
-                            }
-                        })
+                        use std::os::windows::fs::FileTypeExt;
+                        if metadata.file_type().is_symlink_dir() {
+                            std::fs::remove_dir(&f)
+                        } else {
+                            std::fs::remove_file(&f)
+                        }
                     }
 
                     #[cfg(not(windows))]
@@ -413,8 +425,13 @@ fn rm(
                 };
 
                 if let Err(e) = result {
-                    let msg = format!("Could not delete {:}: {e:}", f.to_string_lossy());
-                    Err(ShellError::RemoveNotPossible { msg, span })
+                    let original_error = e.to_string();
+                    Err(ShellError::Io(IoError::new_with_additional_context(
+                        e,
+                        span,
+                        f,
+                        original_error,
+                    )))
                 } else if verbose {
                     let msg = if interactive && !confirmed {
                         "not deleted"
@@ -447,14 +464,31 @@ fn rm(
         }
     });
 
+    let mut cmd_result = Ok(PipelineData::empty());
     for result in iter {
-        engine_state.signals().check(call.head)?;
+        engine_state.signals().check(&call.head)?;
         match result {
             Ok(None) => {}
             Ok(Some(msg)) => eprintln!("{msg}"),
-            Err(err) => report_shell_error(engine_state, &err),
+            Err(err) => {
+                if !(force
+                    && matches!(
+                        err,
+                        ShellError::Io(IoError {
+                            kind: shell_error::io::ErrorKind::Std(std::io::ErrorKind::NotFound, ..),
+                            ..
+                        })
+                    ))
+                {
+                    if cmd_result.is_ok() {
+                        cmd_result = Err(err);
+                    } else {
+                        report_shell_error(Some(stack), engine_state, &err)
+                    }
+                }
+            }
         }
     }
 
-    Ok(PipelineData::empty())
+    cmd_result
 }

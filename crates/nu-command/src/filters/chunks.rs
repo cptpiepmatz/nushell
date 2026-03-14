@@ -1,5 +1,5 @@
 use nu_engine::command_prelude::*;
-use nu_protocol::ListStream;
+use nu_protocol::{ListStream, shell_error::io::IoError};
 use std::{
     io::{BufRead, Cursor, ErrorKind},
     num::NonZeroUsize,
@@ -25,7 +25,7 @@ impl Command for Chunks {
     }
 
     fn description(&self) -> &str {
-        "Divide a list or table into chunks of `chunk_size`."
+        "Divide a list, table or binary input into chunks of `chunk_size`."
     }
 
     fn extra_description(&self) -> &str {
@@ -33,10 +33,10 @@ impl Command for Chunks {
     }
 
     fn search_terms(&self) -> Vec<&str> {
-        vec!["batch", "group"]
+        vec!["batch", "group", "split", "bytes"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "[1 2 3 4] | chunks 2",
@@ -95,6 +95,7 @@ impl Command for Chunks {
         call: &Call,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
+        let input = input.into_stream_or_original(engine_state);
         let head = call.head;
         let chunk_size: Value = call.req(engine_state, stack, 0)?;
 
@@ -119,15 +120,16 @@ pub fn chunks(
     chunk_size: NonZeroUsize,
     span: Span,
 ) -> Result<PipelineData, ShellError> {
+    let from_io_error = IoError::factory(span, None);
     match input {
         PipelineData::Value(Value::List { vals, .. }, metadata) => {
             let chunks = ChunksIter::new(vals, chunk_size, span);
             let stream = ListStream::new(chunks, span, engine_state.signals().clone());
-            Ok(PipelineData::ListStream(stream, metadata))
+            Ok(PipelineData::list_stream(stream, metadata))
         }
         PipelineData::ListStream(stream, metadata) => {
             let stream = stream.modify(|iter| ChunksIter::new(iter, chunk_size, span));
-            Ok(PipelineData::ListStream(stream, metadata))
+            Ok(PipelineData::list_stream(stream, metadata))
         }
         PipelineData::Value(Value::Binary { val, .. }, metadata) => {
             let chunk_read = ChunkRead {
@@ -136,7 +138,7 @@ pub fn chunks(
             };
             let value_stream = chunk_read.map(move |chunk| match chunk {
                 Ok(chunk) => Value::binary(chunk, span),
-                Err(e) => Value::error(e.into(), span),
+                Err(e) => Value::error(from_io_error(e).into(), span),
             });
             let pipeline_data_with_metadata = value_stream.into_pipeline_data_with_metadata(
                 span,
@@ -147,7 +149,7 @@ pub fn chunks(
         }
         PipelineData::ByteStream(stream, metadata) => {
             let pipeline_data = match stream.reader() {
-                None => PipelineData::Empty,
+                None => PipelineData::empty(),
                 Some(reader) => {
                     let chunk_read = ChunkRead {
                         reader,
@@ -155,7 +157,7 @@ pub fn chunks(
                     };
                     let value_stream = chunk_read.map(move |chunk| match chunk {
                         Ok(chunk) => Value::binary(chunk, span),
-                        Err(e) => Value::error(e.into(), span),
+                        Err(e) => Value::error(from_io_error(e).into(), span),
                     });
                     value_stream.into_pipeline_data_with_metadata(
                         span,
@@ -242,7 +244,7 @@ mod test {
         let chunks = chunk_read.map(|e| e.unwrap()).collect::<Vec<_>>();
         assert_eq!(
             chunks,
-            [s[..4].as_bytes(), s[4..8].as_bytes(), s[8..].as_bytes()]
+            [&s.as_bytes()[..4], &s.as_bytes()[4..8], &s.as_bytes()[8..]]
         );
     }
 
@@ -259,14 +261,12 @@ mod test {
         let chunks = chunk_read.map(|e| e.unwrap()).collect::<Vec<_>>();
         assert_eq!(
             chunks,
-            [s[..4].as_bytes(), s[4..8].as_bytes(), s[8..].as_bytes()]
+            [&s.as_bytes()[..4], &s.as_bytes()[4..8], &s.as_bytes()[8..]]
         );
     }
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Chunks {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Chunks)
     }
 }

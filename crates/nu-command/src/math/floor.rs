@@ -1,9 +1,10 @@
+use crate::math::utils::ensure_bounded;
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathFloor;
 
-impl Command for SubCommand {
+impl Command for MathFloor {
     fn name(&self) -> &str {
         "math floor"
     }
@@ -16,6 +17,7 @@ impl Command for SubCommand {
                     Type::List(Box::new(Type::Number)),
                     Type::List(Box::new(Type::Int)),
                 ),
+                (Type::Range, Type::List(Box::new(Type::Number))),
             ])
             .allow_variants_without_examples(true)
             .category(Category::Math)
@@ -41,9 +43,13 @@ impl Command for SubCommand {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
-        // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
-            return Err(ShellError::PipelineEmpty { dst_span: head });
+        match input {
+            // This doesn't match explicit nulls
+            PipelineData::Empty => return Err(ShellError::PipelineEmpty { dst_span: head }),
+            PipelineData::Value(ref value @ Value::Range { val: ref range, .. }, ..) => {
+                ensure_bounded(range, value.span(), head)?
+            }
+            _ => (),
         }
         input.map(move |value| operate(value, head), engine_state.signals())
     }
@@ -56,8 +62,12 @@ impl Command for SubCommand {
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
+        }
+        if let PipelineData::Value(ref v @ Value::Range { ref val, .. }, ..) = input {
+            let span = v.span();
+            ensure_bounded(val, span, head)?;
         }
         input.map(
             move |value| operate(value, head),
@@ -65,9 +75,9 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Apply the floor function to a list of numbers",
+            description: "Apply the floor function to a list of numbers.",
             example: "[1.5 2.3 -3.1] | math floor",
             result: Some(Value::list(
                 vec![Value::test_int(1), Value::test_int(2), Value::test_int(-4)],
@@ -100,9 +110,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathFloor)
     }
 }

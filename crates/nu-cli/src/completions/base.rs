@@ -1,7 +1,7 @@
 use crate::completions::CompletionOptions;
 use nu_protocol::{
+    DynamicSuggestion, Span, SuggestionKind,
     engine::{Stack, StateWorkingSet},
-    Span,
 };
 use reedline::Suggestion;
 
@@ -12,10 +12,9 @@ pub trait Completer {
         &mut self,
         working_set: &StateWorkingSet,
         stack: &Stack,
-        prefix: &[u8],
+        prefix: impl AsRef<str>,
         span: Span,
         offset: usize,
-        pos: usize,
         options: &CompletionOptions,
     ) -> Vec<SemanticSuggestion>;
 }
@@ -26,11 +25,26 @@ pub struct SemanticSuggestion {
     pub kind: Option<SuggestionKind>,
 }
 
-// TODO: think about name: maybe suggestion context?
-#[derive(Clone, Debug, PartialEq)]
-pub enum SuggestionKind {
-    Command(nu_protocol::engine::CommandType),
-    Type(nu_protocol::Type),
+impl SemanticSuggestion {
+    pub fn from_dynamic_suggestion(
+        suggestion: DynamicSuggestion,
+        span: reedline::Span,
+        style: Option<nu_ansi_term::Style>,
+    ) -> Self {
+        SemanticSuggestion {
+            suggestion: Suggestion {
+                value: suggestion.value,
+                display_override: suggestion.display_override,
+                description: suggestion.description,
+                extra: suggestion.extra,
+                append_whitespace: suggestion.append_whitespace,
+                match_indices: suggestion.match_indices,
+                style,
+                span,
+            },
+            kind: suggestion.kind,
+        }
+    }
 }
 
 impl From<Suggestion> for SemanticSuggestion {

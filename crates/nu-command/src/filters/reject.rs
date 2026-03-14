@@ -1,5 +1,5 @@
 use nu_engine::command_prelude::*;
-use nu_protocol::ast::PathMember;
+use nu_protocol::{DeprecationEntry, DeprecationType, ReportMode, ast::PathMember, casing::Casing};
 use std::{cmp::Reverse, collections::HashSet};
 
 #[derive(Clone)]
@@ -15,10 +15,21 @@ impl Command for Reject {
             .input_output_types(vec![
                 (Type::record(), Type::record()),
                 (Type::table(), Type::table()),
+                (Type::list(Type::Any), Type::list(Type::Any)),
             ])
             .switch(
+                "optional",
+                "Make all cell path members optional.",
+                Some('o'),
+            )
+            .switch(
+                "ignore-case",
+                "Make all cell path members case insensitive.",
+                None,
+            )
+            .switch(
                 "ignore-errors",
-                "ignore missing data (make all cell path members optional)",
+                "Ignore missing data (make all cell path members optional) (deprecated).",
                 Some('i'),
             )
             .rest(
@@ -34,7 +45,7 @@ impl Command for Reject {
     }
 
     fn extra_description(&self) -> &str {
-        "To remove a quantity of rows or columns, use `skip`, `drop`, or `drop column`."
+        "To remove a quantity of rows or columns, use `skip`, `drop`, or `drop column`. To keep/retain only specific columns, use `select`."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -62,6 +73,7 @@ impl Command for Reject {
                             val: val.clone(),
                             span: *col_span,
                             optional: false,
+                            casing: Casing::Sensitive,
                         }],
                     };
                     new_columns.push(cv.clone());
@@ -88,51 +100,69 @@ impl Command for Reject {
         }
         let span = call.head;
 
-        let ignore_errors = call.has_flag(engine_state, stack, "ignore-errors")?;
-        if ignore_errors {
+        let optional = call.has_flag(engine_state, stack, "optional")?
+            || call.has_flag(engine_state, stack, "ignore-errors")?;
+        let ignore_case = call.has_flag(engine_state, stack, "ignore-case")?;
+
+        if optional {
             for cell_path in &mut new_columns {
                 cell_path.make_optional();
+            }
+        }
+
+        if ignore_case {
+            for cell_path in &mut new_columns {
+                cell_path.make_insensitive();
             }
         }
 
         reject(engine_state, span, input, new_columns)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn deprecation_info(&self) -> Vec<DeprecationEntry> {
+        vec![DeprecationEntry {
+            ty: DeprecationType::Flag("ignore-errors".into()),
+            report_mode: ReportMode::FirstUse,
+            since: Some("0.106.0".into()),
+            expected_removal: None,
+            help: Some(
+                "This flag has been renamed to `--optional (-o)` to better reflect its behavior."
+                    .into(),
+            ),
+        }]
+    }
+
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Reject a column in the `ls` table",
+                description: "Reject a column in the `ls` table.",
                 example: "ls | reject modified",
                 result: None,
             },
             Example {
-                description: "Reject a column in a table",
+                description: "Reject a column in a table.",
                 example: "[[a, b]; [1, 2]] | reject a",
-                result: Some(Value::test_list(
-                    vec![Value::test_record(record! {
-                        "b" => Value::test_int(2),
-                    })],
-                )),
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "b" => Value::test_int(2),
+                })])),
             },
             Example {
-                description: "Reject a row in a table",
+                description: "Reject a row in a table.",
                 example: "[[a, b]; [1, 2] [3, 4]] | reject 1",
-                result: Some(Value::test_list(
-                    vec![Value::test_record(record! {
-                        "a" =>  Value::test_int(1),
-                        "b" =>  Value::test_int(2),
-                    })],
-                )),
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "a" =>  Value::test_int(1),
+                    "b" =>  Value::test_int(2),
+                })])),
             },
             Example {
-                description: "Reject the specified field in a record",
+                description: "Reject the specified field in a record.",
                 example: "{a: 1, b: 2} | reject a",
                 result: Some(Value::test_record(record! {
                     "b" => Value::test_int(2),
                 })),
             },
             Example {
-                description: "Reject a nested field in a record",
+                description: "Reject a nested field in a record.",
                 example: "{a: {b: 3, c: 5}} | reject a.b",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_record(record! {
@@ -141,12 +171,12 @@ impl Command for Reject {
                 })),
             },
             Example {
-                description: "Reject multiple rows",
+                description: "Reject multiple rows.",
                 example: "[[name type size]; [Cargo.toml toml 1kb] [Cargo.lock toml 2kb] [file.json json 3kb]] | reject 0 2",
                 result: None,
             },
             Example {
-                description: "Reject multiple columns",
+                description: "Reject multiple columns.",
                 example: "[[name type size]; [Cargo.toml toml 1kb] [Cargo.lock toml 2kb]] | reject type size",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! { "name" => Value::test_string("Cargo.toml") }),
@@ -154,11 +184,19 @@ impl Command for Reject {
                 ])),
             },
             Example {
-                description: "Reject multiple columns by spreading a list",
+                description: "Reject multiple columns by spreading a list.",
                 example: "let cols = [type size]; [[name type size]; [Cargo.toml toml 1kb] [Cargo.lock toml 2kb]] | reject ...$cols",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! { "name" => Value::test_string("Cargo.toml") }),
                     Value::test_record(record! { "name" => Value::test_string("Cargo.lock") }),
+                ])),
+            },
+            Example {
+                description: "Reject item in list.",
+                example: "[1 2 3] | reject 1",
+                result: Some(Value::test_list(vec![
+                    Value::test_int(1),
+                    Value::test_int(3),
                 ])),
             },
         ]
@@ -171,6 +209,7 @@ fn reject(
     input: PipelineData,
     cell_paths: Vec<CellPath>,
 ) -> Result<PipelineData, ShellError> {
+    let input = input.into_stream_or_original(engine_state);
     let mut unique_rows: HashSet<usize> = HashSet::new();
     let metadata = input.metadata();
     let mut new_columns = vec![];
@@ -211,8 +250,14 @@ fn reject(
 
     new_columns.append(&mut new_rows);
 
+    let has_integer_path_member = new_columns.iter().any(|path| {
+        path.members
+            .iter()
+            .any(|member| matches!(member, PathMember::Int { .. }))
+    });
+
     match input {
-        PipelineData::ListStream(stream, ..) => {
+        PipelineData::ListStream(stream, ..) if !has_integer_path_member => {
             let result = stream
                 .into_iter()
                 .map(move |mut value| {
@@ -228,7 +273,7 @@ fn reject(
                 })
                 .into_pipeline_data(span, engine_state.signals().clone());
 
-            Ok(result)
+            Ok(result.set_metadata(metadata))
         }
 
         input => {
@@ -246,9 +291,8 @@ fn reject(
 #[cfg(test)]
 mod test {
     #[test]
-    fn test_examples() {
+    fn test_examples() -> nu_test_support::Result {
         use super::Reject;
-        use crate::test_examples;
-        test_examples(Reject {})
+        nu_test_support::test().examples(Reject)
     }
 }

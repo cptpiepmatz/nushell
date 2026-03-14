@@ -1,13 +1,12 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 use polars::prelude::DataType;
 
-use crate::{dataframe::values::Column, values::CustomValueSupport, PolarsPlugin};
+use crate::{PolarsPlugin, dataframe::values::Column, values::CustomValueSupport};
 
-use crate::values::NuDataFrame;
+use crate::values::{NuDataFrame, PolarsPluginType};
 
 #[derive(Clone)]
 pub struct TakeDF;
@@ -28,16 +27,22 @@ impl PluginCommand for TakeDF {
             .required(
                 "indices",
                 SyntaxShape::Any,
-                "list of indices used to take data",
+                "List of indices used to take data.",
             )
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Takes selected rows from dataframe",
@@ -89,7 +94,10 @@ impl PluginCommand for TakeDF {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 
@@ -106,7 +114,7 @@ fn command(
 
     let casted = match index.dtype() {
         DataType::UInt32 | DataType::UInt64 | DataType::Int32 | DataType::Int64 => index
-            .cast(&DataType::UInt32)
+            .cast(&DataType::UInt64)
             .map_err(|e| ShellError::GenericError {
                 error: "Error casting index list".into(),
                 msg: e.to_string(),
@@ -123,7 +131,7 @@ fn command(
         }),
     }?;
 
-    let indices = casted.u32().map_err(|e| ShellError::GenericError {
+    let indices = casted.u64().map_err(|e| ShellError::GenericError {
         error: "Error casting index list".into(),
         msg: e.to_string(),
         span: Some(index_span),

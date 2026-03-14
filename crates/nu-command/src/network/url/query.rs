@@ -10,7 +10,7 @@ pub fn record_to_query_string(
     let mut row_vec = vec![];
     for (k, v) in record {
         match v {
-            Value::List { ref vals, .. } => {
+            Value::List { vals, .. } => {
                 for v_item in vals {
                     row_vec.push((
                         k.as_str(),
@@ -74,7 +74,10 @@ pub fn table_to_query_string(
     })
 }
 
-fn key_value_from_record(record: &Record, span: Span) -> Result<(Cow<str>, Cow<str>), ShellError> {
+fn key_value_from_record(
+    record: &Record,
+    span: Span,
+) -> Result<(Cow<'_, str>, Cow<'_, str>), ShellError> {
     let key = record
         .get("key")
         .ok_or_else(|| ShellError::CantFindColumn {

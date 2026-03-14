@@ -1,16 +1,12 @@
+use super::byte_stream::{RandomDistribution, random_byte_stream};
 use nu_engine::command_prelude::*;
-use nu_protocol::format_filesize_from_conf;
-use rand::{
-    distributions::{Alphanumeric, Distribution},
-    thread_rng,
-};
 
 const DEFAULT_CHARS_LENGTH: usize = 25;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct RandomChars;
 
-impl Command for SubCommand {
+impl Command for RandomChars {
     fn name(&self) -> &str {
         "random chars"
     }
@@ -46,20 +42,20 @@ impl Command for SubCommand {
         chars(engine_state, stack, call)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Generate a string with 25 random chars",
+                description: "Generate a string with 25 random chars.",
                 example: "random chars",
                 result: None,
             },
             Example {
-                description: "Generate random chars with specified length",
+                description: "Generate random chars with specified length.",
                 example: "random chars --length 20",
                 result: None,
             },
             Example {
-                description: "Generate one kilobyte of random chars",
+                description: "Generate one kilobyte of random chars.",
                 example: "random chars --length 1kb",
                 result: None,
             },
@@ -72,7 +68,6 @@ fn chars(
     stack: &mut Stack,
     call: &Call,
 ) -> Result<PipelineData, ShellError> {
-    let span = call.head;
     let length: Option<Value> = call.get_flag(engine_state, stack, "length")?;
     let length = if let Some(length_val) = length {
         match length_val {
@@ -84,7 +79,11 @@ fn chars(
             Value::Filesize { val, .. } => {
                 usize::try_from(val).map_err(|_| ShellError::InvalidValue {
                     valid: "a non-negative int or filesize".into(),
-                    actual: format_filesize_from_conf(val, engine_state.get_config()),
+                    actual: stack
+                        .get_config(engine_state)
+                        .filesize
+                        .format(val)
+                        .to_string(),
                     span: length_val.span(),
                 })
             }
@@ -98,17 +97,11 @@ fn chars(
         DEFAULT_CHARS_LENGTH
     };
 
-    let mut rng = thread_rng();
-
-    let random_string = Alphanumeric
-        .sample_iter(&mut rng)
-        .take(length)
-        .map(char::from)
-        .collect::<String>();
-
-    Ok(PipelineData::Value(
-        Value::string(random_string, span),
-        None,
+    Ok(random_byte_stream(
+        RandomDistribution::Alphanumeric,
+        length,
+        call.head,
+        engine_state.signals().clone(),
     ))
 }
 
@@ -117,9 +110,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(RandomChars)
     }
 }

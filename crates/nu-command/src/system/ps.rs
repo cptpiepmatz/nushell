@@ -21,7 +21,7 @@ impl Command for Ps {
             .input_output_types(vec![(Type::Nothing, Type::table())])
             .switch(
                 "long",
-                "list all available columns for each entry",
+                "List all available columns for each entry.",
                 Some('l'),
             )
             .filter()
@@ -46,7 +46,7 @@ impl Command for Ps {
         run_ps(engine_state, stack, call)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "List the system processes",
@@ -176,11 +176,14 @@ fn run_ps(
             }
             #[cfg(target_os = "macos")]
             {
-                record.push("cwd", Value::string(proc.cwd(), span));
                 let timestamp = Local
                     .timestamp_nanos(proc.start_time * 1_000_000_000)
                     .into();
                 record.push("start_time", Value::date(timestamp, span));
+                record.push("user_id", Value::int(proc.user_id, span));
+                record.push("priority", Value::int(proc.priority, span));
+                record.push("process_threads", Value::int(proc.task_thread_num, span));
+                record.push("cwd", Value::string(proc.cwd(), span));
             }
         }
 

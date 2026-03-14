@@ -6,8 +6,8 @@ macro_rules! generate_tests {
             StreamData,
         };
         use nu_protocol::{
-            DataSource, LabeledError, PipelineMetadata, PluginSignature, Signature, Span, Spanned,
-            SyntaxShape, Value,
+            LabeledError, PipelineMetadata, PluginSignature, Signature, Span, Spanned, SyntaxShape,
+            Value,
         };
 
         #[test]
@@ -36,18 +36,18 @@ macro_rules! generate_tests {
             let mut buffered = std::io::BufReader::new(ErrorProducer);
             match Encoder::<PluginInput>::decode(&encoder, &mut buffered) {
                 Ok(_) => panic!("decode: i/o error was not passed through"),
-                Err(ShellError::IOError { .. }) => (), // okay
+                Err(ShellError::Io(_)) => (), // okay
                 Err(other) => panic!(
                     "decode: got other error, should have been a \
-                    ShellError::IOError: {other:?}"
+                    ShellError::Io: {other:?}"
                 ),
             }
             match Encoder::<PluginOutput>::decode(&encoder, &mut buffered) {
                 Ok(_) => panic!("decode: i/o error was not passed through"),
-                Err(ShellError::IOError { .. }) => (), // okay
+                Err(ShellError::Io(_)) => (), // okay
                 Err(other) => panic!(
                     "decode: got other error, should have been a \
-                    ShellError::IOError: {other:?}"
+                    ShellError::Io: {other:?}"
                 ),
             }
         }
@@ -125,8 +125,8 @@ macro_rules! generate_tests {
             };
 
             let metadata = Some(PipelineMetadata {
-                data_source: DataSource::None,
                 content_type: Some("foobar".into()),
+                ..Default::default()
             });
 
             let plugin_call = PluginCall::Run(CallInfo {
@@ -221,16 +221,21 @@ macro_rules! generate_tests {
         fn response_round_trip_signature() {
             let signature = PluginSignature::new(
                 Signature::build("nu-plugin")
-                    .required("first", SyntaxShape::String, "first required")
-                    .required("second", SyntaxShape::Int, "second required")
-                    .required_named("first-named", SyntaxShape::String, "first named", Some('f'))
+                    .required("first", SyntaxShape::String, "First required.")
+                    .required("second", SyntaxShape::Int, "Second required.")
+                    .required_named(
+                        "first-named",
+                        SyntaxShape::String,
+                        "First named.",
+                        Some('f'),
+                    )
                     .required_named(
                         "second-named",
                         SyntaxShape::String,
-                        "second named",
+                        "Second named.",
                         Some('s'),
                     )
-                    .rest("remaining", SyntaxShape::Int, "remaining"),
+                    .rest("remaining", SyntaxShape::Int, "Remaining."),
                 vec![],
             );
 
@@ -373,14 +378,19 @@ macro_rules! generate_tests {
 
         #[test]
         fn response_round_trip_error() {
-            let error = LabeledError::new("label")
+            let inner: LabeledError = ShellError::Io(IoError::new(
+                shell_error::io::ErrorKind::from_std(std::io::ErrorKind::NotFound),
+                Span::test_data(),
+                None,
+            ))
+            .into();
+            let error: ShellError = LabeledError::new("label")
                 .with_code("test::error")
                 .with_url("https://example.org/test/error")
                 .with_help("some help")
                 .with_label("msg", Span::new(2, 30))
-                .with_inner(ShellError::IOError {
-                    msg: "io error".into(),
-                });
+                .with_inner(inner)
+                .into();
 
             let response = PluginCallResponse::Error(error.clone());
             let output = PluginOutput::CallResponse(6, response);
@@ -405,7 +415,7 @@ macro_rules! generate_tests {
 
         #[test]
         fn response_round_trip_error_none() {
-            let error = LabeledError::new("error");
+            let error: ShellError = LabeledError::new("error").into();
             let response = PluginCallResponse::Error(error.clone());
             let output = PluginOutput::CallResponse(7, response);
 

@@ -1,9 +1,9 @@
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct CommandlineEdit;
 
-impl Command for SubCommand {
+impl Command for CommandlineEdit {
     fn name(&self) -> &str {
         "commandline edit"
     }
@@ -13,23 +13,28 @@ impl Command for SubCommand {
             .input_output_types(vec![(Type::Nothing, Type::Nothing)])
             .switch(
                 "append",
-                "appends the string to the end of the buffer",
+                "Appends the string to the end of the buffer.",
                 Some('a'),
             )
             .switch(
                 "insert",
-                "inserts the string into the buffer at the cursor position",
+                "Inserts the string into the buffer at the cursor position.",
                 Some('i'),
             )
             .switch(
                 "replace",
-                "replaces the current contents of the buffer (default)",
+                "Replaces the current contents of the buffer (default).",
                 Some('r'),
+            )
+            .switch(
+                "accept",
+                "Immediately executes the result after edit.",
+                Some('A'),
             )
             .required(
                 "str",
                 SyntaxShape::String,
-                "the string to perform the operation with",
+                "The string to perform the operation with.",
             )
             .category(Category::Core)
     }
@@ -61,6 +66,9 @@ impl Command for SubCommand {
             repl.buffer = str;
             repl.cursor_pos = repl.buffer.len();
         }
+
+        repl.accept = call.has_flag(engine_state, stack, "accept")?;
+
         Ok(Value::nothing(call.head).into_pipeline_data())
     }
 }

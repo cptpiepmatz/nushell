@@ -57,22 +57,24 @@ impl Command for ExportEnv {
 
         let eval_block = get_eval_block(engine_state);
 
-        let _ = eval_block(engine_state, &mut callee_stack, block, input);
+        // Run the block (discard the result)
+        let _ = eval_block(engine_state, &mut callee_stack, block, input)?;
 
+        // Merge the block's environment to the current stack
         redirect_env(engine_state, caller_stack, &callee_stack);
 
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Set an environment variable",
+                description: "Set an environment variable.",
                 example: r#"export-env { $env.SPAM = 'eggs' }"#,
                 result: Some(Value::nothing(Span::test_data())),
             },
             Example {
-                description: "Set an environment variable and examine its value",
+                description: "Set an environment variable and examine its value.",
                 example: r#"export-env { $env.SPAM = 'eggs' }; $env.SPAM"#,
                 result: Some(Value::test_string("eggs")),
             },
@@ -85,9 +87,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ExportEnv {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ExportEnv)
     }
 }

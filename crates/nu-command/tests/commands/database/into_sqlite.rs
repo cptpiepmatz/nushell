@@ -1,16 +1,17 @@
 use chrono::{DateTime, FixedOffset};
 use nu_path::AbsolutePathBuf;
-use nu_protocol::{ast::PathMember, record, Span, Value};
+use nu_protocol::{Span, Value, ast::PathMember, casing::Casing, engine::EngineState, record};
 use nu_test_support::{
-    fs::{line_ending, Stub},
-    nu, pipeline,
+    fs::{Stub, line_ending},
+    nu,
     playground::{Dirs, Playground},
 };
 use rand::{
-    distributions::{Alphanumeric, DistString, Standard},
-    prelude::Distribution,
-    rngs::StdRng,
     Rng, SeedableRng,
+    distr::{Alphanumeric, SampleString, StandardUniform},
+    prelude::Distribution,
+    random_range,
+    rngs::StdRng,
 };
 use std::io::Write;
 
@@ -298,6 +299,9 @@ fn into_sqlite_existing_db_append() {
 /// streaming pipeline instead of a simple value
 #[test]
 fn into_sqlite_big_insert() {
+    let engine_state = EngineState::new();
+    // don't serialize closures
+    let serialize_types = false;
     Playground::setup("big_insert", |dirs, playground| {
         const NUM_ROWS: usize = 10_000;
         const NUON_FILE_NAME: &str = "data.nuon";
@@ -323,6 +327,7 @@ fn into_sqlite_big_insert() {
                         val: "somedate".into(),
                         span: Span::unknown(),
                         optional: false,
+                        casing: Casing::Sensitive,
                     }],
                     Box::new(|dateval| {
                         Value::string(dateval.coerce_string().unwrap(), dateval.span())
@@ -330,7 +335,14 @@ fn into_sqlite_big_insert() {
                 )
                 .unwrap();
 
-            let nuon = nuon::to_nuon(&value, nuon::ToStyle::Raw, Some(Span::unknown())).unwrap()
+            let nuon = nuon::to_nuon(
+                &engine_state,
+                &value,
+                nuon::ToNuonConfig::default()
+                    .span(Some(Span::unknown()))
+                    .serialize_types(serialize_types),
+            )
+            .unwrap()
                 + &line_ending();
 
             nuon_file.write_all(nuon.as_bytes()).unwrap();
@@ -372,7 +384,7 @@ struct TestRow(
 
 impl TestRow {
     pub fn random() -> Self {
-        StdRng::from_entropy().sample(Standard)
+        StdRng::from_os_rng().sample(StandardUniform)
     }
 }
 
@@ -395,7 +407,7 @@ impl From<TestRow> for Value {
     }
 }
 
-impl<'r> TryFrom<&rusqlite::Row<'r>> for TestRow {
+impl TryFrom<&rusqlite::Row<'_>> for TestRow {
     type Error = rusqlite::Error;
 
     fn try_from(row: &rusqlite::Row) -> Result<Self, Self::Error> {
@@ -423,12 +435,12 @@ impl<'r> TryFrom<&rusqlite::Row<'r>> for TestRow {
     }
 }
 
-impl Distribution<TestRow> for Standard {
+impl Distribution<TestRow> for StandardUniform {
     fn sample<R>(&self, rng: &mut R) -> TestRow
     where
         R: rand::Rng + ?Sized,
     {
-        let dt = DateTime::from_timestamp_millis(rng.gen_range(0..2324252554000))
+        let dt = DateTime::from_timestamp_millis(random_range(0..2324252554000))
             .unwrap()
             .fixed_offset();
 
@@ -436,18 +448,18 @@ impl Distribution<TestRow> for Standard {
 
         // limit the size of the numbers to work around
         // https://github.com/nushell/nushell/issues/10612
-        let filesize = rng.gen_range(-1024..=1024);
-        let duration = rng.gen_range(-1024..=1024);
+        let filesize = random_range(-1024..=1024);
+        let duration = random_range(-1024..=1024);
 
         TestRow(
-            rng.gen(),
-            rng.gen(),
-            rng.gen(),
+            rng.random(),
+            rng.random(),
+            rng.random(),
             filesize,
             duration,
             dt,
             rand_string,
-            rng.gen::<u64>().to_be_bytes().to_vec(),
+            rng.random::<u64>().to_be_bytes().to_vec(),
             rusqlite::types::Value::Null,
         )
     }
@@ -461,7 +473,7 @@ fn make_sqlite_db(dirs: &Dirs, nu_table: &str) -> AbsolutePathBuf {
 
     let nucmd = nu!(
         cwd: testdir,
-        pipeline(&format!("{nu_table} | into sqlite {testdb}"))
+        format!("{nu_table} | into sqlite {testdb}")
     );
 
     assert!(nucmd.status.success());
@@ -482,4 +494,17 @@ fn insert_test_rows(dirs: &Dirs, nu_table: &str, sql_query: Option<&str>, expect
         .collect();
 
     assert_eq!(expected, actual_rows);
+}
+
+#[test]
+fn test_auto_conversion() {
+    Playground::setup("sqlite json auto conversion", |_, playground| {
+        let raw = "{a_record:{foo:bar,baz:quux},a_list:[1,2,3],a_table:[[a,b];[0,1],[2,3]]}";
+        nu!(cwd: playground.cwd(), format!("{raw} | into sqlite filename.db -t my_table"));
+        let outcome = nu!(
+            cwd: playground.cwd(),
+            "open filename.db | get my_table.0 | to nuon --raw"
+        );
+        assert_eq!(outcome.out, raw);
+    });
 }

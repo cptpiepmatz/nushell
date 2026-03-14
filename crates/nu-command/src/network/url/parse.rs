@@ -5,9 +5,9 @@ use url::Url;
 use super::query::query_string_to_table;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct UrlParse;
 
-impl Command for SubCommand {
+impl Command for UrlParse {
     fn name(&self) -> &str {
         "url parse"
     }
@@ -29,7 +29,7 @@ impl Command for SubCommand {
     }
 
     fn description(&self) -> &str {
-        "Parses a url."
+        "Parse a URL string into structured data."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -52,9 +52,9 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Parses a url",
+            description: "Parses a URL.",
             example: "'http://user123:pass567@www.example.com:8081/foo/bar?param1=section&p2=&f[name]=vldc&f[no]=42#hello' | url parse",
             result: Some(Value::test_record(record! {
                     "scheme" =>   Value::test_string("http"),
@@ -117,7 +117,7 @@ fn parse(value: Value, head: Span, config: &Config) -> Result<PipelineData, Shel
         "params" => params,
     };
 
-    Ok(PipelineData::Value(Value::record(record, head), None))
+    Ok(PipelineData::value(Value::record(record, head), None))
 }
 
 #[cfg(test)]
@@ -125,9 +125,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(UrlParse)
     }
 }

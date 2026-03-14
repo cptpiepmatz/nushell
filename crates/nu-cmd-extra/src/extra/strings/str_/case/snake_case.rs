@@ -3,9 +3,9 @@ use heck::ToSnakeCase;
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct StrSnakeCase;
 
-impl Command for SubCommand {
+impl Command for StrSnakeCase {
     fn name(&self) -> &str {
         "str snake-case"
     }
@@ -25,7 +25,7 @@ impl Command for SubCommand {
             .rest(
                 "rest",
                 SyntaxShape::CellPath,
-                "For a data structure input, convert strings at the given cell paths",
+                "For a data structure input, convert strings at the given cell paths.",
             )
             .category(Category::Strings)
     }
@@ -54,7 +54,7 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "convert a string to snake_case",
@@ -88,9 +88,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StrSnakeCase)
     }
 }

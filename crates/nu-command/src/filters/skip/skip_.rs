@@ -1,6 +1,4 @@
 use nu_engine::command_prelude::*;
-use nu_protocol::Signals;
-use std::io::{self, Read};
 
 #[derive(Clone)]
 pub struct Skip;
@@ -36,10 +34,10 @@ impl Command for Skip {
         vec!["ignore", "remove", "last", "slice", "tail"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Skip the first value of a list",
+                description: "Skip the first value of a list.",
                 example: "[2 4 6 8] | skip 1",
                 result: Some(Value::test_list(vec![
                     Value::test_int(4),
@@ -48,14 +46,14 @@ impl Command for Skip {
                 ])),
             },
             Example {
-                description: "Skip two rows of a table",
+                description: "Skip two rows of a table.",
                 example: "[[editions]; [2015] [2018] [2021]] | skip 2",
                 result: Some(Value::test_list(vec![Value::test_record(record! {
                     "editions" => Value::test_int(2021),
                 })])),
             },
             Example {
-                description: "Skip 2 bytes of a binary value",
+                description: "Skip 2 bytes of a binary value.",
                 example: "0x[01 23 45 67] | skip 2",
                 result: Some(Value::test_binary(vec![0x45, 0x67])),
             },
@@ -69,7 +67,7 @@ impl Command for Skip {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let n: Option<Value> = call.opt(engine_state, stack, 0)?;
-        let metadata = input.metadata();
+        let metadata = input.metadata().map(|m| m.with_content_type(None));
 
         let n: usize = match n {
             Some(v) => {
@@ -85,7 +83,7 @@ impl Command for Skip {
                         return Err(ShellError::TypeMismatch {
                             err_message: "expected int".into(),
                             span,
-                        })
+                        });
                     }
                 }
             }
@@ -96,22 +94,11 @@ impl Command for Skip {
             PipelineData::ByteStream(stream, metadata) => {
                 if stream.type_().is_binary_coercible() {
                     let span = stream.span();
-                    if let Some(mut reader) = stream.reader() {
-                        // Copy the number of skipped bytes into the sink before proceeding
-                        io::copy(&mut (&mut reader).take(n as u64), &mut io::sink())
-                            .err_span(span)?;
-                        Ok(PipelineData::ByteStream(
-                            ByteStream::read(
-                                reader,
-                                call.head,
-                                Signals::empty(),
-                                ByteStreamType::Binary,
-                            ),
-                            metadata,
-                        ))
-                    } else {
-                        Ok(PipelineData::Empty)
-                    }
+                    Ok(PipelineData::byte_stream(
+                        stream.skip(span, n as u64)?,
+                        // last 5 bytes of an image/png stream are not image/png themselves
+                        metadata.map(|m| m.with_content_type(None)),
+                    ))
                 } else {
                     Err(ShellError::OnlySupportsThisInputType {
                         exp_input_type: "list, binary or range".into(),
@@ -123,6 +110,7 @@ impl Command for Skip {
             }
             PipelineData::Value(Value::Binary { val, .. }, metadata) => {
                 let bytes = val.into_iter().skip(n).collect::<Vec<_>>();
+                let metadata = metadata.map(|m| m.with_content_type(None));
                 Ok(Value::binary(bytes, input_span).into_pipeline_data_with_metadata(metadata))
             }
             _ => Ok(input
@@ -142,9 +130,7 @@ mod tests {
     use crate::Skip;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Skip {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Skip)
     }
 }

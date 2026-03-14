@@ -1,9 +1,9 @@
 use nu_protocol::{
-    Example, IntoSpanned, LabeledError, PipelineData, PluginExample, PluginSignature, ShellError,
-    Signature, Value,
+    DynamicSuggestion, Example, IntoSpanned, LabeledError, PipelineData, PluginExample,
+    PluginSignature, ShellError, Signature, Value, engine::ArgType,
 };
 
-use crate::{EngineInterface, EvaluatedCall, Plugin};
+use crate::{DynamicCompletionCall, EngineInterface, EvaluatedCall, Plugin};
 
 /// The API for a Nushell plugin command
 ///
@@ -124,7 +124,7 @@ pub trait PluginCommand: Sync {
     /// `PluginTest::test_command_examples()` from the
     /// [`nu-plugin-test-support`](https://docs.rs/nu-plugin-test-support) crate can be used in
     /// plugin tests to automatically test that examples produce the `result`s as specified.
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![]
     }
 
@@ -151,6 +151,28 @@ pub trait PluginCommand: Sync {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError>;
+
+    #[allow(unused_variables)]
+    /// Get completion items for `arg_type`.
+    ///
+    /// It's useful when you want to get auto completion items of a flag or positional argument
+    /// dynamically.
+    ///
+    /// The implementation can returns 3 types of return values:
+    /// - None: I couldn't find any suggestions, please fall back to default completions
+    /// - Some(vec![]): there are no suggestions
+    /// - Some(vec![item1, item2]): item1 and item2 are available
+    #[expect(deprecated, reason = "forwarding experimental status")]
+    fn get_dynamic_completion(
+        &self,
+        plugin: &Self::Plugin,
+        engine: &EngineInterface,
+        call: DynamicCompletionCall,
+        arg_type: ArgType,
+        _experimental: nu_protocol::engine::ExperimentalMarker,
+    ) -> Option<Vec<DynamicSuggestion>> {
+        None
+    }
 }
 
 /// The API for a simple Nushell plugin command
@@ -262,7 +284,7 @@ pub trait SimplePluginCommand: Sync {
     /// `PluginTest::test_command_examples()` from the
     /// [`nu-plugin-test-support`](https://docs.rs/nu-plugin-test-support) crate can be used in
     /// plugin tests to automatically test that examples produce the `result`s as specified.
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![]
     }
 
@@ -287,6 +309,28 @@ pub trait SimplePluginCommand: Sync {
         call: &EvaluatedCall,
         input: &Value,
     ) -> Result<Value, LabeledError>;
+
+    /// Get completion items for `arg_type`.
+    ///
+    /// It's useful when you want to get auto completion items of a flag or positional argument
+    /// dynamically.
+    ///
+    /// The implementation can returns 3 types of return values:
+    /// - None: I couldn't find any suggestions, please fall back to default completions
+    /// - Some(vec![]): there are no suggestions
+    /// - Some(vec![item1, item2]): item1 and item2 are available
+    #[allow(unused_variables)]
+    #[expect(deprecated, reason = "forwarding experimental status")]
+    fn get_dynamic_completion(
+        &self,
+        plugin: &Self::Plugin,
+        engine: &EngineInterface,
+        call: DynamicCompletionCall,
+        arg_type: ArgType,
+        _experimental: nu_protocol::engine::ExperimentalMarker,
+    ) -> Option<Vec<DynamicSuggestion>> {
+        None
+    }
 }
 
 /// All [`SimplePluginCommand`]s can be used as [`PluginCommand`]s, but input streams will be fully
@@ -297,7 +341,7 @@ where
 {
     type Plugin = <Self as SimplePluginCommand>::Plugin;
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         <Self as SimplePluginCommand>::examples(self)
     }
 
@@ -320,9 +364,9 @@ where
         // simpler signature in Plugin
         let span = input.span().unwrap_or(call.head);
         let input_value = input.into_value(span)?;
-        // Wrap the output in PipelineData::Value
+        // Wrap the output in PipelineData::value
         <Self as SimplePluginCommand>::run(self, plugin, engine, call, &input_value)
-            .map(|value| PipelineData::Value(value, None))
+            .map(|value| PipelineData::value(value, None))
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -335,6 +379,26 @@ where
 
     fn description(&self) -> &str {
         <Self as SimplePluginCommand>::description(self)
+    }
+
+    #[allow(unused_variables)]
+    #[allow(deprecated, reason = "internal usage")]
+    fn get_dynamic_completion(
+        &self,
+        plugin: &Self::Plugin,
+        engine: &EngineInterface,
+        call: DynamicCompletionCall,
+        arg_type: ArgType,
+        experimental: nu_protocol::engine::ExperimentalMarker,
+    ) -> Option<Vec<DynamicSuggestion>> {
+        <Self as SimplePluginCommand>::get_dynamic_completion(
+            self,
+            plugin,
+            engine,
+            call,
+            arg_type,
+            experimental,
+        )
     }
 }
 

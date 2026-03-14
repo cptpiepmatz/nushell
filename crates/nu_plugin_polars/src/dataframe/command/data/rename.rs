@@ -1,13 +1,12 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 
 use crate::{
-    dataframe::{utils::extract_strings, values::NuLazyFrame},
-    values::{CustomValueSupport, PolarsPluginObject},
     PolarsPlugin,
+    dataframe::{utils::extract_strings, values::NuLazyFrame},
+    values::{CustomValueSupport, PolarsPluginObject, PolarsPluginType},
 };
 
 use crate::values::{Column, NuDataFrame};
@@ -31,21 +30,27 @@ impl PluginCommand for RenameDF {
             .required(
                 "columns",
                 SyntaxShape::Any,
-                "Column(s) to be renamed. A string or list of strings",
+                "Column(s) to be renamed. A string or list of strings.",
             )
             .required(
                 "new names",
                 SyntaxShape::Any,
-                "New names for the selected column(s). A string or list of strings",
+                "New names for the selected column(s). A string or list of strings.",
             )
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe or lazyframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Renames a series",
@@ -90,8 +95,7 @@ impl PluginCommand for RenameDF {
             },
             Example {
                 description: "Renames two dataframe columns",
-                example:
-                    "[[a b]; [1 2] [3 4]] | polars into-df | polars rename [a b] [a_new b_new]",
+                example: "[[a b]; [1 2] [3 4]] | polars into-df | polars rename [a b] [a_new b_new]",
                 result: Some(
                     NuDataFrame::try_from_columns(
                         vec![
@@ -120,6 +124,7 @@ impl PluginCommand for RenameDF {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         match PolarsPluginObject::try_from_value(plugin, &value).map_err(LabeledError::from)? {
             PolarsPluginObject::NuDataFrame(df) => {
@@ -131,6 +136,7 @@ impl PluginCommand for RenameDF {
             _ => Err(LabeledError::new(format!("Unsupported type: {value:?}"))
                 .with_label("Unsupported Type", call.head)),
         }
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

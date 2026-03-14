@@ -1,13 +1,14 @@
 use std::io::{self, Read, Write};
 
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
-use nu_protocol::Signals;
+use nu_protocol::{Signals, shell_error::io::IoError};
 use num_traits::ToPrimitive;
 
 struct Arguments {
     cell_paths: Option<Vec<CellPath>>,
+    little_endian: bool,
 }
 
 impl CmdArgument for Arguments {
@@ -37,10 +38,16 @@ impl Command for FormatBits {
                 (Type::record(), Type::record()),
             ])
             .allow_variants_without_examples(true) // TODO: supply exhaustive examples
+            .named(
+                "endian",
+                SyntaxShape::String,
+                "Byte encode endian. Only applies to int, filesize, duration and bool, as well as tables and records of those. Available options: native, little, big(default).",
+                Some('e'),
+            )
             .rest(
                 "rest",
                 SyntaxShape::CellPath,
-                "for a data structure input, convert data at the given cell paths",
+                "For a data structure input, convert data at the given cell paths.",
             )
             .category(Category::Conversions)
     }
@@ -63,47 +70,48 @@ impl Command for FormatBits {
         format_bits(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "convert a binary value into a string, padded to 8 places with 0s",
                 example: "0x[1] | format bits",
-                result: Some(Value::string("00000001",
-                    Span::test_data(),
-                )),
+                result: Some(Value::string("00000001", Span::test_data())),
             },
             Example {
                 description: "convert an int into a string, padded to 8 places with 0s",
                 example: "1 | format bits",
-                result: Some(Value::string("00000001",
-                    Span::test_data(),
-                )),
+                result: Some(Value::string("00000001", Span::test_data())),
+            },
+            Example {
+                description: "convert an int into a string, padded to 8 places with 0s (big endian)",
+                example: "258 | format bits",
+                result: Some(Value::string("00000001 00000010", Span::test_data())),
+            },
+            Example {
+                description: "convert an int into a string, padded to 8 places with 0s (little endian)",
+                example: "258 | format bits --endian little",
+                result: Some(Value::string("00000010 00000001", Span::test_data())),
             },
             Example {
                 description: "convert a filesize value into a string, padded to 8 places with 0s",
                 example: "1b | format bits",
-                result: Some(Value::string("00000001",
-                    Span::test_data(),
-                )),
+                result: Some(Value::string("00000001", Span::test_data())),
             },
             Example {
                 description: "convert a duration value into a string, padded to 8 places with 0s",
                 example: "1ns | format bits",
-                result: Some(Value::string("00000001",
-                    Span::test_data(),
-                )),
+                result: Some(Value::string("00000001", Span::test_data())),
             },
             Example {
                 description: "convert a boolean value into a string, padded to 8 places with 0s",
                 example: "true | format bits",
-                result: Some(Value::string("00000001",
-                    Span::test_data(),
-                )),
+                result: Some(Value::string("00000001", Span::test_data())),
             },
             Example {
                 description: "convert a string into a raw binary string, padded with 0s to 8 places",
                 example: "'nushell.sh' | format bits",
-                result: Some(Value::string("01101110 01110101 01110011 01101000 01100101 01101100 01101100 00101110 01110011 01101000",
+                result: Some(Value::string(
+                    "01101110 01110101 01110011 01101000 01100101 01101100 01101100 00101110 01110011 01101000",
                     Span::test_data(),
                 )),
             },
@@ -111,8 +119,7 @@ impl Command for FormatBits {
     }
 }
 
-// TODO: crate public only during deprecation
-pub(crate) fn format_bits(
+fn format_bits(
     engine_state: &EngineState,
     stack: &mut Stack,
     call: &Call,
@@ -123,12 +130,33 @@ pub(crate) fn format_bits(
     let cell_paths = (!cell_paths.is_empty()).then_some(cell_paths);
 
     if let PipelineData::ByteStream(stream, metadata) = input {
-        Ok(PipelineData::ByteStream(
+        Ok(PipelineData::byte_stream(
             byte_stream_to_bits(stream, head),
             metadata,
         ))
     } else {
-        let args = Arguments { cell_paths };
+        let endian = call.get_flag::<Spanned<String>>(engine_state, stack, "endian")?;
+
+        let little_endian = if let Some(endian) = endian {
+            match endian.item.as_str() {
+                "native" => cfg!(target_endian = "little"),
+                "little" => true,
+                "big" => false,
+                _ => {
+                    return Err(ShellError::TypeMismatch {
+                        err_message: "Endian must be one of native, little, big".to_string(),
+                        span: endian.span,
+                    });
+                }
+            }
+        } else {
+            false
+        };
+
+        let args = Arguments {
+            cell_paths,
+            little_endian,
+        };
         operate(action, args, input, call.head, engine_state.signals())
     }
 }
@@ -142,7 +170,11 @@ fn byte_stream_to_bits(stream: ByteStream, head: Span) -> ByteStream {
             ByteStreamType::String,
             move |buffer| {
                 let mut byte = [0];
-                if reader.read(&mut byte[..]).err_span(head)? > 0 {
+                if reader
+                    .read(&mut byte[..])
+                    .map_err(|err| IoError::new(err, head, None))?
+                    > 0
+                {
                     // Format the byte as bits
                     if is_first {
                         is_first = false;
@@ -162,61 +194,77 @@ fn byte_stream_to_bits(stream: ByteStream, head: Span) -> ByteStream {
     }
 }
 
-fn convert_to_smallest_number_type(num: i64, span: Span) -> Value {
+fn convert_to_smallest_number_type(num: i64, span: Span, little_endian: bool) -> Value {
     if let Some(v) = num.to_i8() {
-        let bytes = v.to_ne_bytes();
+        let bytes = v.to_ne_bytes(); // Endianness does not affect `i8`
         let mut raw_string = "".to_string();
         for ch in bytes {
-            raw_string.push_str(&format!("{:08b} ", ch));
+            raw_string.push_str(&format!("{ch:08b} "));
         }
         Value::string(raw_string.trim(), span)
     } else if let Some(v) = num.to_i16() {
-        let bytes = v.to_ne_bytes();
+        let bytes = if little_endian {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        };
         let mut raw_string = "".to_string();
         for ch in bytes {
-            raw_string.push_str(&format!("{:08b} ", ch));
+            raw_string.push_str(&format!("{ch:08b} "));
         }
         Value::string(raw_string.trim(), span)
     } else if let Some(v) = num.to_i32() {
-        let bytes = v.to_ne_bytes();
+        let bytes = if little_endian {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        };
         let mut raw_string = "".to_string();
         for ch in bytes {
-            raw_string.push_str(&format!("{:08b} ", ch));
+            raw_string.push_str(&format!("{ch:08b} "));
         }
         Value::string(raw_string.trim(), span)
     } else {
-        let bytes = num.to_ne_bytes();
+        let bytes = if little_endian {
+            num.to_le_bytes()
+        } else {
+            num.to_be_bytes()
+        };
         let mut raw_string = "".to_string();
         for ch in bytes {
-            raw_string.push_str(&format!("{:08b} ", ch));
+            raw_string.push_str(&format!("{ch:08b} "));
         }
         Value::string(raw_string.trim(), span)
     }
 }
 
-fn action(input: &Value, _args: &Arguments, span: Span) -> Value {
+fn action(input: &Value, args: &Arguments, span: Span) -> Value {
     match input {
         Value::Binary { val, .. } => {
             let mut raw_string = "".to_string();
             for ch in val {
-                raw_string.push_str(&format!("{:08b} ", ch));
+                raw_string.push_str(&format!("{ch:08b} "));
             }
             Value::string(raw_string.trim(), span)
         }
-        Value::Int { val, .. } => convert_to_smallest_number_type(*val, span),
-        Value::Filesize { val, .. } => convert_to_smallest_number_type(val.get(), span),
-        Value::Duration { val, .. } => convert_to_smallest_number_type(*val, span),
+        Value::Int { val, .. } => convert_to_smallest_number_type(*val, span, args.little_endian),
+        Value::Filesize { val, .. } => {
+            convert_to_smallest_number_type(val.get(), span, args.little_endian)
+        }
+        Value::Duration { val, .. } => {
+            convert_to_smallest_number_type(*val, span, args.little_endian)
+        }
         Value::String { val, .. } => {
             let raw_bytes = val.as_bytes();
             let mut raw_string = "".to_string();
             for ch in raw_bytes {
-                raw_string.push_str(&format!("{:08b} ", ch));
+                raw_string.push_str(&format!("{ch:08b} "));
             }
             Value::string(raw_string.trim(), span)
         }
         Value::Bool { val, .. } => {
             let v = <i64 as From<bool>>::from(*val);
-            convert_to_smallest_number_type(v, span)
+            convert_to_smallest_number_type(v, span, args.little_endian)
         }
         // Propagate errors by explicitly matching them before the final case.
         Value::Error { .. } => input.clone(),
@@ -237,9 +285,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(FormatBits {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(FormatBits)
     }
 }

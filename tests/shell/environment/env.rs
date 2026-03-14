@@ -231,21 +231,111 @@ fn std_log_env_vars_have_defaults() {
 }
 
 #[test]
-fn env_shlvl() {
+fn env_shlvl_commandstring_does_not_increment() {
     let actual = nu!("
         $env.SHLVL = 5
-        nu -i -c 'print $env.SHLVL'
+        nu -c 'print $env.SHLVL; exit'
     ");
 
-    assert_eq!(actual.out, "6");
+    assert_eq!(actual.out, "5");
+}
+
+// Note: Do not use -i / --interactive in tests.
+// -i attempts to acquire a terminal, and if more than one
+// test tries to obtain a terminal at the same time, the
+// test run will likely hang, at least for some users.
+// Instead, use -e / --execute with an `exit` to test REPL
+// functionality as demonstrated below.
+//
+// We've also learned that `-e 'exit'` is not enough to
+// prevent failures entirely. For now we're going to ignore
+// these tests until we can find a better solution.
+#[ignore = "Causing hangs when both tests overlap"]
+#[test]
+fn env_shlvl_in_repl() {
+    let actual = nu!(r#"
+        $env.SHLVL = 5
+        nu --no-std-lib -n -e 'print $"SHLVL:($env.SHLVL)"; exit'
+    "#);
+
+    assert!(actual.out.ends_with("SHLVL:6"));
+}
+
+#[ignore = "Causing hangs when both tests overlap"]
+#[test]
+fn env_shlvl_in_exec_repl() {
+    let actual = nu!(r#"
+        $env.SHLVL = 29
+        nu -c 'exec nu --no-std-lib -n -e `print $"SHLVL:($env.SHLVL)"; exit`'
+    "#);
+
+    assert!(actual.out.ends_with("SHLVL:30"));
 }
 
 #[test]
-fn env_shlvl_in_exec() {
+fn path_is_a_list_in_repl() {
+    let actual = nu!(r#"
+        nu -c "exec nu --no-std-lib -n -e `print $'path:($env.pATh | describe)'; exit`"
+    "#);
+
+    assert!(actual.out.ends_with("path:list<string>"));
+}
+
+#[test]
+fn path_is_a_list() {
     let actual = nu!("
-        $env.SHLVL = 29
-        nu -i -c \"exec nu -i -c 'print $env.SHLVL'\"
+        print ($env.path | describe)
     ");
 
-    assert_eq!(actual.out, "30");
+    assert_eq!(actual.out, "list<string>");
+}
+
+#[test]
+fn path_is_a_list_in_script() {
+    Playground::setup("has_file_pwd", |dirs, sandbox| {
+        sandbox.with_files(&[FileWithContent("checkpath.nu", "$env.path | describe")]);
+
+        let actual = nu!(cwd: dirs.test(), "nu checkpath.nu");
+
+        assert!(actual.out.ends_with("list<string>"));
+    })
+}
+
+#[test]
+fn case_insensitive_env_load_env() {
+    let actual = nu!("
+        load-env {testvar: 'value1', TESTVAR: 'value2'}
+        print $env.testvar
+        print $env.TESTVAR
+    ");
+    // TESTVAR should override testvar due to case-insensitivity
+    assert!(actual.out.contains("value2"));
+    assert!(actual.out.contains("value2"));
+}
+
+#[test]
+fn case_insensitive_env_http_proxy() {
+    let actual = nu!("
+        $env.http_proxy = 'http://proxy.example.com'
+        $env.HTTP_PROXY
+    ");
+    assert_eq!(actual.out, "http://proxy.example.com");
+}
+
+#[test]
+fn case_insensitive_env_date_locale() {
+    let actual = nu!("
+        $env.lc_all = 'C'
+        $env.LC_ALL
+    ");
+    assert_eq!(actual.out, "C");
+}
+
+#[test]
+fn case_insensitive_env_record_access() {
+    let actual = nu!("
+        $env.test = 'value'
+        $env.TEST
+    ");
+    assert_eq!(actual.out, "value");
 }

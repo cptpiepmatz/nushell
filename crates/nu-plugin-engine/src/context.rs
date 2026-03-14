@@ -1,15 +1,16 @@
 use crate::util::MutableCow;
-use nu_engine::{get_eval_block_with_early_return, get_full_help, ClosureEvalOnce};
+use nu_engine::{ClosureEvalOnce, get_eval_block_with_early_return, get_full_help};
 use nu_plugin_protocol::EvaluatedCall;
 use nu_protocol::{
+    BlockId, Config, DeclId, IntoSpanned, OutDest, PipelineData, PluginIdentity, ShellError,
+    Signals, Span, Spanned, Value,
     engine::{Call, Closure, EngineState, Redirection, Stack},
-    ir, Config, DeclId, IntoSpanned, OutDest, PipelineData, PluginIdentity, ShellError, Signals,
-    Span, Spanned, Value,
+    ir::{self, IrBlock},
 };
 use std::{
     borrow::Cow,
     collections::HashMap,
-    sync::{atomic::AtomicU32, Arc},
+    sync::{Arc, atomic::AtomicU32},
 };
 
 /// Object safe trait for abstracting operations required of the plugin context.
@@ -47,6 +48,8 @@ pub trait PluginExecutionContext: Send + Sync {
     ) -> Result<PipelineData, ShellError>;
     /// Find a declaration by name
     fn find_decl(&self, name: &str) -> Result<Option<DeclId>, ShellError>;
+    /// Get the compiled IR for a block
+    fn get_block_ir(&self, block_id: BlockId) -> Result<IrBlock, ShellError>;
     /// Call a declaration with arguments and input
     fn call_decl(
         &mut self,
@@ -84,7 +87,7 @@ impl<'a> PluginExecutionCommandContext<'a> {
     }
 }
 
-impl<'a> PluginExecutionContext for PluginExecutionCommandContext<'a> {
+impl PluginExecutionContext for PluginExecutionCommandContext<'_> {
     fn span(&self) -> Span {
         self.call.head
     }
@@ -116,7 +119,7 @@ impl<'a> PluginExecutionContext for PluginExecutionCommandContext<'a> {
                 match value {
                     Value::Closure { val, .. } => {
                         ClosureEvalOnce::new(&self.engine_state, &self.stack, *val)
-                            .run_with_input(PipelineData::Empty)
+                            .run_with_input(PipelineData::empty())
                             .and_then(|data| data.into_value(span))
                             .unwrap_or_else(|err| Value::error(err, self.call.head))
                     }
@@ -126,7 +129,7 @@ impl<'a> PluginExecutionContext for PluginExecutionCommandContext<'a> {
     }
 
     fn get_env_var(&self, name: &str) -> Result<Option<&Value>, ShellError> {
-        Ok(self.stack.get_env_var_insensitive(&self.engine_state, name))
+        Ok(self.stack.get_env_var(&self.engine_state, name))
     }
 
     fn get_env_vars(&self) -> Result<HashMap<String, Value>, ShellError> {
@@ -134,8 +137,7 @@ impl<'a> PluginExecutionContext for PluginExecutionCommandContext<'a> {
     }
 
     fn get_current_dir(&self) -> Result<Spanned<String>, ShellError> {
-        #[allow(deprecated)]
-        let cwd = nu_engine::env::current_dir_str(&self.engine_state, &self.stack)?;
+        let cwd = self.engine_state.cwd_as_string(Some(&self.stack))?;
         // The span is not really used, so just give it call.head
         Ok(cwd.into_spanned(self.call.head))
     }
@@ -211,11 +213,38 @@ impl<'a> PluginExecutionContext for PluginExecutionCommandContext<'a> {
 
         let eval_block_with_early_return = get_eval_block_with_early_return(&self.engine_state);
 
-        eval_block_with_early_return(&self.engine_state, stack, block, input)
+        eval_block_with_early_return(&self.engine_state, stack, block, input).map(|p| p.body)
     }
 
     fn find_decl(&self, name: &str) -> Result<Option<DeclId>, ShellError> {
         Ok(self.engine_state.find_decl(name.as_bytes(), &[]))
+    }
+
+    fn get_block_ir(&self, block_id: BlockId) -> Result<IrBlock, ShellError> {
+        let block =
+            self.engine_state
+                .try_get_block(block_id)
+                .ok_or_else(|| ShellError::GenericError {
+                    error: "Plugin misbehaving".into(),
+                    msg: format!("Tried to get IR for unknown block id: {}", block_id.get()),
+                    span: Some(self.call.head),
+                    help: None,
+                    inner: vec![],
+                })?;
+
+        block
+            .ir_block
+            .clone()
+            .ok_or_else(|| ShellError::GenericError {
+                error: "Block has no IR".into(),
+                msg: format!("Block {} was not compiled to IR", block_id.get()),
+                span: Some(self.call.head),
+                help: Some(
+                    "This block may be a declaration or built-in that has no IR representation"
+                        .into(),
+                ),
+                inner: vec![],
+            })
     }
 
     fn call_decl(
@@ -352,6 +381,12 @@ impl PluginExecutionContext for PluginExecutionBogusContext {
     fn find_decl(&self, _name: &str) -> Result<Option<DeclId>, ShellError> {
         Err(ShellError::NushellFailed {
             msg: "find_decl not implemented on bogus".into(),
+        })
+    }
+
+    fn get_block_ir(&self, _block_id: BlockId) -> Result<IrBlock, ShellError> {
+        Err(ShellError::NushellFailed {
+            msg: "get_block_ir not implemented on bogus".into(),
         })
     }
 

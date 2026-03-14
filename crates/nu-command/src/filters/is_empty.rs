@@ -34,7 +34,7 @@ impl Command for IsEmpty {
         empty(engine_state, stack, call, input, false)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Check if a string is empty",
@@ -61,9 +61,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(IsEmpty {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(IsEmpty)
     }
 }

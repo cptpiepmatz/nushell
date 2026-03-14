@@ -1,11 +1,13 @@
 use crate::{
-    dataframe::values::{Column, NuDataFrame},
-    values::{cant_convert_err, CustomValueSupport, PolarsPluginObject, PolarsPluginType},
     Cacheable, PolarsPlugin,
+    dataframe::values::{Column, NuDataFrame},
+    values::{CustomValueSupport, PolarsPluginObject, PolarsPluginType, cant_convert_err},
 };
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
-use nu_protocol::{Category, Example, LabeledError, PipelineData, Signature, Span, Type, Value};
+use nu_protocol::{
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Value,
+};
 
 #[derive(Clone)]
 pub struct LazyCollect;
@@ -23,14 +25,20 @@ impl PluginCommand for LazyCollect {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+            ])
             .category(Category::Custom("lazyframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "drop duplicates",
             example: "[[a b]; [1 2] [3 4]] | polars into-lazy | polars collect",
@@ -67,7 +75,7 @@ impl PluginCommand for LazyCollect {
                 let mut eager = lazy.collect(call.head)?;
                 // We don't want this converted back to a lazy frame
                 eager.from_lazy = true;
-                Ok(PipelineData::Value(
+                Ok(PipelineData::value(
                     eager
                         .cache(plugin, engine, call.head)?
                         .into_value(call.head),
@@ -78,13 +86,21 @@ impl PluginCommand for LazyCollect {
                 // This should just increment the cache value.
                 // We can return a value back without incrementing the
                 // cache value or the value will be dropped (issue #12828)
-                let _ = plugin.cache.get(&df.id, true)?;
+                let cv =
+                    plugin
+                        .cache
+                        .get(&df.id, true)?
+                        .ok_or_else(|| ShellError::GenericError {
+                            error: format!("Failed to get cached value {}", df.id),
+                            msg: "".into(),
+                            span: Some(call.head),
+                            help: None,
+                            inner: vec![],
+                        })?;
+                let df = NuDataFrame::from_cache_value(cv.value.clone())?;
 
                 // just return the dataframe, add to cache again to be safe
-                Ok(PipelineData::Value(
-                    df.cache(plugin, engine, call.head)?.into_value(call.head),
-                    None,
-                ))
+                Ok(PipelineData::value(df.into_value(call.head), None))
             }
             _ => Err(cant_convert_err(
                 &value,

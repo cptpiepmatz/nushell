@@ -1,5 +1,4 @@
-use crate::help::highlight_search_in_table;
-use nu_color_config::StyleComputer;
+use crate::filters::find_internal;
 use nu_engine::{command_prelude::*, get_full_help, scope::ScopeData};
 
 #[derive(Clone)]
@@ -25,27 +24,27 @@ impl Command for HelpExterns {
             .named(
                 "find",
                 SyntaxShape::String,
-                "string to find in extern names and descriptions",
+                "String to find in extern names and descriptions.",
                 Some('f'),
             )
             .input_output_types(vec![(Type::Nothing, Type::table())])
             .allow_variants_without_examples(true)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "show all externs",
+                description: "Show all externs.",
                 example: "help externs",
                 result: None,
             },
             Example {
-                description: "show help for single extern",
+                description: "Show help for single extern.",
                 example: "help externs smth",
                 result: None,
             },
             Example {
-                description: "search for string in extern names and descriptions",
+                description: "Search for string in extern names and descriptions.",
                 example: "help externs --find smth",
                 result: None,
             },
@@ -72,31 +71,20 @@ pub fn help_externs(
     let find: Option<Spanned<String>> = call.get_flag(engine_state, stack, "find")?;
     let rest: Vec<Spanned<String>> = call.rest(engine_state, stack, 0)?;
 
-    // 🚩The following two-lines are copied from filters/find.rs:
-    let style_computer = StyleComputer::from_config(engine_state, stack);
-    // Currently, search results all use the same style.
-    // Also note that this sample string is passed into user-written code (the closure that may or may not be
-    // defined for "string").
-    let string_style = style_computer.compute("string", &Value::string("search result", head));
-    let highlight_style =
-        style_computer.compute("search_result", &Value::string("search result", head));
-
     if let Some(f) = find {
         let all_cmds_vec = build_help_externs(engine_state, stack, head);
-        let found_cmds_vec = highlight_search_in_table(
+        return find_internal(
             all_cmds_vec,
+            engine_state,
+            stack,
             &f.item,
             &["name", "description"],
-            &string_style,
-            &highlight_style,
-        )?;
-
-        return Ok(Value::list(found_cmds_vec, head).into_pipeline_data());
+            true,
+        );
     }
 
     if rest.is_empty() {
-        let found_cmds_vec = build_help_externs(engine_state, stack, head);
-        Ok(Value::list(found_cmds_vec, head).into_pipeline_data())
+        Ok(build_help_externs(engine_state, stack, head))
     } else {
         let mut name = String::new();
 
@@ -119,18 +107,17 @@ pub fn help_externs(
     }
 }
 
-fn build_help_externs(engine_state: &EngineState, stack: &Stack, span: Span) -> Vec<Value> {
+fn build_help_externs(engine_state: &EngineState, stack: &Stack, span: Span) -> PipelineData {
     let mut scope = ScopeData::new(engine_state, stack);
     scope.populate_decls();
-    scope.collect_externs(span)
+    Value::list(scope.collect_externs(span), span).into_pipeline_data()
 }
 
 #[cfg(test)]
 mod test {
     #[test]
-    fn test_examples() {
+    fn test_examples() -> nu_test_support::Result {
         use super::HelpExterns;
-        use crate::test_examples;
-        test_examples(HelpExterns {})
+        nu_test_support::test().examples(HelpExterns)
     }
 }

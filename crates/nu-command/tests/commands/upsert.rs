@@ -1,15 +1,12 @@
-use nu_test_support::{nu, pipeline};
+use nu_test_support::nu;
 
 #[test]
 fn sets_the_column() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            open cargo_sample.toml
-            | upsert dev-dependencies.pretty_assertions "0.7.0"
-            | get dev-dependencies.pretty_assertions
-        "#
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        open cargo_sample.toml
+        | upsert dev-dependencies.pretty_assertions "0.7.0"
+        | get dev-dependencies.pretty_assertions
+    "#);
 
     assert_eq!(actual.out, "0.7.0");
 }
@@ -22,30 +19,24 @@ fn doesnt_convert_record_to_table() {
 
 #[test]
 fn sets_the_column_from_a_block_full_stream_output() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            {content: null}
-            | upsert content {|| open --raw cargo_sample.toml | lines | first 5 }
-            | get content.1
-            | str contains "nu"
-        "#
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        {content: null}
+        | upsert content {|| open --raw cargo_sample.toml | lines | first 5 }
+        | get content.1
+        | str contains "nu"
+    "#);
 
     assert_eq!(actual.out, "true");
 }
 
 #[test]
 fn sets_the_column_from_a_subexpression() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            {content: null}
-            | upsert content (open --raw cargo_sample.toml | lines | first 5)
-            | get content.1
-            | str contains "nu"
-        "#
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        {content: null}
+        | upsert content (open --raw cargo_sample.toml | lines | first 5)
+        | get content.1
+        | str contains "nu"
+    "#);
 
     assert_eq!(actual.out, "true");
 }
@@ -61,7 +52,9 @@ fn upsert_uses_enumerate_index_inserting() {
 
 #[test]
 fn upsert_uses_enumerate_index_updating() {
-    let actual = nu!("[[a]; [7] [6]] | enumerate | upsert a {|el| $el.index + 1 + $el.item.a } | flatten | to nuon");
+    let actual = nu!(
+        "[[a]; [7] [6]] | enumerate | upsert a {|el| $el.index + 1 + $el.item.a } | flatten | to nuon"
+    );
 
     assert_eq!(actual.out, "[[index, a]; [0, 8], [1, 8]]");
 }
@@ -84,9 +77,11 @@ fn upsert_at_end_of_list() {
 fn upsert_past_end_of_list() {
     let actual = nu!("[1, 2, 3] | upsert 5 abc");
 
-    assert!(actual
-        .err
-        .contains("can't insert at index (the next available index is 3)"));
+    assert!(
+        actual
+            .err
+            .contains("can't insert at index (the next available index is 3)")
+    );
 }
 
 #[test]
@@ -107,9 +102,11 @@ fn upsert_at_end_of_list_stream() {
 fn upsert_past_end_of_list_stream() {
     let actual = nu!("[1, 2, 3] | every 1 | upsert 5 abc");
 
-    assert!(actual
-        .err
-        .contains("can't insert at index (the next available index is 3)"));
+    assert!(
+        actual
+            .err
+            .contains("can't insert at index (the next available index is 3)")
+    );
 }
 
 #[test]
@@ -124,6 +121,50 @@ fn upserts_all_rows_in_table_in_record() {
         "{table: [[col]; [{a: 1}], [{a: 1}]]} | upsert table.col.b 2 | get table.col.b | to nuon"
     );
     assert_eq!(actual.out, "[2, 2]");
+}
+
+#[test]
+fn upsert_table_cell_respects_reorder_option() {
+    let actual = nu!(experimental: vec!["reorder-cell-paths".to_string()], r#"
+        let a = [[foo]; [bar]];
+        let b = ($a | upsert foo.0 'baz');
+        $b.0.foo
+    "#);
+
+    assert_eq!(actual.out, "baz")
+}
+
+#[test]
+fn upsert_table_cell_multiple_ints_reorder() {
+    let actual = nu!(experimental: vec!["reorder-cell-paths".to_string()], r#"
+        let a = [ [[foo]; [bar]] ];
+        let b = ($a | upsert 0.0.foo 'hi');
+        $b.0.0.foo
+    "#);
+
+    assert_eq!(actual.out, "hi")
+}
+
+#[test]
+fn upsert_table_cell_mixed_rows() {
+    let actual = nu!(experimental: vec!["reorder-cell-paths".to_string()], r#"
+        let table = [ [foo]; ['a'] ['b'] ];
+        let t = ($table | upsert foo.0 'z');
+        $t.foo.0
+    "#);
+
+    assert_eq!(actual.out, "z")
+}
+
+#[test]
+fn upsert_new_to_table_cell_mixed_rows() {
+    let actual = nu!(experimental: vec!["reorder-cell-paths".to_string()], r#"
+        let table = [ [foo]; ['a'] ['b'] ];
+        let t = ($table | upsert bar.0 'z');
+        $t.0.bar
+    "#);
+
+    assert_eq!(actual.out, "z")
 }
 
 #[test]

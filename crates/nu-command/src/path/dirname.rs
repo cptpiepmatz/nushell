@@ -11,9 +11,9 @@ struct Arguments {
 impl PathSubcommandArguments for Arguments {}
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct PathDirname;
 
-impl Command for SubCommand {
+impl Command for PathDirname {
     fn name(&self) -> &str {
         "path dirname"
     }
@@ -30,13 +30,13 @@ impl Command for SubCommand {
             .named(
                 "replace",
                 SyntaxShape::String,
-                "Return original path with dirname replaced by this string",
+                "Return original path with dirname replaced by this string.",
                 Some('r'),
             )
             .named(
                 "num-levels",
                 SyntaxShape::Int,
-                "Number of directories to walk up",
+                "Number of directories to walk up.",
                 Some('n'),
             )
             .category(Category::Path)
@@ -64,7 +64,7 @@ impl Command for SubCommand {
         };
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(
@@ -86,7 +86,7 @@ impl Command for SubCommand {
         };
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(
@@ -96,15 +96,15 @@ impl Command for SubCommand {
     }
 
     #[cfg(windows)]
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Get dirname of a path",
+                description: "Get dirname of a path.",
                 example: "'C:\\Users\\joe\\code\\test.txt' | path dirname",
                 result: Some(Value::test_string("C:\\Users\\joe\\code")),
             },
             Example {
-                description: "Get dirname of a list of paths",
+                description: "Get dirname of a list of paths.",
                 example: r"[ C:\Users\joe\test.txt, C:\Users\doe\test.txt ] | path dirname",
                 result: Some(Value::test_list(vec![
                     Value::test_string(r"C:\Users\joe"),
@@ -112,29 +112,28 @@ impl Command for SubCommand {
                 ])),
             },
             Example {
-                description: "Walk up two levels",
+                description: "Walk up two levels.",
                 example: "'C:\\Users\\joe\\code\\test.txt' | path dirname --num-levels 2",
                 result: Some(Value::test_string("C:\\Users\\joe")),
             },
             Example {
-                description: "Replace the part that would be returned with a custom path",
-                example:
-                    "'C:\\Users\\joe\\code\\test.txt' | path dirname --num-levels 2 --replace C:\\Users\\viking",
+                description: "Replace the part that would be returned with a custom path.",
+                example: "'C:\\Users\\joe\\code\\test.txt' | path dirname --num-levels 2 --replace C:\\Users\\viking",
                 result: Some(Value::test_string("C:\\Users\\viking\\code\\test.txt")),
             },
         ]
     }
 
     #[cfg(not(windows))]
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Get dirname of a path",
+                description: "Get dirname of a path.",
                 example: "'/home/joe/code/test.txt' | path dirname",
                 result: Some(Value::test_string("/home/joe/code")),
             },
             Example {
-                description: "Get dirname of a list of paths",
+                description: "Get dirname of a list of paths.",
                 example: "[ /home/joe/test.txt, /home/doe/test.txt ] | path dirname",
                 result: Some(Value::test_list(vec![
                     Value::test_string("/home/joe"),
@@ -142,14 +141,13 @@ impl Command for SubCommand {
                 ])),
             },
             Example {
-                description: "Walk up two levels",
+                description: "Walk up two levels.",
                 example: "'/home/joe/code/test.txt' | path dirname --num-levels 2",
                 result: Some(Value::test_string("/home/joe")),
             },
             Example {
-                description: "Replace the part that would be returned with a custom path",
-                example:
-                    "'/home/joe/code/test.txt' | path dirname --num-levels 2 --replace /home/viking",
+                description: "Replace the part that would be returned with a custom path.",
+                example: "'/home/joe/code/test.txt' | path dirname --num-levels 2 --replace /home/viking",
                 result: Some(Value::test_string("/home/viking/code/test.txt")),
             },
         ]
@@ -191,9 +189,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(PathDirname)
     }
 }

@@ -1,58 +1,49 @@
-use crate::LanguageServer;
+use crate::{LanguageServer, span_to_range};
 use lsp_types::{
+    Diagnostic, DiagnosticSeverity, PublishDiagnosticsParams, Uri,
     notification::{Notification, PublishDiagnostics},
-    Diagnostic, DiagnosticSeverity, PublishDiagnosticsParams, Url,
 };
-use miette::{IntoDiagnostic, Result};
-use nu_parser::parse;
-use nu_protocol::{
-    engine::{EngineState, StateWorkingSet},
-    Span, Value,
-};
+use miette::{IntoDiagnostic, Result, miette};
 
 impl LanguageServer {
-    pub(crate) fn publish_diagnostics_for_file(
-        &self,
-        uri: Url,
-        engine_state: &mut EngineState,
-    ) -> Result<()> {
-        let cwd = std::env::current_dir().expect("Could not get current working directory.");
-        engine_state.add_env_var("PWD".into(), Value::test_string(cwd.to_string_lossy()));
+    pub(crate) fn publish_diagnostics_for_file(&mut self, uri: Uri) -> Result<()> {
+        let mut engine_state = self.new_engine_state(Some(&uri));
         engine_state.generate_nu_constant();
 
-        let mut working_set = StateWorkingSet::new(engine_state);
-
-        let Some((rope_of_file, file_path)) = self.rope(&uri) else {
+        let Some((_, span, working_set)) = self.parse_file(&mut engine_state, &uri, true) else {
             return Ok(());
         };
 
-        let contents = rope_of_file.bytes().collect::<Vec<u8>>();
-        let offset = working_set.next_span_start();
-        working_set.files.push(file_path.into(), Span::unknown())?;
-        parse(
-            &mut working_set,
-            Some(&file_path.to_string_lossy()),
-            &contents,
-            false,
-        );
-
         let mut diagnostics = PublishDiagnosticsParams {
-            uri,
+            uri: uri.clone(),
             diagnostics: Vec::new(),
             version: None,
         };
 
+        let docs = match self.docs.lock() {
+            Ok(it) => it,
+            Err(err) => return Err(miette!(err.to_string())),
+        };
+        let file = docs
+            .get_document(&uri)
+            .ok_or_else(|| miette!("\nFailed to get document"))?;
         for err in working_set.parse_errors.iter() {
             let message = err.to_string();
 
             diagnostics.diagnostics.push(Diagnostic {
-                range: Self::span_to_range(
-                    &err.span(),
-                    rope_of_file,
-                    offset,
-                    &self.position_encoding,
-                ),
+                range: span_to_range(&err.span(), file, span.start),
                 severity: Some(DiagnosticSeverity::ERROR),
+                message,
+                ..Default::default()
+            });
+        }
+
+        for warn in working_set.parse_warnings.iter() {
+            let message = warn.to_string();
+
+            diagnostics.diagnostics.push(Diagnostic {
+                range: span_to_range(&warn.span(), file, span.start),
+                severity: Some(DiagnosticSeverity::WARNING),
                 message,
                 ..Default::default()
             });
@@ -69,23 +60,48 @@ impl LanguageServer {
 
 #[cfg(test)]
 mod tests {
-    use assert_json_diff::assert_json_eq;
-    use lsp_types::Url;
-    use nu_test_support::fs::fixtures;
-
+    use crate::path_to_uri;
     use crate::tests::{initialize_language_server, open_unchecked, update};
+    use assert_json_diff::assert_json_eq;
+    use nu_test_support::fs::fixtures;
+    use rstest::rstest;
 
-    #[test]
-    fn publish_diagnostics_variable_does_not_exists() {
-        let (client_connection, _recv) = initialize_language_server(None);
+    #[rstest]
+    #[case::file_with_no_issues("pwd.nu", None, serde_json::json!([]))]
+    #[case::file_fixed_by_update("var.nu", Some(("$env", lsp_types::Range {
+        start: lsp_types::Position { line: 0, character: 6 },
+        end: lsp_types::Position { line: 0, character: 30 },
+    })), serde_json::json!([]))]
+    #[case::variable_does_not_exist("var.nu", None, serde_json::json!([{
+        "range": {
+            "start": { "line": 0, "character": 6 },
+            "end": { "line": 0, "character": 30 }
+        },
+        "message": "Variable not found.",
+        "severity": 1
+    }]))]
+    fn publish_diagnostics(
+        #[case] filename: &str,
+        #[case] update_op: Option<(&str, lsp_types::Range)>,
+        #[case] expected_diagnostics: serde_json::Value,
+    ) {
+        let (client_connection, _recv) = initialize_language_server(None, None);
 
         let mut script = fixtures();
-        script.push("lsp");
-        script.push("diagnostics");
-        script.push("var.nu");
-        let script = Url::from_file_path(script).unwrap();
+        script.push("lsp/diagnostics");
+        script.push(filename);
+        let script = path_to_uri(&script);
 
-        let notification = open_unchecked(&client_connection, script.clone());
+        let mut notification = open_unchecked(&client_connection, script.clone());
+        // For files that need fixing, open first then update
+        if let Some((text, range)) = update_op {
+            notification = update(
+                &client_connection,
+                script.clone(),
+                String::from(text),
+                Some(range),
+            );
+        };
 
         assert_json_eq!(
             notification,
@@ -93,53 +109,7 @@ mod tests {
                 "method": "textDocument/publishDiagnostics",
                 "params": {
                     "uri": script,
-                    "diagnostics": [{
-                        "range": {
-                            "start": { "line": 0, "character": 6 },
-                            "end": { "line": 0, "character": 30 }
-                        },
-                        "message": "Variable not found.",
-                        "severity": 1
-                    }]
-                }
-            })
-        );
-    }
-
-    #[test]
-    fn publish_diagnostics_fixed_unknown_variable() {
-        let (client_connection, _recv) = initialize_language_server(None);
-
-        let mut script = fixtures();
-        script.push("lsp");
-        script.push("diagnostics");
-        script.push("var.nu");
-        let script = Url::from_file_path(script).unwrap();
-
-        open_unchecked(&client_connection, script.clone());
-        let notification = update(
-            &client_connection,
-            script.clone(),
-            String::from("$env"),
-            Some(lsp_types::Range {
-                start: lsp_types::Position {
-                    line: 0,
-                    character: 6,
-                },
-                end: lsp_types::Position {
-                    line: 0,
-                    character: 30,
-                },
-            }),
-        );
-
-        assert_json_eq!(
-            notification,
-            serde_json::json!({
-                "method": "textDocument/publishDiagnostics",
-                "params": {
-                    "uri": script,
-                    "diagnostics": []
+                    "diagnostics": expected_diagnostics
                 }
             })
         );

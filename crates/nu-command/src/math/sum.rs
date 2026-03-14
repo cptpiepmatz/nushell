@@ -1,13 +1,13 @@
 use crate::math::{
-    reducers::{reducer_for, Reduce},
+    reducers::{Reduce, reducer_for},
     utils::run_with_function,
 };
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathSum;
 
-impl Command for SubCommand {
+impl Command for MathSum {
     fn name(&self) -> &str {
         "math sum"
     }
@@ -57,20 +57,20 @@ impl Command for SubCommand {
         run_with_function(call, input, summation)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Sum a list of numbers",
+                description: "Sum a list of numbers.",
                 example: "[1 2 3] | math sum",
                 result: Some(Value::test_int(6)),
             },
             Example {
-                description: "Get the disk usage for the current directory",
+                description: "Get the disk usage for the current directory.",
                 example: "ls | get size | math sum",
                 result: None,
             },
             Example {
-                description: "Compute the sum of each column in a table",
+                description: "Compute the sum of each column in a table.",
                 example: "[[a b]; [1 2] [3 4]] | math sum",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(4),
@@ -91,9 +91,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathSum)
     }
 }

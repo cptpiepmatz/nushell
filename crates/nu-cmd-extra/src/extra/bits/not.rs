@@ -1,5 +1,5 @@
-use super::{get_number_bytes, NumberBytes};
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use super::{NumberBytes, get_number_bytes};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
@@ -39,13 +39,13 @@ impl Command for BitsNot {
             .allow_variants_without_examples(true)
             .switch(
                 "signed",
-                "always treat input number as a signed number",
+                "Always treat input number as a signed number.",
                 Some('s'),
             )
             .named(
                 "number-bytes",
                 SyntaxShape::Int,
-                "the size of unsigned number in bytes, it can be 1, 2, 4, 8, auto",
+                "The size of unsigned number in bytes, it can be 1, 2, 4, 8, auto.",
                 Some('n'),
             )
             .category(Category::Bits)
@@ -73,7 +73,7 @@ impl Command for BitsNot {
         let number_size = get_number_bytes(number_bytes, head)?;
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
 
@@ -85,7 +85,7 @@ impl Command for BitsNot {
         operate(action, args, input, head, engine_state.signals())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Apply logical negation to a list of numbers",
@@ -100,8 +100,7 @@ impl Command for BitsNot {
                 )),
             },
             Example {
-                description:
-                    "Apply logical negation to a list of numbers, treat input as 2 bytes number",
+                description: "Apply logical negation to a list of numbers, treat input as 2 bytes number",
                 example: "[4 3 2] | bits not --number-bytes 2",
                 result: Some(Value::list(
                     vec![
@@ -113,8 +112,7 @@ impl Command for BitsNot {
                 )),
             },
             Example {
-                description:
-                    "Apply logical negation to a list of numbers, treat input as signed number",
+                description: "Apply logical negation to a list of numbers, treat input as signed number",
                 example: "[4 3 2] | bits not --signed",
                 result: Some(Value::list(
                     vec![
@@ -188,9 +186,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(BitsNot {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(BitsNot)
     }
 }

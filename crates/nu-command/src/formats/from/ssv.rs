@@ -16,14 +16,14 @@ impl Command for FromSsv {
             .input_output_types(vec![(Type::String, Type::table())])
             .switch(
                 "noheaders",
-                "don't treat the first row as column names",
+                "Don't treat the first row as column names.",
                 Some('n'),
             )
-            .switch("aligned-columns", "assume columns are aligned", Some('a'))
+            .switch("aligned-columns", "Assume columns are aligned.", Some('a'))
             .named(
                 "minimum-spaces",
                 SyntaxShape::Int,
-                "the minimum spaces to separate columns",
+                "The minimum spaces to separate columns.",
                 Some('m'),
             )
             .category(Category::Formats)
@@ -33,36 +33,33 @@ impl Command for FromSsv {
         "Parse text as space-separated values and create a table. The default minimum number of spaces counted as a separator is 2."
     }
 
-    fn examples(&self) -> Vec<Example> {
-        vec![Example {
-            example: r#"'FOO   BAR
+    fn examples(&self) -> Vec<Example<'_>> {
+        vec![
+            Example {
+                example: r#"'FOO   BAR
 1   2' | from ssv"#,
-            description: "Converts ssv formatted string to table",
-            result: Some(Value::test_list(
-                vec![Value::test_record(record! {
+                description: "Converts ssv formatted string to table.",
+                result: Some(Value::test_list(vec![Value::test_record(record! {
                     "FOO" => Value::test_string("1"),
                     "BAR" => Value::test_string("2"),
-                })],
-            )),
-        }, Example {
-            example: r#"'FOO   BAR
+                })])),
+            },
+            Example {
+                example: r#"'FOO   BAR
 1   2' | from ssv --noheaders"#,
-            description: "Converts ssv formatted string to table but not treating the first row as column names",
-            result: Some(
-                Value::test_list(
-                    vec![
-                        Value::test_record(record! {
-                            "column0" => Value::test_string("FOO"),
-                            "column1" => Value::test_string("BAR"),
-                        }),
-                        Value::test_record(record! {
-                            "column0" => Value::test_string("1"),
-                            "column1" => Value::test_string("2"),
-                        }),
-                    ],
-                )
-            ),
-        }]
+                description: "Converts ssv formatted string to table but not treating the first row as column names.",
+                result: Some(Value::test_list(vec![
+                    Value::test_record(record! {
+                        "column0" => Value::test_string("FOO"),
+                        "column1" => Value::test_string("BAR"),
+                    }),
+                    Value::test_record(record! {
+                        "column0" => Value::test_string("1"),
+                        "column1" => Value::test_string("2"),
+                    }),
+                ])),
+            },
+        ]
     }
 
     fn run(
@@ -170,7 +167,7 @@ fn parse_aligned_columns<'a>(
         let headers: Vec<(String, usize)> = indices
             .iter()
             .enumerate()
-            .map(|(i, position)| (format!("column{}", i), *position))
+            .map(|(i, position)| (format!("column{i}"), *position))
             .collect();
 
         construct(ls.iter().map(|s| s.to_owned()), headers)
@@ -408,9 +405,11 @@ mod tests {
         let trimmed = |s: &str| s.trim() == s;
 
         let result = string_to_table(input, false, true, 2);
-        assert!(result
-            .iter()
-            .all(|row| row.iter().all(|(a, b)| trimmed(a) && trimmed(b))));
+        assert!(
+            result
+                .iter()
+                .all(|row| row.iter().all(|(a, b)| trimmed(a) && trimmed(b)))
+        );
     }
 
     #[test]
@@ -525,9 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(FromSsv {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(FromSsv)
     }
 }

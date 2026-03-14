@@ -7,12 +7,13 @@ pub use conversion::{Column, ColumnMap};
 pub use operations::Axis;
 
 use indexmap::map::IndexMap;
-use nu_protocol::{did_you_mean, PipelineData, Record, ShellError, Span, Value};
+use nu_protocol::{PipelineData, Record, ShellError, Span, Value, did_you_mean};
 use polars::prelude::{
     Column as PolarsColumn, DataFrame, DataType, IntoLazy, PolarsObject, Series,
 };
-use polars_plan::prelude::{lit, Expr, Null};
+use polars_plan::prelude::{Expr, Null, lit};
 use polars_utils::total_ord::{TotalEq, TotalHash};
+use std::fmt;
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -27,8 +28,8 @@ use crate::{Cacheable, PolarsPlugin};
 pub use self::custom_value::NuDataFrameCustomValue;
 
 use super::{
-    cant_convert_err, nu_schema::NuSchema, utils::DEFAULT_ROWS, CustomValueSupport, NuLazyFrame,
-    PolarsPluginObject, PolarsPluginType,
+    CustomValueSupport, NuLazyFrame, PolarsPluginObject, PolarsPluginType, cant_convert_err,
+    nu_schema::NuSchema, utils::DEFAULT_ROWS,
 };
 
 // DataFrameValue is an encapsulation of Nushell Value that can be used
@@ -70,7 +71,7 @@ impl Default for DataFrameValue {
 
 impl PartialEq for DataFrameValue {
     fn eq(&self, other: &Self) -> bool {
-        self.0.partial_cmp(&other.0).map_or(false, Ordering::is_eq)
+        self.0.partial_cmp(&other.0).is_some_and(Ordering::is_eq)
     }
 }
 impl Eq for DataFrameValue {}
@@ -118,6 +119,12 @@ impl From<DataFrame> for NuDataFrame {
     }
 }
 
+impl fmt::Display for NuDataFrame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.df)
+    }
+}
+
 impl NuDataFrame {
     pub fn new(from_lazy: bool, df: DataFrame) -> Self {
         let id = Uuid::new_v4();
@@ -137,7 +144,7 @@ impl NuDataFrame {
     }
 
     pub fn try_from_series(series: Series, span: Span) -> Result<Self, ShellError> {
-        match DataFrame::new(vec![series.into()]) {
+        match DataFrame::new_infer_height(vec![series.into()]) {
             Ok(dataframe) => Ok(NuDataFrame::new(false, dataframe)),
             Err(e) => Err(ShellError::GenericError {
                 error: "Error creating dataframe".into(),
@@ -195,14 +202,15 @@ impl NuDataFrame {
     pub fn try_from_series_vec(columns: Vec<Series>, span: Span) -> Result<Self, ShellError> {
         let columns_converted: Vec<PolarsColumn> = columns.into_iter().map(Into::into).collect();
 
-        let dataframe =
-            DataFrame::new(columns_converted).map_err(|e| ShellError::GenericError {
+        let dataframe = DataFrame::new_infer_height(columns_converted).map_err(|e| {
+            ShellError::GenericError {
                 error: "Error creating dataframe".into(),
                 msg: format!("Unable to create DataFrame: {e}"),
                 span: Some(span),
                 help: None,
                 inner: vec![],
-            })?;
+            }
+        })?;
 
         Ok(Self::new(false, dataframe))
     }
@@ -248,7 +256,7 @@ impl NuDataFrame {
     pub fn columns(&self, span: Span) -> Result<Vec<Column>, ShellError> {
         let height = self.df.height();
         self.df
-            .get_columns()
+            .columns()
             .iter()
             .map(|col| conversion::create_column(col, 0, height, span))
             .collect::<Result<Vec<Column>, ShellError>>()
@@ -270,13 +278,14 @@ impl NuDataFrame {
             }
         })?;
 
-        let df = DataFrame::new(vec![s.clone()]).map_err(|e| ShellError::GenericError {
-            error: "Error creating dataframe".into(),
-            msg: e.to_string(),
-            span: Some(span),
-            help: None,
-            inner: vec![],
-        })?;
+        let df =
+            DataFrame::new_infer_height(vec![s.clone()]).map_err(|e| ShellError::GenericError {
+                error: "Error creating dataframe".into(),
+                msg: e.to_string(),
+                span: Some(span),
+                help: None,
+                inner: vec![],
+            })?;
 
         Ok(Self::new(false, df))
     }
@@ -298,7 +307,7 @@ impl NuDataFrame {
 
         let series = self
             .df
-            .get_columns()
+            .columns()
             .first()
             .expect("We have already checked that the width is 1")
             .as_materialized_series();
@@ -310,7 +319,7 @@ impl NuDataFrame {
         let series = self.as_series(span)?;
         let column = conversion::create_column_from_series(&series, row, row + 1, span)?;
 
-        if column.len() == 0 {
+        if column.is_empty() {
             Err(ShellError::AccessEmptyContent { span })
         } else {
             let value = column
@@ -392,7 +401,7 @@ impl NuDataFrame {
         let mut size: usize = 0;
         let columns = self
             .df
-            .get_columns()
+            .columns()
             .iter()
             .map(
                 |col| match conversion::create_column(col, from_row, upper_row, span) {
@@ -443,7 +452,7 @@ impl NuDataFrame {
     }
 
     pub fn schema(&self) -> NuSchema {
-        NuSchema::new(self.df.schema())
+        NuSchema::new(Arc::clone(self.df.schema()))
     }
 
     /// This differs from try_from_value as it will attempt to coerce the type into a NuDataFrame.
@@ -556,5 +565,32 @@ impl CustomValueSupport for NuDataFrame {
 
     fn get_type_static() -> PolarsPluginType {
         PolarsPluginType::NuDataFrame
+    }
+
+    fn try_from_value(plugin: &PolarsPlugin, value: &Value) -> Result<Self, ShellError> {
+        match value {
+            Value::Custom { val, .. } => {
+                if let Some(cv) = val.as_any().downcast_ref::<Self::CV>() {
+                    Self::try_from_custom_value(plugin, cv)
+                } else {
+                    Err(ShellError::CantConvert {
+                        to_type: Self::get_type_static().to_string(),
+                        from_type: value.get_type().to_string(),
+                        span: value.span(),
+                        help: None,
+                    })
+                }
+            }
+            Value::List { vals, .. } => {
+                let series = conversion::value_to_series("".into(), vals)?;
+                NuDataFrame::try_from_series(series, value.span())
+            }
+            _ => Err(ShellError::CantConvert {
+                to_type: Self::get_type_static().to_string(),
+                from_type: value.get_type().to_string(),
+                span: value.span(),
+                help: None,
+            }),
+        }
     }
 }

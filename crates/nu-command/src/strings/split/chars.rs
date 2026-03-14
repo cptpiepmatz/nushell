@@ -4,9 +4,9 @@ use nu_engine::command_prelude::*;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct SplitChars;
 
-impl Command for SubCommand {
+impl Command for SplitChars {
     fn name(&self) -> &str {
         "split chars"
     }
@@ -21,10 +21,14 @@ impl Command for SubCommand {
                 ),
             ])
             .allow_variants_without_examples(true)
-            .switch("grapheme-clusters", "split on grapheme clusters", Some('g'))
+            .switch(
+                "grapheme-clusters",
+                "Split on grapheme clusters.",
+                Some('g'),
+            )
             .switch(
                 "code-points",
-                "split on code points (default; splits combined characters)",
+                "Split on code points (default; splits combined characters).",
                 Some('c'),
             )
             .category(Category::Strings)
@@ -38,10 +42,10 @@ impl Command for SubCommand {
         vec!["character", "separate", "divide"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Split the string into a list of characters",
+                description: "Split the string into a list of characters.",
                 example: "'hello' | split chars",
                 result: Some(Value::list(
                     vec![
@@ -55,7 +59,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split on grapheme clusters",
+                description: "Split on grapheme clusters.",
                 example: "'🇯🇵ほげ' | split chars --grapheme-clusters",
                 result: Some(Value::list(
                     vec![
@@ -67,7 +71,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split multiple strings into lists of characters",
+                description: "Split multiple strings into lists of characters.",
                 example: "['hello', 'world'] | split chars",
                 result: Some(Value::test_list(vec![
                     Value::test_list(vec![
@@ -134,7 +138,7 @@ fn split_chars_helper(v: &Value, name: Span, graphemes: bool) -> Value {
         Value::Error { error, .. } => Value::error(*error.clone(), span),
         v => {
             let v_span = v.span();
-            if let Ok(s) = v.coerce_str() {
+            if let Ok(s) = v.as_str() {
                 Value::list(
                     if graphemes {
                         s.graphemes(true)
@@ -153,8 +157,9 @@ fn split_chars_helper(v: &Value, name: Span, graphemes: bool) -> Value {
                 )
             } else {
                 Value::error(
-                    ShellError::PipelineMismatch {
+                    ShellError::OnlySupportsThisInputType {
                         exp_input_type: "string".into(),
+                        wrong_type: v.get_type().to_string(),
                         dst_span: name,
                         src_span: v_span,
                     },
@@ -170,9 +175,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(SplitChars)
     }
 }

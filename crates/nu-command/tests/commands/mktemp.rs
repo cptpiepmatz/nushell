@@ -10,7 +10,7 @@ fn creates_temp_file() {
             "mktemp"
         );
         let loc = AbsolutePath::try_new(&output.out).unwrap();
-        println!("{:?}", loc);
+        println!("{loc:?}");
         assert!(loc.exists());
     })
 }
@@ -40,5 +40,18 @@ fn creates_temp_directory() {
         let loc = AbsolutePath::try_new(&output.out).unwrap();
         assert!(loc.exists());
         assert!(loc.is_dir());
+    })
+}
+
+#[test]
+fn doesnt_create_temp_file() {
+    Playground::setup("mktemp_test_1", |dirs, _| {
+        let output = nu!(
+            cwd: dirs.test(),
+            "mktemp --dry"
+        );
+        let loc = AbsolutePath::try_new(&output.out).unwrap();
+        println!("{loc:?}");
+        assert!(!loc.exists());
     })
 }

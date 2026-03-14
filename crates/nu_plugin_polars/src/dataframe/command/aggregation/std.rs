@@ -1,11 +1,11 @@
-use crate::values::{
-    cant_convert_err, Column, CustomValueSupport, NuLazyFrame, PolarsPluginObject, PolarsPluginType,
-};
 use crate::PolarsPlugin;
+use crate::values::{
+    Column, CustomValueSupport, NuLazyFrame, PolarsPluginObject, PolarsPluginType, cant_convert_err,
+};
 use crate::{dataframe::values::NuExpression, values::NuDataFrame};
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Type, Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Value,
 };
 use polars::df;
 
@@ -26,23 +26,26 @@ impl PluginCommand for ExprStd {
         Signature::build(self.name())
             .input_output_types(vec![
                 (
-                    Type::Custom("expression".into()),
-                    Type::Custom("expression".into()),
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
                 ),
                 (
-                    Type::Custom("dataframe".into()),
-                    Type::Custom("dataframe".into()),
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
                 ),
             ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Std value from columns in a dataframe",
-                example:
-                    "[[a b]; [6 2] [4 2] [2 2]] | polars into-df | polars std | polars collect",
+                example: "[[a b]; [6 2] [4 2] [2 2]] | polars into-df | polars std | polars collect",
                 result: Some(
                     NuDataFrame::try_from_columns(
                         vec![
@@ -84,6 +87,7 @@ impl PluginCommand for ExprStd {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         match PolarsPluginObject::try_from_value(plugin, &value)? {
             PolarsPluginObject::NuDataFrame(df) => command_lazy(plugin, engine, call, df.lazy()),
@@ -99,6 +103,7 @@ impl PluginCommand for ExprStd {
             )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

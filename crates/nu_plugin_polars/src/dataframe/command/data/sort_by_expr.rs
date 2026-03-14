@@ -1,13 +1,12 @@
-use crate::values::NuLazyFrame;
+use crate::values::{NuLazyFrame, PolarsPluginType};
 use crate::{
+    PolarsPlugin,
     dataframe::values::{Column, NuDataFrame, NuExpression},
     values::CustomValueSupport,
-    PolarsPlugin,
 };
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 use polars::chunked_array::ops::SortMultipleOptions;
 
@@ -30,72 +29,83 @@ impl PluginCommand for LazySortBy {
             .rest(
                 "sort expression",
                 SyntaxShape::Any,
-                "sort expression for the dataframe",
+                "Sort expression for the dataframe.",
             )
             .named(
                 "reverse",
                 SyntaxShape::List(Box::new(SyntaxShape::Boolean)),
-                "Reverse sorting. Default is false",
+                "Reverse sorting. Default is false.",
                 Some('r'),
             )
             .switch(
                 "nulls-last",
-                "nulls are shown last in the dataframe",
+                "Nulls are shown last in the dataframe.",
                 Some('n'),
             )
-            .switch("maintain-order", "Maintains order during sort", Some('m'))
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .switch("maintain-order", "Maintains order during sort.", Some('m'))
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("lazyframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Sort dataframe by one column",
                 example: "[[a b]; [6 2] [1 4] [4 1]] | polars into-df | polars sort-by a",
                 result: Some(
-                    NuDataFrame::try_from_columns(vec![
-                        Column::new(
-                            "a".to_string(),
-                            vec![Value::test_int(1), Value::test_int(4), Value::test_int(6)],
-                        ),
-                        Column::new(
-                            "b".to_string(),
-                            vec![Value::test_int(4), Value::test_int(1), Value::test_int(2)],
-                        ),
-                    ], None)
+                    NuDataFrame::try_from_columns(
+                        vec![
+                            Column::new(
+                                "a".to_string(),
+                                vec![Value::test_int(1), Value::test_int(4), Value::test_int(6)],
+                            ),
+                            Column::new(
+                                "b".to_string(),
+                                vec![Value::test_int(4), Value::test_int(1), Value::test_int(2)],
+                            ),
+                        ],
+                        None,
+                    )
                     .expect("simple df for test should not fail")
                     .into_value(Span::test_data()),
                 ),
             },
             Example {
                 description: "Sort column using two columns",
-                example:
-                    "[[a b]; [6 2] [1 1] [1 4] [2 4]] | polars into-df | polars sort-by [a b] -r [false true]",
+                example: "[[a b]; [6 2] [1 1] [1 4] [2 4]] | polars into-df | polars sort-by [a b] -r [false true]",
                 result: Some(
-                    NuDataFrame::try_from_columns(vec![
-                        Column::new(
-                            "a".to_string(),
-                            vec![
-                                Value::test_int(1),
-                                Value::test_int(1),
-                                Value::test_int(2),
-                                Value::test_int(6),
-                            ],
-                        ),
-                        Column::new(
-                            "b".to_string(),
-                            vec![
-                                Value::test_int(4),
-                                Value::test_int(1),
-                                Value::test_int(4),
-                                Value::test_int(2),
-                            ],
-                        ),
-                    ], None)
+                    NuDataFrame::try_from_columns(
+                        vec![
+                            Column::new(
+                                "a".to_string(),
+                                vec![
+                                    Value::test_int(1),
+                                    Value::test_int(1),
+                                    Value::test_int(2),
+                                    Value::test_int(6),
+                                ],
+                            ),
+                            Column::new(
+                                "b".to_string(),
+                                vec![
+                                    Value::test_int(4),
+                                    Value::test_int(1),
+                                    Value::test_int(4),
+                                    Value::test_int(2),
+                                ],
+                            ),
+                        ],
+                        None,
+                    )
                     .expect("simple df for test should not fail")
                     .into_value(Span::test_data()),
                 ),
@@ -110,6 +120,7 @@ impl PluginCommand for LazySortBy {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let vals: Vec<Value> = call.rest(0)?;
         let expr_value = Value::list(vals, call.head);
         let expressions = NuExpression::extract_exprs(plugin, expr_value)?;
@@ -143,6 +154,9 @@ impl PluginCommand for LazySortBy {
             nulls_last: vec![nulls_last],
             multithreaded: true,
             maintain_order,
+            // Applying a limit here will result in a panic
+            // it is not supported by polars in this context
+            limit: None,
         };
 
         let pipeline_value = input.into_value(call.head)?;
@@ -153,6 +167,7 @@ impl PluginCommand for LazySortBy {
         );
         lazy.to_pipeline_data(plugin, engine, call.head)
             .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

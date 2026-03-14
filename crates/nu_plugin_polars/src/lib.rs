@@ -1,14 +1,16 @@
+#![allow(clippy::result_large_err)]
 use std::{
     cmp::Ordering,
-    panic::{catch_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind},
 };
 
 use cache::cache_commands;
 pub use cache::{Cache, Cacheable};
 use command::{
-    aggregation::aggregation_commands, boolean::boolean_commands, core::core_commands,
-    data::data_commands, datetime::datetime_commands, index::index_commands,
-    integer::integer_commands, string::string_commands, stub::PolarsCmd,
+    aggregation::aggregation_commands, boolean::boolean_commands,
+    computation::computation_commands, core::core_commands, data::data_commands,
+    datetime::datetime_commands, index::index_commands, integer::integer_commands,
+    list::list_commands, selector::selector_commands, string::string_commands, stub::PolarsCmd,
 };
 use log::debug;
 use nu_plugin::{EngineInterface, Plugin, PluginCommand};
@@ -17,7 +19,9 @@ mod cache;
 mod cloud;
 pub mod dataframe;
 pub use dataframe::*;
-use nu_protocol::{ast::Operator, CustomValue, LabeledError, ShellError, Span, Spanned, Value};
+use nu_protocol::{
+    CustomValue, LabeledError, ShellError, Span, Spanned, Value, ast::Operator, casing::Casing,
+};
 use tokio::runtime::Runtime;
 use values::CustomValueType;
 
@@ -88,11 +92,14 @@ impl Plugin for PolarsPlugin {
         commands.append(&mut aggregation_commands());
         commands.append(&mut boolean_commands());
         commands.append(&mut core_commands());
+        commands.append(&mut computation_commands());
         commands.append(&mut data_commands());
         commands.append(&mut datetime_commands());
         commands.append(&mut index_commands());
         commands.append(&mut integer_commands());
+        commands.append(&mut selector_commands());
         commands.append(&mut string_commands());
+        commands.append(&mut list_commands());
 
         commands.append(&mut cache_commands());
         commands
@@ -103,7 +110,7 @@ impl Plugin for PolarsPlugin {
         engine: &EngineInterface,
         custom_value: Box<dyn CustomValue>,
     ) -> Result<(), LabeledError> {
-        debug!("custom_value_dropped called {:?}", custom_value);
+        debug!("custom_value_dropped called {custom_value:?}");
         if !self.disable_cache_drop {
             let id = CustomValueType::try_from_custom_value(custom_value)?.id();
             let _ = self.cache.remove(engine, &id, false);
@@ -122,6 +129,9 @@ impl Plugin for PolarsPlugin {
             CustomValueType::NuExpression(cv) => cv.custom_value_to_base_value(self, engine),
             CustomValueType::NuLazyGroupBy(cv) => cv.custom_value_to_base_value(self, engine),
             CustomValueType::NuWhen(cv) => cv.custom_value_to_base_value(self, engine),
+            CustomValueType::NuDataType(cv) => cv.custom_value_to_base_value(self, engine),
+            CustomValueType::NuSchema(cv) => cv.custom_value_to_base_value(self, engine),
+            CustomValueType::NuSelector(cv) => cv.custom_value_to_base_value(self, engine),
         };
         Ok(result?)
     }
@@ -149,6 +159,15 @@ impl Plugin for PolarsPlugin {
             CustomValueType::NuWhen(cv) => {
                 cv.custom_value_operation(self, engine, left.span, operator, right)
             }
+            CustomValueType::NuDataType(cv) => {
+                cv.custom_value_operation(self, engine, left.span, operator, right)
+            }
+            CustomValueType::NuSchema(cv) => {
+                cv.custom_value_operation(self, engine, left.span, operator, right)
+            }
+            CustomValueType::NuSelector(cv) => {
+                cv.custom_value_operation(self, engine, left.span, operator, right)
+            }
         };
         Ok(result?)
     }
@@ -158,6 +177,8 @@ impl Plugin for PolarsPlugin {
         engine: &EngineInterface,
         custom_value: Spanned<Box<dyn CustomValue>>,
         index: Spanned<usize>,
+        // TODO: check if we should respect these
+        _optional: bool,
     ) -> Result<Value, LabeledError> {
         let result = match CustomValueType::try_from_custom_value(custom_value.item)? {
             CustomValueType::NuDataFrame(cv) => {
@@ -173,6 +194,15 @@ impl Plugin for PolarsPlugin {
                 cv.custom_value_follow_path_int(self, engine, custom_value.span, index)
             }
             CustomValueType::NuWhen(cv) => {
+                cv.custom_value_follow_path_int(self, engine, custom_value.span, index)
+            }
+            CustomValueType::NuDataType(cv) => {
+                cv.custom_value_follow_path_int(self, engine, custom_value.span, index)
+            }
+            CustomValueType::NuSchema(cv) => {
+                cv.custom_value_follow_path_int(self, engine, custom_value.span, index)
+            }
+            CustomValueType::NuSelector(cv) => {
                 cv.custom_value_follow_path_int(self, engine, custom_value.span, index)
             }
         };
@@ -184,6 +214,9 @@ impl Plugin for PolarsPlugin {
         engine: &EngineInterface,
         custom_value: Spanned<Box<dyn CustomValue>>,
         column_name: Spanned<String>,
+        // TODO: check if we should respect these
+        _optional: bool,
+        _casing: Casing,
     ) -> Result<Value, LabeledError> {
         let result = match CustomValueType::try_from_custom_value(custom_value.item)? {
             CustomValueType::NuDataFrame(cv) => {
@@ -199,6 +232,15 @@ impl Plugin for PolarsPlugin {
                 cv.custom_value_follow_path_string(self, engine, custom_value.span, column_name)
             }
             CustomValueType::NuWhen(cv) => {
+                cv.custom_value_follow_path_string(self, engine, custom_value.span, column_name)
+            }
+            CustomValueType::NuDataType(cv) => {
+                cv.custom_value_follow_path_string(self, engine, custom_value.span, column_name)
+            }
+            CustomValueType::NuSchema(cv) => {
+                cv.custom_value_follow_path_string(self, engine, custom_value.span, column_name)
+            }
+            CustomValueType::NuSelector(cv) => {
                 cv.custom_value_follow_path_string(self, engine, custom_value.span, column_name)
             }
         };
@@ -225,6 +267,13 @@ impl Plugin for PolarsPlugin {
                 cv.custom_value_partial_cmp(self, engine, other_value)
             }
             CustomValueType::NuWhen(cv) => cv.custom_value_partial_cmp(self, engine, other_value),
+            CustomValueType::NuDataType(cv) => {
+                cv.custom_value_partial_cmp(self, engine, other_value)
+            }
+            CustomValueType::NuSchema(cv) => cv.custom_value_partial_cmp(self, engine, other_value),
+            CustomValueType::NuSelector(cv) => {
+                cv.custom_value_partial_cmp(self, engine, other_value)
+            }
         };
         Ok(result?)
     }
@@ -251,7 +300,7 @@ pub mod test {
     use super::*;
     use crate::values::PolarsPluginObject;
     use nu_plugin_test_support::PluginTest;
-    use nu_protocol::{engine::Command, ShellError, Span};
+    use nu_protocol::{ShellError, Span, engine::Command};
 
     impl PolarsPlugin {
         /// Creates a new polars plugin in test mode

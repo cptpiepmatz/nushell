@@ -122,8 +122,8 @@ fn const_string_interpolation_date() {
 
 #[test]
 fn const_string_interpolation_filesize() {
-    let actual = nu!(r#"const s = $"(2kb)"; $s"#);
-    assert_eq!(actual.out, "2.0 KiB");
+    let actual = nu!(r#"const s = $"(2kB)"; $s"#);
+    assert_eq!(actual.out, "2.0 kB");
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn const_unary_operator(#[case] inp: &[&str], #[case] expect: &str) {
 #[rstest]
 #[case(&["const x = 1 + 2", "$x"], "3")]
 #[case(&["const x = 1 * 2", "$x"], "2")]
-#[case(&["const x = 4 / 2", "$x"], "2")]
+#[case(&["const x = 4 / 2", "$x"], "2.0")]
 #[case(&["const x = 4 mod 3", "$x"], "1")]
 #[case(&["const x = 5.0 / 2.0", "$x"], "2.5")]
 #[case(&[r#"const x = "a" + "b" "#, "$x"], "ab")]
@@ -167,7 +167,7 @@ fn const_binary_operator(#[case] inp: &[&str], #[case] expect: &str) {
 #[case(&["const x = 1 / 0", "$x"], "division by zero")]
 #[case(&["const x = 10 ** 10000000", "$x"], "pow operation overflowed")]
 #[case(&["const x = 2 ** 62 * 2", "$x"], "multiply operation overflowed")]
-#[case(&["const x = 1 ++ 0", "$x"], "doesn't support this value")]
+#[case(&["const x = 1 ++ 0", "$x"], "nu::parser::operator_unsupported_type")]
 fn const_operator_error(#[case] inp: &[&str], #[case] expect: &str) {
     let actual = nu!(&inp.join("; "));
     assert!(actual.err.contains(expect));
@@ -347,9 +347,8 @@ fn const_captures_in_closures_work() {
     assert_eq!(actual.out, "hello world");
 }
 
-#[ignore = "TODO: Need to fix `overlay hide` to hide the constants brought by `overlay use`"]
 #[test]
-fn complex_const_overlay_use_hide() {
+fn complex_const_overlay_use() {
     let inp = &[MODULE_SETUP, "overlay use spam", "$X"];
     let actual = nu!(&inp.join("; "));
     assert_eq!(actual.out, "x");
@@ -365,11 +364,15 @@ fn complex_const_overlay_use_hide() {
     let inp = &[
         MODULE_SETUP,
         "overlay use spam",
-        "($eggs.bacon.none | is-empty)",
+        "($eggs.bacon not-has 'none')",
     ];
     let actual = nu!(&inp.join("; "));
     assert_eq!(actual.out, "true");
+}
 
+#[ignore = "TODO: `overlay hide` should be possible to use after `overlay use` in the same source unit."]
+#[test]
+fn overlay_use_hide_in_single_source_unit() {
     let inp = &[MODULE_SETUP, "overlay use spam", "overlay hide", "$eggs"];
     let actual = nu!(&inp.join("; "));
     assert!(actual.err.contains("nu::parser::variable_not_found"));
@@ -407,6 +410,15 @@ fn if_const() {
     assert_eq!(actual.out, "no!");
 }
 
+#[rstest]
+#[case(&"const x = if true ()", "expected block, found nothing")]
+#[case(&"const x = if true {foo: bar}", "expected block, found record")]
+#[case(&"const x = if true {1: 2}", "expected block")]
+fn if_const_error(#[case] inp: &str, #[case] expect: &str) {
+    let actual = nu!(inp);
+    assert!(actual.err.contains(expect));
+}
+
 #[test]
 fn const_glob_type() {
     let actual = nu!("const x: glob = 'aa'; $x | describe");
@@ -432,4 +444,13 @@ fn const_raw_string() {
 fn const_takes_pipeline() {
     let actual = nu!(r#"const list = 'bar_baz_quux' | split row '_'; $list | length"#);
     assert_eq!(actual.out, "3");
+}
+
+#[test]
+fn const_const() {
+    let actual = nu!(r#"const y = (const x = "foo"; $x + $x); $y"#);
+    assert_eq!(actual.out, "foofoo");
+
+    let actual = nu!(r#"const y = (const x = "foo"; $x + $x); $x"#);
+    assert!(actual.err.contains("nu::parser::variable_not_found"));
 }

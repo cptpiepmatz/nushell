@@ -2,8 +2,8 @@
 
 use nu_plugin_protocol::{ByteStreamInfo, ListStreamInfo, PipelineDataHeader, StreamMessage};
 use nu_protocol::{
-    engine::Sequence, ByteStream, IntoSpanned, ListStream, PipelineData, Reader, ShellError,
-    Signals,
+    ByteStream, ListStream, PipelineData, Reader, ShellError, Signals, engine::Sequence,
+    shell_error::io::IoError,
 };
 use std::{
     io::{Read, Write},
@@ -80,8 +80,8 @@ where
     }
 
     fn flush(&self) -> Result<(), ShellError> {
-        self.0.lock().flush().map_err(|err| ShellError::IOError {
-            msg: err.to_string(),
+        self.0.lock().flush().map_err(|err| {
+            ShellError::Io(IoError::new_internal(err, "PluginWrite could not flush"))
         })
     }
 
@@ -106,8 +106,8 @@ where
         let mut lock = self.0.lock().map_err(|_| ShellError::NushellFailed {
             msg: "writer mutex poisoned".into(),
         })?;
-        lock.flush().map_err(|err| ShellError::IOError {
-            msg: err.to_string(),
+        lock.flush().map_err(|err| {
+            ShellError::Io(IoError::new_internal(err, "PluginWrite could not flush"))
         })
     }
 }
@@ -176,20 +176,20 @@ pub trait InterfaceManager {
         signals: &Signals,
     ) -> Result<PipelineData, ShellError> {
         self.prepare_pipeline_data(match header {
-            PipelineDataHeader::Empty => PipelineData::Empty,
-            PipelineDataHeader::Value(value, metadata) => PipelineData::Value(value, metadata),
+            PipelineDataHeader::Empty => PipelineData::empty(),
+            PipelineDataHeader::Value(value, metadata) => PipelineData::value(value, metadata),
             PipelineDataHeader::ListStream(info) => {
                 let handle = self.stream_manager().get_handle();
                 let reader = handle.read_stream(info.id, self.get_interface())?;
                 let ls = ListStream::new(reader, info.span, signals.clone());
-                PipelineData::ListStream(ls, info.metadata)
+                PipelineData::list_stream(ls, info.metadata)
             }
             PipelineDataHeader::ByteStream(info) => {
                 let handle = self.stream_manager().get_handle();
                 let reader = handle.read_stream(info.id, self.get_interface())?;
                 let bs =
                     ByteStream::from_result_iter(reader, info.span, signals.clone(), info.type_);
-                PipelineData::ByteStream(bs, info.metadata)
+                PipelineData::byte_stream(bs, info.metadata)
             }
         })
     }
@@ -332,7 +332,7 @@ where
                 writer.write_all(std::iter::from_fn(move || match reader.read(buf) {
                     Ok(0) => None,
                     Ok(len) => Some(Ok(buf[..len].to_vec())),
-                    Err(err) => Some(Err(ShellError::from(err.into_spanned(span)))),
+                    Err(err) => Some(Err(ShellError::from(IoError::new(err, span, None)))),
                 }))?;
                 Ok(())
             }
@@ -357,6 +357,12 @@ where
                             log::warn!("Error while writing pipeline in background: {err}");
                         }
                         result
+                    })
+                    .map_err(|err| {
+                        IoError::new_internal(
+                            err,
+                            "Could not spawn plugin stream background writer",
+                        )
                     })?,
             )),
         }

@@ -3,9 +3,9 @@ use nu_engine::command_prelude::*;
 use nu_protocol::format_duration_as_timeperiod;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct IntoRecord;
 
-impl Command for SubCommand {
+impl Command for IntoRecord {
     fn name(&self) -> &str {
         "into record"
     }
@@ -22,7 +22,7 @@ impl Command for SubCommand {
     }
 
     fn description(&self) -> &str {
-        "Convert value to record."
+        "Convert value to a record."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -39,17 +39,17 @@ impl Command for SubCommand {
         into_record(call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Convert from one row table to record",
+                description: "Convert from one row table to record.",
                 example: "[[value]; [false]] | into record",
                 result: Some(Value::test_record(record! {
                     "value" => Value::test_bool(false),
                 })),
             },
             Example {
-                description: "Convert from list of records to record",
+                description: "Convert from list of records to record.",
                 example: "[{foo: bar} {baz: quux}] | into record",
                 result: Some(Value::test_record(record! {
                     "foo" => Value::test_string("bar"),
@@ -57,7 +57,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "Convert from list of pairs into record",
+                description: "Convert from list of pairs into record.",
                 example: "[[foo bar] [baz quux]] | into record",
                 result: Some(Value::test_record(record! {
                     "foo" => Value::test_string("bar"),
@@ -65,7 +65,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "convert duration to record (weeks max)",
+                description: "convert duration to record (weeks max).",
                 example: "(-500day - 4hr - 5sec) | into record",
                 result: Some(Value::test_record(record! {
                     "week" =>   Value::test_int(71),
@@ -76,7 +76,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "convert record to record",
+                description: "convert record to record.",
                 example: "{a: 1, b: 2} | into record",
                 result: Some(Value::test_record(record! {
                     "a" =>  Value::test_int(1),
@@ -84,7 +84,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "convert date to record",
+                description: "convert date to record.",
                 example: "2020-04-12T22:10:57+02:00 | into record",
                 result: Some(Value::test_record(record! {
                     "year" =>     Value::test_int(2020),
@@ -100,7 +100,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "convert date components to table columns",
+                description: "convert date components to table columns.",
                 example: "2020-04-12T22:10:57+02:00 | into record | transpose | transpose -r",
                 result: None,
             },
@@ -171,7 +171,7 @@ fn into_record(call: &Call, input: PipelineData) -> Result<PipelineData, ShellEr
                                 item.get_type(),
                             ),
                             span,
-                        })
+                        });
                     }
                 }
             }
@@ -240,9 +240,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(IntoRecord)
     }
 }

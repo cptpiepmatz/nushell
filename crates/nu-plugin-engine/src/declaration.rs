@@ -1,6 +1,10 @@
 use nu_engine::{command_prelude::*, get_eval_expression};
-use nu_plugin_protocol::{CallInfo, EvaluatedCall};
-use nu_protocol::{engine::CommandType, PluginIdentity, PluginSignature};
+use nu_plugin_protocol::{
+    CallInfo, DynamicCompletionCall, EvaluatedCall, GetCompletionArgType, GetCompletionInfo,
+};
+use nu_protocol::engine::ArgType;
+use nu_protocol::{DynamicCompletionCallRef, DynamicSuggestion};
+use nu_protocol::{PluginIdentity, PluginSignature, engine::CommandType};
 use std::sync::Arc;
 
 use crate::{GetPlugin, PluginExecutionCommandContext, PluginSource};
@@ -49,7 +53,7 @@ impl Command for PluginDeclaration {
             .collect()
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         let mut res = vec![];
         for e in self.signature.examples.iter() {
             res.push(Example {
@@ -122,5 +126,49 @@ impl Command for PluginDeclaration {
 
     fn plugin_identity(&self) -> Option<&PluginIdentity> {
         Some(&self.source.identity)
+    }
+
+    #[expect(deprecated, reason = "internal usage")]
+    fn get_dynamic_completion(
+        &self,
+        engine_state: &EngineState,
+        stack: &mut Stack,
+        call: DynamicCompletionCallRef,
+        arg_type: &ArgType,
+        _experimental: nu_protocol::engine::ExperimentalMarker,
+    ) -> Result<Option<Vec<DynamicSuggestion>>, ShellError> {
+        // Get the engine config
+        let engine_config = stack.get_config(engine_state);
+
+        // Get, or start, the plugin.
+        let plugin = self
+            .source
+            .persistent(None)
+            .and_then(|p| {
+                // Set the garbage collector config from the local config before running
+                p.set_gc_config(engine_config.plugin_gc.get(p.identity().name()));
+                p.get_plugin(Some((engine_state, stack)))
+            })
+            .map_err(|err| ShellError::GenericError {
+                error: "failed to get custom completion".to_string(),
+                msg: err.to_string(),
+                span: None,
+                help: None,
+                inner: vec![],
+            })?;
+
+        let arg_info = match arg_type {
+            ArgType::Flag(flag_name) => GetCompletionArgType::Flag(flag_name.to_string()),
+            ArgType::Positional(index) => GetCompletionArgType::Positional(*index),
+        };
+        plugin.get_dynamic_completion(GetCompletionInfo {
+            name: self.name.clone(),
+            arg_type: arg_info,
+            call: DynamicCompletionCall {
+                call: call.call.clone(),
+                strip: call.strip,
+                pos: call.pos,
+            },
+        })
     }
 }

@@ -1,14 +1,13 @@
-use crate::eval_ir_block;
+use crate::eval_ir::eval_ir_block;
 #[allow(deprecated)]
 use crate::get_full_help;
-use nu_path::{expand_path_with, AbsolutePathBuf};
 use nu_protocol::{
+    BlockId, Config, ENV_VARIABLE_ID, IntoPipelineData, PipelineData, PipelineExecutionData,
+    ShellError, Span, Value, VarId,
     ast::{Assignment, Block, Call, Expr, Expression, ExternalArgument, PathMember},
     debugger::DebugContext,
     engine::{Closure, EngineState, Stack},
     eval_base::Eval,
-    BlockId, Config, DataSource, IntoPipelineData, PipelineData, PipelineMetadata, ShellError,
-    Span, Type, Value, VarId, ENV_VARIABLE_ID,
 };
 use nu_utils::IgnoreCaseExt;
 use std::sync::Arc;
@@ -19,7 +18,7 @@ pub fn eval_call<D: DebugContext>(
     call: &Call,
     input: PipelineData,
 ) -> Result<PipelineData, ShellError> {
-    engine_state.signals().check(call.head)?;
+    engine_state.signals().check(&call.head)?;
     let decl = engine_state.get_decl(call.decl_id);
 
     if !decl.is_known_external() && call.named_iter().any(|(flag, _, _)| flag.item == "help") {
@@ -65,24 +64,13 @@ pub fn eval_call<D: DebugContext>(
             if let Some(arg) = call.positional_nth(param_idx) {
                 let result = eval_expression::<D>(engine_state, caller_stack, arg)?;
                 let param_type = param.shape.to_type();
-                if required && !result.get_type().is_subtype(&param_type) {
-                    // need to check if result is an empty list, and param_type is table or list
-                    // nushell needs to pass type checking for the case.
-                    let empty_list_matches = result
-                        .as_list()
-                        .map(|l| {
-                            l.is_empty() && matches!(param_type, Type::List(_) | Type::Table(_))
-                        })
-                        .unwrap_or(false);
-
-                    if !empty_list_matches {
-                        return Err(ShellError::CantConvert {
-                            to_type: param.shape.to_type().to_string(),
-                            from_type: result.get_type().to_string(),
-                            span: result.span(),
-                            help: None,
-                        });
-                    }
+                if required && !result.is_subtype_of(&param_type) {
+                    return Err(ShellError::CantConvert {
+                        to_type: param.shape.to_type().to_string(),
+                        from_type: result.get_type().to_string(),
+                        span: result.span(),
+                        help: None,
+                    });
                 }
                 callee_stack.add_var(var_id, result);
             } else if let Some(value) = &param.default_value {
@@ -161,7 +149,8 @@ pub fn eval_call<D: DebugContext>(
         }
 
         let result =
-            eval_block_with_early_return::<D>(engine_state, &mut callee_stack, block, input);
+            eval_block_with_early_return::<D>(engine_state, &mut callee_stack, block, input)
+                .map(|p| p.body);
 
         if block.redirect_env {
             redirect_env(engine_state, caller_stack, &callee_stack);
@@ -279,35 +268,36 @@ pub fn eval_expression_with_input<D: DebugContext>(
                     // FIXME: protect this collect with ctrl-c
                     input = eval_subexpression::<D>(engine_state, stack, block, input)?
                         .into_value(*span)?
-                        .follow_cell_path(&full_cell_path.tail, false)?
+                        .follow_cell_path(&full_cell_path.tail)?
+                        .into_owned()
                         .into_pipeline_data()
                 } else {
                     input = eval_subexpression::<D>(engine_state, stack, block, input)?;
                 }
             }
             _ => {
+                let input_value = input.into_value(expr.span)?;
+                stack.add_var(nu_protocol::IN_VARIABLE_ID, input_value);
                 input = eval_expression::<D>(engine_state, stack, expr)?.into_pipeline_data();
             }
         },
 
+        Expr::StringInterpolation(_) | Expr::GlobInterpolation(_, _) => {
+            let input_value = input.into_value(expr.span)?;
+            stack.add_var(nu_protocol::IN_VARIABLE_ID, input_value);
+            let value = eval_expression::<D>(engine_state, stack, expr)?;
+            input = PipelineData::Value(value, None);
+        }
+
         _ => {
-            input = eval_expression::<D>(engine_state, stack, expr)?.into_pipeline_data();
+            let input_value = input.into_value(expr.span)?;
+            stack.add_var(nu_protocol::IN_VARIABLE_ID, input_value);
+            let value = eval_expression::<D>(engine_state, stack, expr)?;
+            input = PipelineData::Value(value, None);
         }
     };
 
     Ok(input)
-}
-
-pub fn eval_block_with_early_return<D: DebugContext>(
-    engine_state: &EngineState,
-    stack: &mut Stack,
-    block: &Block,
-    input: PipelineData,
-) -> Result<PipelineData, ShellError> {
-    match eval_block::<D>(engine_state, stack, block, input) {
-        Err(ShellError::Return { span: _, value }) => Ok(PipelineData::Value(*value, None)),
-        x => x,
-    }
 }
 
 pub fn eval_block<D: DebugContext>(
@@ -315,12 +305,30 @@ pub fn eval_block<D: DebugContext>(
     stack: &mut Stack,
     block: &Block,
     input: PipelineData,
-) -> Result<PipelineData, ShellError> {
+) -> Result<PipelineExecutionData, ShellError> {
     let result = eval_ir_block::<D>(engine_state, stack, block, input);
+    if let Err(ShellError::Exit { code }) = &result {
+        std::process::exit(*code)
+    }
     if let Err(err) = &result {
         stack.set_last_error(err);
     }
     result
+}
+
+pub fn eval_block_with_early_return<D: DebugContext>(
+    engine_state: &EngineState,
+    stack: &mut Stack,
+    block: &Block,
+    input: PipelineData,
+) -> Result<PipelineExecutionData, ShellError> {
+    match eval_block::<D>(engine_state, stack, block, input) {
+        Err(ShellError::Return { span: _, value }) => Ok(PipelineExecutionData::from(
+            PipelineData::value(*value, None),
+        )),
+        Err(ShellError::Exit { code }) => std::process::exit(code),
+        x => x,
+    }
 }
 
 pub fn eval_collect<D: DebugContext>(
@@ -333,15 +341,7 @@ pub fn eval_collect<D: DebugContext>(
     // Evaluate the expression with the variable set to the collected input
     let span = input.span().unwrap_or(Span::unknown());
 
-    let metadata = match input.metadata() {
-        // Remove the `FilePath` metadata, because after `collect` it's no longer necessary to
-        // check where some input came from.
-        Some(PipelineMetadata {
-            data_source: DataSource::FilePath(_),
-            content_type: None,
-        }) => None,
-        other => other,
-    };
+    let metadata = input.metadata().and_then(|m| m.for_collect());
 
     let input = input.into_value(span)?;
 
@@ -366,7 +366,7 @@ pub fn eval_subexpression<D: DebugContext>(
     block: &Block,
     input: PipelineData,
 ) -> Result<PipelineData, ShellError> {
-    eval_block::<D>(engine_state, stack, block, input)
+    eval_block::<D>(engine_state, stack, block, input).map(|p| p.body)
 }
 
 pub fn eval_variable(
@@ -412,45 +412,6 @@ impl Eval for EvalRuntime {
 
     fn get_config(engine_state: Self::State<'_>, stack: &mut Stack) -> Arc<Config> {
         stack.get_config(engine_state)
-    }
-
-    fn eval_filepath(
-        engine_state: &EngineState,
-        stack: &mut Stack,
-        path: String,
-        quoted: bool,
-        span: Span,
-    ) -> Result<Value, ShellError> {
-        if quoted {
-            Ok(Value::string(path, span))
-        } else {
-            let cwd = engine_state.cwd(Some(stack))?;
-            let path = expand_path_with(path, cwd, true);
-
-            Ok(Value::string(path.to_string_lossy(), span))
-        }
-    }
-
-    fn eval_directory(
-        engine_state: Self::State<'_>,
-        stack: &mut Self::MutState,
-        path: String,
-        quoted: bool,
-        span: Span,
-    ) -> Result<Value, ShellError> {
-        if path == "-" {
-            Ok(Value::string("-", span))
-        } else if quoted {
-            Ok(Value::string(path, span))
-        } else {
-            let cwd = engine_state
-                .cwd(Some(stack))
-                .map(AbsolutePathBuf::into_std_path_buf)
-                .unwrap_or_default();
-            let path = expand_path_with(path, cwd, true);
-
-            Ok(Value::string(path.to_string_lossy(), span))
-        }
     }
 
     fn eval_var(
@@ -531,11 +492,11 @@ impl Eval for EvalRuntime {
 
         let rhs = match assignment {
             Assignment::Assign => rhs,
-            Assignment::PlusAssign => {
+            Assignment::AddAssign => {
                 let lhs = eval_expression::<D>(engine_state, stack, lhs)?;
                 lhs.add(op_span, &rhs, op_span)?
             }
-            Assignment::MinusAssign => {
+            Assignment::SubtractAssign => {
                 let lhs = eval_expression::<D>(engine_state, stack, lhs)?;
                 lhs.sub(op_span, &rhs, op_span)?
             }
@@ -547,7 +508,7 @@ impl Eval for EvalRuntime {
                 let lhs = eval_expression::<D>(engine_state, stack, lhs)?;
                 lhs.div(op_span, &rhs, op_span)?
             }
-            Assignment::ConcatAssign => {
+            Assignment::ConcatenateAssign => {
                 let lhs = eval_expression::<D>(engine_state, stack, lhs)?;
                 lhs.concat(op_span, &rhs, op_span)?
             }
@@ -602,8 +563,11 @@ impl Eval for EvalRuntime {
 
                                 // Retrieve the updated environment value.
                                 lhs.upsert_data_at_cell_path(&cell_path.tail, rhs)?;
-                                let value =
-                                    lhs.follow_cell_path(&[cell_path.tail[0].clone()], true)?;
+                                let value = lhs.follow_cell_path(&[{
+                                    let mut pm = cell_path.tail[0].clone();
+                                    pm.make_insensitive();
+                                    pm
+                                }])?;
 
                                 // Reject attempts to set automatic environment variables.
                                 if is_automatic_env_var(&original_key) {
@@ -615,7 +579,7 @@ impl Eval for EvalRuntime {
 
                                 let is_config = original_key == "config";
 
-                                stack.add_env_var(original_key, value);
+                                stack.add_env_var(original_key, value.into_owned());
 
                                 // Trigger the update to config, if we modified that.
                                 if is_config {
@@ -653,17 +617,17 @@ impl Eval for EvalRuntime {
             .get_block(block_id)
             .captures
             .iter()
-            .map(|&id| {
+            .map(|(id, span)| {
                 stack
-                    .get_var(id, span)
+                    .get_var(*id, *span)
                     .or_else(|_| {
                         engine_state
-                            .get_var(id)
+                            .get_var(*id)
                             .const_val
                             .clone()
-                            .ok_or(ShellError::VariableNotFoundAtRuntime { span })
+                            .ok_or(ShellError::VariableNotFoundAtRuntime { span: *span })
                     })
-                    .map(|var| (id, var))
+                    .map(|var| (*id, var))
             })
             .collect::<Result<_, _>>()?;
 

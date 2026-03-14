@@ -18,18 +18,26 @@ impl Command for FromNuon {
             .category(Category::Formats)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "'{ a:1 }' | from nuon",
-                description: "Converts nuon formatted string to table",
+                description: "Converts nuon formatted string to table.",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
                 })),
             },
             Example {
                 example: "'{ a:1, b: [1, 2] }' | from nuon",
-                description: "Converts nuon formatted string to table",
+                description: "Converts nuon formatted string to table.",
+                result: Some(Value::test_record(record! {
+                    "a" => Value::test_int(1),
+                    "b" => Value::test_list(vec![Value::test_int(1), Value::test_int(2)]),
+                })),
+            },
+            Example {
+                example: "'{a:1,b:[1,2]}' | from nuon",
+                description: "Converts raw nuon formatted string to table.",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
                     "b" => Value::test_list(vec![Value::test_int(1), Value::test_int(2)]),
@@ -66,15 +74,14 @@ impl Command for FromNuon {
 mod test {
     use nu_cmd_lang::eval_pipeline_without_terminal_expression;
 
+    use crate::Reject;
     use crate::{Metadata, MetadataSet};
 
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(FromNuon {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(FromNuon)
     }
 
     #[test]
@@ -86,6 +93,7 @@ mod test {
             working_set.add_decl(Box::new(FromNuon {}));
             working_set.add_decl(Box::new(Metadata {}));
             working_set.add_decl(Box::new(MetadataSet {}));
+            working_set.add_decl(Box::new(Reject {}));
 
             working_set.render()
         };
@@ -94,14 +102,16 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = r#"'[[a, b]; [1, 2]]' | metadata set --content-type 'application/x-nuon' --datasource-ls | from nuon | metadata | $in"#;
+        let cmd = r#"'[[a, b]; [1, 2]]' | metadata set --content-type 'application/x-nuon' --path-columns [name] | from nuon | metadata | reject span | $in"#;
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(record!("source" => Value::test_string("ls"))),
+            Value::test_record(
+                record!("path_columns" => Value::test_list(vec![Value::test_string("name")]))
+            ),
             result.expect("There should be a result")
         )
     }

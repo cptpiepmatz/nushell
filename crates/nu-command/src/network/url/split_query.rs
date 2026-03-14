@@ -3,9 +3,9 @@ use nu_engine::command_prelude::*;
 use super::query::query_string_to_table;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct UrlSplitQuery;
 
-impl Command for SubCommand {
+impl Command for UrlSplitQuery {
     fn name(&self) -> &str {
         "url split-query"
     }
@@ -27,49 +27,49 @@ impl Command for SubCommand {
         vec!["convert", "record", "table"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Outputs a table representing the contents of this query string",
+                description: "Outputs a table representing the contents of this query string.",
                 example: r#""mode=normal&userid=31415" | url split-query"#,
                 result: Some(Value::test_list(vec![
-                    Value::test_record(record!{
+                    Value::test_record(record! {
                         "key" => Value::test_string("mode"),
                         "value" => Value::test_string("normal"),
                     }),
-                    Value::test_record(record!{
+                    Value::test_record(record! {
                         "key" => Value::test_string("userid"),
                         "value" => Value::test_string("31415"),
-                    })
+                    }),
                 ])),
             },
             Example {
-                description: "Outputs a table representing the contents of this query string, url-decoding the values",
+                description: "Outputs a table representing the contents of this query string, url-decoding the values.",
                 example: r#""a=AT%26T&b=AT+T" | url split-query"#,
                 result: Some(Value::test_list(vec![
-                    Value::test_record(record!{
+                    Value::test_record(record! {
                         "key" => Value::test_string("a"),
                         "value" => Value::test_string("AT&T"),
                     }),
-                    Value::test_record(record!{
+                    Value::test_record(record! {
                         "key" => Value::test_string("b"),
                         "value" => Value::test_string("AT T"),
                     }),
                 ])),
             },
             Example {
-                description: "Outputs a table representing the contents of this query string",
+                description: "Outputs a table representing the contents of this query string.",
                 example: r#""a=one&a=two&b=three" | url split-query"#,
                 result: Some(Value::test_list(vec![
-                    Value::test_record(record!{
+                    Value::test_record(record! {
                         "key" => Value::test_string("a"),
                         "value" => Value::test_string("one"),
                     }),
-                    Value::test_record(record!{
+                    Value::test_record(record! {
                         "key" => Value::test_string("a"),
                         "value" => Value::test_string("two"),
                     }),
-                    Value::test_record(record!{
+                    Value::test_record(record! {
                         "key" => Value::test_string("b"),
                         "value" => Value::test_string("three"),
                     }),
@@ -89,7 +89,7 @@ impl Command for SubCommand {
         let span = value.span();
         let query = value.to_expanded_string("", &stack.get_config(engine_state));
         let table = query_string_to_table(&query, call.head, span)?;
-        Ok(PipelineData::Value(table, None))
+        Ok(PipelineData::value(table, None))
     }
 }
 
@@ -98,9 +98,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(UrlSplitQuery)
     }
 }

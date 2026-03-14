@@ -1,7 +1,6 @@
-use std::{thread, time::Duration};
-
 use mockito::Server;
-use nu_test_support::{nu, pipeline};
+use nu_test_support::nu;
+use std::{thread, time::Duration};
 
 #[test]
 fn http_get_is_success() {
@@ -9,15 +8,7 @@ fn http_get_is_success() {
 
     let _mock = server.mock("GET", "/").with_body("foo").create();
 
-    let actual = nu!(pipeline(
-        format!(
-            r#"
-        http get {url}
-        "#,
-            url = server.url()
-        )
-        .as_str()
-    ));
+    let actual = nu!(format!(r#"http get {url}"#, url = server.url()));
 
     assert_eq!(actual.out, "foo")
 }
@@ -28,15 +19,7 @@ fn http_get_failed_due_to_server_error() {
 
     let _mock = server.mock("GET", "/").with_status(400).create();
 
-    let actual = nu!(pipeline(
-        format!(
-            r#"
-        http get {url}
-        "#,
-            url = server.url()
-        )
-        .as_str()
-    ));
+    let actual = nu!(format!(r#"http get {url}"#, url = server.url()));
 
     assert!(actual.err.contains("Bad request (400)"))
 }
@@ -51,15 +34,7 @@ fn http_get_with_accept_errors() {
         .with_body("error body")
         .create();
 
-    let actual = nu!(pipeline(
-        format!(
-            r#"
-        http get -e {url}
-        "#,
-            url = server.url()
-        )
-        .as_str()
-    ));
+    let actual = nu!(format!(r#"http get -e {url}"#, url = server.url()));
 
     assert!(actual.out.contains("error body"))
 }
@@ -74,14 +49,12 @@ fn http_get_with_accept_errors_and_full_raw_response() {
         .with_body("error body")
         .create();
 
-    let actual = nu!(pipeline(
-        format!(
-            r#"
-        http get -e -f {url} | $"($in.status) => ($in.body)"
+    let actual = nu!(format!(
+        r#"
+            http get -e -f {url}
+            | $"($in.status) => ($in.body)"
         "#,
-            url = server.url()
-        )
-        .as_str()
+        url = server.url()
     ));
 
     assert!(actual.out.contains("400 => error body"))
@@ -102,14 +75,12 @@ fn http_get_with_accept_errors_and_full_json_response() {
         )
         .create();
 
-    let actual = nu!(pipeline(
-        format!(
-            r#"
-        http get -e -f {url} | $"($in.status) => ($in.body.msg)"
+    let actual = nu!(format!(
+        r#"
+            http get -e -f {url}
+            | $"($in.status) => ($in.body.msg)"
         "#,
-            url = server.url()
-        )
-        .as_str()
+        url = server.url()
     ));
 
     assert!(actual.out.contains("400 => error body"))
@@ -151,12 +122,9 @@ fn http_get_full_response() {
 
     let _mock = server.mock("GET", "/").with_body("foo").create();
 
-    let actual = nu!(pipeline(
-        format!(
-            "http get --full {url} --headers [foo bar] | to json",
-            url = server.url()
-        )
-        .as_str()
+    let actual = nu!(format!(
+        "http get --full {url} --headers [foo bar] | to json",
+        url = server.url()
     ));
 
     let output: serde_json::Value = serde_json::from_str(&actual.out).unwrap();
@@ -189,9 +157,7 @@ fn http_get_follows_redirect() {
         .with_header("Location", "/bar")
         .create();
 
-    let actual = nu!(pipeline(
-        format!("http get {url}/foo", url = server.url()).as_str()
-    ));
+    let actual = nu!(format!("http get {url}/foo", url = server.url()));
 
     assert_eq!(&actual.out, "bar");
 }
@@ -207,12 +173,9 @@ fn http_get_redirect_mode_manual() {
         .with_header("Location", "/bar")
         .create();
 
-    let actual = nu!(pipeline(
-        format!(
-            "http get --redirect-mode manual {url}/foo",
-            url = server.url()
-        )
-        .as_str()
+    let actual = nu!(format!(
+        "http get --redirect-mode manual {url}/foo",
+        url = server.url()
     ));
 
     assert_eq!(&actual.out, "foo");
@@ -229,12 +192,9 @@ fn http_get_redirect_mode_error() {
         .with_header("Location", "/bar")
         .create();
 
-    let actual = nu!(pipeline(
-        format!(
-            "http get --redirect-mode error {url}/foo",
-            url = server.url()
-        )
-        .as_str()
+    let actual = nu!(format!(
+        "http get --redirect-mode error {url}/foo",
+        url = server.url()
     ));
 
     assert!(&actual.err.contains("nu::shell::network_failure"));
@@ -289,12 +249,9 @@ fn http_get_with_invalid_mime_type() {
         .create();
 
     // but `from nuon` is a known command in nu, so we take `foo.{ext}` and pass it to `from {ext}`
-    let actual = nu!(pipeline(
-        format!(
-            r#"http get {url}/foo.nuon | to json --raw"#,
-            url = server.url()
-        )
-        .as_str()
+    let actual = nu!(format!(
+        r#"http get {url}/foo.nuon | to json --raw"#,
+        url = server.url()
     ));
 
     assert_eq!(actual.out, "[1,2,3]");
@@ -312,8 +269,12 @@ fn http_get_with_unknown_mime_type() {
         .create();
 
     // but `from nuon` is a known command in nu, so we take `{garbage}/{whatever}` and pass it to `from {whatever}`
-    let actual = nu!(pipeline(
-        format!(r#"http get {url}/foo | to json --raw"#, url = server.url()).as_str()
+    let actual = nu!(format!(
+        r#"
+            http get {url}/foo
+            | to json --raw
+        "#,
+        url = server.url()
     ));
 
     assert_eq!(actual.out, "[1,2,3]");
@@ -330,14 +291,69 @@ fn http_get_timeout() {
         })
         .create();
 
-    let actual = nu!(pipeline(
-        format!("http get --max-time 100ms {url}", url = server.url()).as_str()
+    let actual = nu!(format!(
+        "http get --max-time 100ms {url}",
+        url = server.url()
     ));
 
-    assert!(&actual.err.contains("nu::shell::network_failure"));
+    assert!(
+        &actual.err.contains("nu::shell::io::timed_out"),
+        "unexpected error: {:?}",
+        actual.err
+    );
+    assert!(
+        &actual.err.contains("Timed out"),
+        "unexpected error: {:?}",
+        actual.err
+    );
+}
 
-    #[cfg(not(target_os = "windows"))]
-    assert!(&actual.err.contains("timed out reading response"));
-    #[cfg(target_os = "windows")]
-    assert!(&actual.err.contains(super::WINDOWS_ERROR_TIMEOUT_SLOW_LINK));
+#[test]
+fn http_get_response_metadata() {
+    let mut server = Server::new();
+
+    let _mock = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("x-custom-header", "test-value")
+        .with_body("success")
+        .create();
+
+    let actual = nu!(format!(
+        r#"http get --raw {url} | metadata | get http_response | get status"#,
+        url = server.url()
+    ));
+
+    assert_eq!(actual.out, "200");
+}
+
+#[cfg(unix)]
+#[rstest::rstest]
+#[case::all_proxy("ALL_PROXY")]
+#[case::http_proxy("HTTP_PROXY")]
+#[case::https_proxy("HTTPS_PROXY")]
+#[timeout(std::time::Duration::from_secs(5))]
+fn http_get_with_socks5_proxy(#[case] proxy_env: &str) {
+    use nu_test_support::net::{Address, proxy::Socks5Proxy};
+    use std::net::Ipv4Addr;
+
+    let mut server = Server::new();
+    let _mock = server.mock("GET", "/").with_body("🦆").create();
+
+    let redirect_port = nu_utils::net::reserve_local_addr().unwrap().port();
+    let redirect_addr = Address::IpAddr(Ipv4Addr::LOCALHOST.into(), redirect_port);
+
+    let proxy = Socks5Proxy::builder()
+        .unwrap()
+        .add_redirect(redirect_addr.clone(), server.socket_address().into())
+        .spawn()
+        .unwrap();
+
+    let actual = nu!(format!(
+        "{proxy_env}={proxy_uri} http get --raw {redirect_addr}",
+        proxy_uri = proxy.uri(),
+    ));
+
+    assert_eq!(actual.out, "🦆");
+    assert!(actual.err.is_empty());
 }

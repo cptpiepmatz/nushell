@@ -32,9 +32,9 @@ impl Command for ScopeCommands {
         Ok(Value::list(scope_data.collect_commands(head), head).into_pipeline_data())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Show the commands in the current scope",
+            description: "Show the commands in the current scope.",
             example: "scope commands",
             result: None,
         }]
@@ -46,9 +46,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ScopeCommands {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ScopeCommands)
     }
 }

@@ -1,10 +1,10 @@
-use nu_cmd_base::input_handler::{operate, CellPathOnlyArgs};
+use nu_cmd_base::input_handler::{CellPathOnlyArgs, operate};
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct StrReverse;
 
-impl Command for SubCommand {
+impl Command for StrReverse {
     fn name(&self) -> &str {
         "str reverse"
     }
@@ -70,15 +70,15 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Reverse a single string",
+                description: "Reverse a single string.",
                 example: "'Nushell' | str reverse",
                 result: Some(Value::test_string("llehsuN")),
             },
             Example {
-                description: "Reverse multiple strings in a list",
+                description: "Reverse multiple strings in a list.",
                 example: "['Nushell' 'is' 'cool'] | str reverse",
                 result: Some(Value::list(
                     vec![
@@ -114,9 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StrReverse)
     }
 }

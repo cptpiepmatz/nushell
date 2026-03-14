@@ -2,7 +2,7 @@ use nu_engine::{
     command_prelude::*, find_in_dirs_env, get_dirs_var_from_call, get_eval_block, redirect_env,
 };
 use nu_parser::trim_quotes_str;
-use nu_protocol::{ast::Expr, engine::CommandType, ModuleId};
+use nu_protocol::{ModuleId, ast::Expr, engine::CommandType};
 
 use std::path::Path;
 
@@ -24,8 +24,8 @@ impl Command for OverlayUse {
             .allow_variants_without_examples(true)
             .required(
                 "name",
-                SyntaxShape::String,
-                "Module name to use overlay for.",
+                SyntaxShape::OneOf(vec![SyntaxShape::String, SyntaxShape::Nothing]),
+                "Module name to use overlay for (`null` for no-op).",
             )
             .optional(
                 "as",
@@ -34,7 +34,7 @@ impl Command for OverlayUse {
             )
             .switch(
                 "prefix",
-                "Prepend module name to the imported commands and aliases",
+                "Prepend module name to the imported commands and aliases.",
                 Some('p'),
             )
             .switch(
@@ -61,8 +61,13 @@ impl Command for OverlayUse {
         call: &Call,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
-        let mut name_arg: Spanned<String> = call.req(engine_state, caller_stack, 0)?;
-        name_arg.item = trim_quotes_str(&name_arg.item).to_string();
+        let noop = call.get_parser_info(caller_stack, "noop");
+        if noop.is_some() {
+            return Ok(PipelineData::empty());
+        }
+
+        let name_arg: Spanned<String> = call.req(engine_state, caller_stack, 0)?;
+        let name_arg_item = trim_quotes_str(&name_arg.item);
 
         let maybe_origin_module_id: Option<ModuleId> =
             if let Some(overlay_expr) = call.get_parser_info(caller_stack, "overlay_expr") {
@@ -86,11 +91,11 @@ impl Command for OverlayUse {
         let overlay_name = if let Some(name) = call.opt(engine_state, caller_stack, 1)? {
             name
         } else if engine_state
-            .find_overlay(name_arg.item.as_bytes())
+            .find_overlay(name_arg_item.as_bytes())
             .is_some()
         {
-            name_arg.item.clone()
-        } else if let Some(os_str) = Path::new(&name_arg.item).file_stem() {
+            name_arg_item.to_string()
+        } else if let Some(os_str) = Path::new(name_arg_item).file_stem() {
             if let Some(name) = os_str.to_str() {
                 name.to_string()
             } else {
@@ -100,7 +105,7 @@ impl Command for OverlayUse {
             }
         } else {
             return Err(ShellError::OverlayNotFoundAtRuntime {
-                overlay_name: name_arg.item,
+                overlay_name: (name_arg_item.to_string()),
                 span: name_arg.span,
             });
         };
@@ -111,79 +116,99 @@ impl Command for OverlayUse {
             // b) refreshing an active overlay (the origin module changed)
 
             let module = engine_state.get_module(module_id);
+            // in such case, should also make sure that PWD is not restored in old overlays.
+            let cwd = caller_stack.get_env_var(engine_state, "PWD").cloned();
 
             // Evaluate the export-env block (if any) and keep its environment
             if let Some(block_id) = module.env_block {
-                let maybe_path = find_in_dirs_env(
-                    &name_arg.item,
+                let maybe_file_path_or_dir = find_in_dirs_env(
+                    name_arg_item,
                     engine_state,
                     caller_stack,
                     get_dirs_var_from_call(caller_stack, call),
                 )?;
-
                 let block = engine_state.get_block(block_id);
                 let mut callee_stack = caller_stack
                     .gather_captures(engine_state, &block.captures)
                     .reset_pipes();
 
-                if let Some(path) = &maybe_path {
+                if let Some(path) = &maybe_file_path_or_dir {
                     // Set the currently evaluated directory, if the argument is a valid path
-                    let mut parent = path.clone();
-                    parent.pop();
-
+                    let parent = if path.is_dir() {
+                        path.clone()
+                    } else {
+                        let mut parent = path.clone();
+                        parent.pop();
+                        parent
+                    };
                     let file_pwd = Value::string(parent.to_string_lossy(), call.head);
 
                     callee_stack.add_env_var("FILE_PWD".to_string(), file_pwd);
                 }
 
-                if let Some(file_path) = &maybe_path {
-                    let file_path = Value::string(file_path.to_string_lossy(), call.head);
-                    callee_stack.add_env_var("CURRENT_FILE".to_string(), file_path);
+                if let Some(path) = &maybe_file_path_or_dir {
+                    let module_file_path = if path.is_dir() {
+                        // the existence of `mod.nu` is verified in parsing time
+                        // so it's safe to use it here.
+                        Value::string(path.join("mod.nu").to_string_lossy(), call.head)
+                    } else {
+                        Value::string(path.to_string_lossy(), call.head)
+                    };
+                    callee_stack.add_env_var("CURRENT_FILE".to_string(), module_file_path);
                 }
 
                 let eval_block = get_eval_block(engine_state);
-                let _ = eval_block(engine_state, &mut callee_stack, block, input);
+                let _ = eval_block(engine_state, &mut callee_stack, block, input)?;
 
                 // The export-env block should see the env vars *before* activating this overlay
                 caller_stack.add_overlay(overlay_name);
+                // make sure that PWD is not restored in old overlays.
+                if let Some(cwd) = cwd {
+                    caller_stack.add_env_var("PWD".to_string(), cwd);
+                }
 
                 // Merge the block's environment to the current stack
                 redirect_env(engine_state, caller_stack, &callee_stack);
             } else {
                 caller_stack.add_overlay(overlay_name);
+                // make sure that PWD is not restored in old overlays.
+                if let Some(cwd) = cwd {
+                    caller_stack.add_env_var("PWD".to_string(), cwd);
+                }
             }
         } else {
             caller_stack.add_overlay(overlay_name);
+            caller_stack.update_config(engine_state)?;
         }
 
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Create an overlay from a module",
+                description: "Create an overlay from a module.",
                 example: r#"module spam { export def foo [] { "foo" } }
     overlay use spam
     foo"#,
                 result: None,
             },
             Example {
-                description: "Create an overlay from a module and rename it",
+                description: "Create an overlay from a module and rename it.",
                 example: r#"module spam { export def foo [] { "foo" } }
     overlay use spam as spam_new
     foo"#,
                 result: None,
             },
             Example {
-                description: "Create an overlay with a prefix",
+                description: "Create an overlay with a prefix.",
                 example: r#"'export def foo { "foo" }'
     overlay use --prefix spam
     spam foo"#,
                 result: None,
             },
             Example {
-                description: "Create an overlay from a file",
+                description: "Create an overlay from a file.",
                 example: r#"'export-env { $env.FOO = "foo" }' | save spam.nu
     overlay use spam.nu
     $env.FOO"#,
@@ -198,9 +223,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(OverlayUse {})
+    #[ignore = "examples do not run every line separately in test"]
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(OverlayUse)
     }
 }

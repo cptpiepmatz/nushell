@@ -1,12 +1,10 @@
+use crate::PolarsPlugin;
 use crate::dataframe::values::NuExpression;
 use crate::values::{
-    cant_convert_err, CustomValueSupport, NuDataFrame, PolarsPluginObject, PolarsPluginType,
+    CustomValueSupport, NuDataFrame, PolarsPluginObject, PolarsPluginType, cant_convert_err,
 };
-use crate::PolarsPlugin;
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
-use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Type,
-};
+use nu_protocol::{Category, Example, LabeledError, PipelineData, ShellError, Signature, Span};
 use polars::df;
 
 pub struct ExprCount;
@@ -24,14 +22,20 @@ impl PluginCommand for ExprCount {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_types(vec![(
-                Type::Custom("expression".into()),
-                Type::Custom("expression".into()),
-            )])
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
+                ),
+                (
+                    PolarsPluginType::NuSelector.into(),
+                    PolarsPluginType::NuExpression.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Count the number of non-null values in a column",
             example: r#"[[a]; ["foo"] ["bar"] [null]] | polars into-df 
@@ -56,12 +60,21 @@ impl PluginCommand for ExprCount {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         match PolarsPluginObject::try_from_value(plugin, &value)? {
             PolarsPluginObject::NuExpression(expr) => command_expr(plugin, engine, call, expr),
-            _ => Err(cant_convert_err(&value, &[PolarsPluginType::NuExpression])),
+            PolarsPluginObject::NuSelector(selector) => {
+                let expr = selector.into_expr();
+                command_expr(plugin, engine, call, expr)
+            }
+            _ => Err(cant_convert_err(
+                &value,
+                &[PolarsPluginType::NuExpression, PolarsPluginType::NuSelector],
+            )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

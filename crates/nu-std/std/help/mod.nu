@@ -1,3 +1,5 @@
+# Show help information
+
 def error-fmt [] {
     $"(ansi red)($in)(ansi reset)"
 }
@@ -32,45 +34,50 @@ def command-not-found-error [span: record] {
     throw-error "std::help::command_not_found" "command not found" $span
 }
 
-def get-all-operators [] { return [
-    [type, operator, name, description, precedence];
-
-    [Assignment, =, Assign, "Assigns a value to a variable.", 10]
-    [Assignment, +=, PlusAssign, "Adds a value to a variable.", 10]
-    [Assignment, ++=, ConcatAssign, "Concatenate two lists, two strings, or two binary values.", 10]
-    [Assignment, -=, MinusAssign, "Subtracts a value from a variable.", 10]
-    [Assignment, *=, MultiplyAssign, "Multiplies a variable by a value.", 10]
-    [Assignment, /=, DivideAssign, "Divides a variable by a value.", 10]
-    [Comparison, ==, Equal, "Checks if two values are equal.", 80]
-    [Comparison, !=, NotEqual, "Checks if two values are not equal.", 80]
-    [Comparison, <, LessThan, "Checks if a value is less than another.", 80]
-    [Comparison, <=, LessThanOrEqual, "Checks if a value is less than or equal to another.", 80]
-    [Comparison, >, GreaterThan, "Checks if a value is greater than another.", 80]
-    [Comparison, >=, GreaterThanOrEqual, "Checks if a value is greater than or equal to another.", 80]
-    [Comparison, '=~ or like', RegexMatch, "Checks if a value matches a regular expression.", 80]
-    [Comparison, '!~ or not-like', NotRegexMatch, "Checks if a value does not match a regular expression.", 80]
-    [Comparison, in, In, "Checks if a value is in a list or string.", 80]
-    [Comparison, not-in, NotIn, "Checks if a value is not in a list or string.", 80]
-    [Comparison, starts-with, StartsWith, "Checks if a string starts with another.", 80]
-    [Comparison, ends-with, EndsWith, "Checks if a string ends with another.", 80]
-    [Comparison, not, UnaryNot, "Negates a value or expression.", 0]
-    [Math, +, Plus, "Adds two values.", 90]
-    [Math, ++, Concat, "Concatenate two lists, two strings, or two binary values.", 80]
-    [Math, -, Minus, "Subtracts two values.", 90]
-    [Math, *, Multiply, "Multiplies two values.", 95]
-    [Math, /, Divide, "Divides two values.", 95]
-    [Math, //, FloorDivision, "Divides two values and floors the result.", 95]
-    [Math, mod, Modulo, "Divides two values and returns the remainder.", 95]
-    [Math, **, "Pow ", "Raises one value to the power of another.", 100]
-    [Bitwise, bit-or, BitOr, "Performs a bitwise OR on two values.", 60]
-    [Bitwise, bit-xor, BitXor, "Performs a bitwise XOR on two values.", 70]
-    [Bitwise, bit-and, BitAnd, "Performs a bitwise AND on two values.", 75]
-    [Bitwise, bit-shl, ShiftLeft, "Shifts a value left by another.", 85]
-    [Bitwise, bit-shr, ShiftRight, "Shifts a value right by another.", 85]
-    [Boolean, and, And, "Checks if two values are true.", 50]
-    [Boolean, or, Or, "Checks if either value is true.", 40]
-    [Boolean, xor, Xor, "Checks if one value is true and the other is false.", 45]
-]}
+def get-all-operators [] {
+    [
+        [type, operator, name, description, precedence];
+        [Assignment, =, Assign, 'Assigns a value to a variable.', 10]
+        [Assignment, +=, AddAssign, 'Adds a value to a variable.', 10]
+        [Assignment, -=, SubtractAssign, 'Subtracts a value from a variable.', 10]
+        [Assignment, *=, MultiplyAssign, 'Multiplies a variable by a value.', 10]
+        [Assignment, /=, DivideAssign, 'Divides a variable by a value.', 10]
+        [Assignment, ++=, ConcatenateAssign, 'Concatenates a list, a string, or a binary value to a variable of the same type.', 10]
+        [Comparison, ==, Equal, 'Checks if two values are equal.', 80]
+        [Comparison, !=, NotEqual, 'Checks if two values are not equal.', 80]
+        [Comparison, <, LessThan, 'Checks if a value is less than another.', 80]
+        [Comparison, >, GreaterThan, 'Checks if a value is greater than another.', 80]
+        [Comparison, <=, LessThanOrEqual, 'Checks if a value is less than or equal to another.', 80]
+        [Comparison, >=, GreaterThanOrEqual, 'Checks if a value is greater than or equal to another.', 80]
+        [Comparison, '=~ or like', RegexMatch, 'Checks if a value matches a regular expression.', 80]
+        [Comparison, '!~ or not-like', NotRegexMatch, 'Checks if a value does not match a regular expression.', 80]
+        [Comparison, in, In, 'Checks if a value is in a list, is part of a string, or is a key in a record.', 80]
+        [Comparison, not-in, NotIn, 'Checks if a value is not in a list, is not part of a string, or is not a key in a record.', 80]
+        [Comparison, has, Has, 'Checks if a list contains a value, a string contains another, or if a record has a key.', 80]
+        [Comparison, not-has, NotHas, 'Checks if a list does not contains a value, a string does not contains another, or if a record does not have a key.', 80]
+        [Comparison, starts-with, StartsWith, 'Checks if a string starts with another.', 80]
+        [Comparison, not-starts-with, NotStartsWith, 'Checks if a string does not start with another.', 80]
+        [Comparison, ends-with, EndsWith, 'Checks if a string ends with another.', 80]
+        [Comparison, not-ends-with, NotEndsWith, 'Checks if a string does not end with another.', 80]
+        [Math, +, Add, 'Adds two values.', 90]
+        [Math, -, Subtract, 'Subtracts two values.', 90]
+        [Math, *, Multiply, 'Multiplies two values.', 95]
+        [Math, /, Divide, 'Divides two values.', 95]
+        [Math, //, FloorDivide, 'Divides two values and floors the result.', 95]
+        [Math, mod, Modulo, 'Divides two values and returns the remainder.', 95]
+        [Math, **, Pow, 'Raises one value to the power of another.', 100]
+        [Math, ++, Concatenate, 'Concatenates two lists, two strings, or two binary values.', 80]
+        [Bitwise, bit-or, BitOr, 'Performs a bitwise OR on two values.', 60]
+        [Bitwise, bit-xor, BitXor, 'Performs a bitwise XOR on two values.', 70]
+        [Bitwise, bit-and, BitAnd, 'Performs a bitwise AND on two values.', 75]
+        [Bitwise, bit-shl, ShiftLeft, 'Bitwise shifts a value left by another.', 85]
+        [Bitwise, bit-shr, ShiftRight, 'Bitwise shifts a value right by another.', 85]
+        [Boolean, or, Or, 'Checks if either value is true.', 40]
+        [Boolean, xor, Xor, 'Checks if one value is true and the other is false.', 45]
+        [Boolean, and, And, 'Checks if both values are true.', 50]
+        [Boolean, not, Not, 'Negates a value or expression.', 55]
+    ]
+}
 
 def "nu-complete list-aliases" [] {
     scope aliases | select name description | rename value description
@@ -106,58 +113,86 @@ def "nu-complete main-help" [] {
 }
 
 def "nu-complete list-externs" [] {
-    scope commands | where is_extern | select name description | rename value description
+    scope commands | where type == "external" | select name description | rename value description
 }
 
 def build-help-header [
     text: string
-    --no-newline (-n)
+    --newline (-n)
 ] {
     let header = $"(ansi green)($text)(ansi reset):"
 
-    if $no_newline {
+    if not $newline {
         $header
     } else {
         $header ++ "\n"
     }
 }
 
+# Highlight (and italicize) code in backticks, fallback to dimmed for invalid syntax
+def highlight-description [] {
+    if (config use-colors) {
+        str replace -ar '(?<!`)`([^`]+)`(?!`)' {||
+            let s = $in
+            | str trim -c '`'
+            $s
+            | try {
+                nu-highlight --reject-garbage
+            } catch {
+                $"(ansi d)($s)(ansi rst_d)"
+            }
+            | $"(ansi i)($in)(ansi rst_i)"
+        }
+    } else {}
+}
+
 def build-module-page [module: record] {
-    let description = (if not ($module.description? | is-empty) {[
-        $module.description
+    let description = (if ($module.description? | is-not-empty) {[
+        ($module.description | highlight-description)
         ""
     ]} else { [] })
 
     let name = [
-        $"(build-help-header -n "Module") ($module.name)"
+        $"(build-help-header "Module") ($module.name)"
         ""
     ]
 
-    let commands = (if not ($module.commands? | is-empty) {[
-        (build-help-header -n "Exported commands")
-        $"    (
-            $module.commands | each {|command|
-                $'($command) (char lparen)($module.name) ($command)(char rparen)'
+    let submodules = if ($module.submodules? | is-not-empty) {[
+        (build-help-header "Submodules")
+        $"(
+            $module.submodules
+            | each {|submodule|
+                $'    (ansi cb)($submodule.name)(ansi rst) (char lparen)($module.name) ($submodule.name)(char rparen) - ($submodule.description)'
             }
-            | str join ', '
+            | str join (char newline)
+
+        )"
+    ]}
+
+    let commands = (if ($module.commands? | is-not-empty) {[
+        (build-help-header "Exported commands")
+        $"(
+            $module.commands | each {|command|
+                $'    (ansi cb)($command.name)(ansi rst) (char lparen)($module.name) ($command.name)(char rparen)'
+            }
+            | str join (char newline)
         )"
         ""
     ]} else { [] })
 
-    let aliases = (if not ($module.aliases? | is-empty) {[
-        (build-help-header -n "Exported aliases")
-        $"    ($module.aliases | str join ', ')"
+    let aliases = (if ($module.aliases? | is-not-empty) {[
+        (build-help-header "Exported aliases")
+        $"    ($module.aliases.name | str join (char newline))"
         ""
     ]} else { [] })
 
-    let env_block = (if ($module.env_block? | is-empty) {[
+    let env_block = (if not $module.has_env_block {[
         $"This module (ansi cyan)does not export(ansi reset) environment."
     ]} else {[
         $"This module (ansi cyan)exports(ansi reset) environment."
-        (view source $module.env_block)
     ]})
 
-    [$description $name $commands $aliases $env_block] | flatten | str join "\n"
+    [$description $name $submodules $commands $aliases $env_block] | flatten | str join "\n"
 }
 
 # Show help on nushell modules.
@@ -165,96 +200,70 @@ def build-module-page [module: record] {
 # When requesting help for a single module, its commands and aliases will be highlighted if they
 # are also available in the current scope. Commands/aliases that were imported under a different name
 # (such as with a prefix after `use some-module`) will be highlighted in parentheses.
-#
-# Examples:
-#     > let us define some example modules to play with
-#     > ```nushell
-#     > # my foo module
-#     > module foo {
-#     >     def bar [] { "foo::bar" }
-#     >     export def baz [] { "foo::baz" }
-#     >
-#     >     export-env {
-#     >         $env.FOO = "foo::FOO"
-#     >     }
-#     > }
-#     >
-#     > # my bar module
-#     > module bar {
-#     >     def bar [] { "bar::bar" }
-#     >     export def baz [] { "bar::baz" }
-#     >
-#     >     export-env {
-#     >         $env.BAR = "bar::BAR"
-#     >     }
-#     > }
-#     >
-#     > # my baz module
-#     > module baz {
-#     >     def foo [] { "baz::foo" }
-#     >     export def bar [] { "baz::bar" }
-#     >
-#     >     export-env {
-#     >         $env.BAZ = "baz::BAZ"
-#     >     }
-#     > }
-#     > ```
-#
-#     show all aliases
-#     > help modules
-#     ╭───┬──────┬──────────┬────────────────┬──────────────┬───────────────╮
-#     │ # │ name │ commands │    aliases     │  env_block   │  description  │
-#     ├───┼──────┼──────────┼────────────────┼──────────────┼───────────────┤
-#     │ 0 │ bar  │ [baz]    │ [list 0 items] │ <Block 1331> │ my bar module │
-#     │ 1 │ baz  │ [bar]    │ [list 0 items] │ <Block 1335> │ my baz module │
-#     │ 2 │ foo  │ [baz]    │ [list 0 items] │ <Block 1327> │ my foo module │
-#     ╰───┴──────┴──────────┴────────────────┴──────────────┴───────────────╯
-#
-#     search for string in module names
-#     > help modules --find ba
-#     ╭───┬──────┬─────────────┬────────────────┬──────────────┬───────────────╮
-#     │ # │ name │  commands   │    aliases     │  env_block   │  description  │
-#     ├───┼──────┼─────────────┼────────────────┼──────────────┼───────────────┤
-#     │ 0 │ bar  │ ╭───┬─────╮ │ [list 0 items] │ <Block 1331> │ my bar module │
-#     │   │      │ │ 0 │ baz │ │                │              │               │
-#     │   │      │ ╰───┴─────╯ │                │              │               │
-#     │ 1 │ baz  │ ╭───┬─────╮ │ [list 0 items] │ <Block 1335> │ my baz module │
-#     │   │      │ │ 0 │ bar │ │                │              │               │
-#     │   │      │ ╰───┴─────╯ │                │              │               │
-#     ╰───┴──────┴─────────────┴────────────────┴──────────────┴───────────────╯
-#
-#     search help for single module
-#     > help modules foo
-#     my foo module
-#
-#     Module: foo
-#
-#     Exported commands:
-#         baz [foo baz]
-#
-#     This module exports environment.
-#     {
-#             $env.FOO = "foo::FOO"
-#         }
-#
-#     search for a module that does not exist
-#     > help modules "does not exist"
-#     Error:
-#       × std::help::module_not_found
-#        ╭─[entry #21:1:1]
-#      1 │ help modules "does not exist"
-#        ·              ────────┬───────
-#        ·                      ╰── module not found
-#        ╰────
+@example "let us define some example modules to play with" {
+    # my foo module
+    module foo {
+        def bar [] { "foo::bar" }
+        export def baz [] { "foo::baz" }
+        export-env {
+            $env.FOO = "foo::FOO"
+        }
+    }
+    # my bar module
+    module bar {
+        def bar [] { "bar::bar" }
+        export def baz [] { "bar::baz" }
+        export-env {
+            $env.BAR = "bar::BAR"
+        }
+    }
+    # my baz module
+    module baz {
+        def foo [] { "baz::foo" }
+        export def bar [] { "baz::bar" }
+        export-env {
+            $env.BAZ = "baz::BAZ"
+        }
+    }
+}
+@example "show all aliases" { help modules } --result [
+    [name commands aliases ...];
+    [bar [baz] [] ...]
+    [baz [baz] [] ...]
+    [foo [bar] [] ...]
+]
+@example "search for string in module names" {help modules --find ba} --result [
+    [name commands aliases ...];
+    [bar [baz] [] ...]
+    [baz [baz] [] ...]
+]
+@example "search help for single module" {help modules foo} --result $"my foo module
+
+(ansi g)Module(ansi rst): foo
+
+(ansi g)Exported commands(ansi rst):
+    baz [foo baz]
+
+This module (ansi c)exports(ansi rst) environment.
+"
+@example  "search for a module that does not exist" {
+    help modules "does not exist"
+} --result $"Error: (ansi red)nu::shell::error(ansi rst)
+  (ansi red)× std::help::module_not_found(ansi rst)
+   ╭─[(ansi cb)(ansi u)entry #21:1:1(ansi rst)]
+ 1 │ help modules \"does not exist\"
+   ·              (ansi m)────────┬───────(ansi rst)
+   ·                      (ansi m)╰── module not found(ansi rst)
+   ╰────"
 export def modules [
     ...module: string@"nu-complete list-modules"  # the name of module to get help on
     --find (-f): string  # string to find in module names
 ] {
     let modules = (scope modules)
 
-    if not ($find | is-empty) {
+    if ($find | is-not-empty) {
         $modules | find $find --columns [name description]
-    } else if not ($module | is-empty) {
+    } else if ($module | is-not-empty) {
         let found_module = ($modules | where name == ($module | str join " "))
 
         if ($found_module | is-empty) {
@@ -268,16 +277,15 @@ export def modules [
 }
 
 def build-alias-page [alias: record] {
-    let description = (if not ($alias.description? | is-empty) {[
-        $alias.description
+    let description = (if ($alias.description? | is-not-empty) {[
+        ($alias.description | highlight-description)
         ""
     ]} else { [] })
 
     let rest = [
-        (build-help-header -n "Alias")
+        (build-help-header "Alias")
         $"  ($alias.name)"
-        ""
-        (build-help-header -n "Expansion")
+        (build-help-header "Expansion")
         $"  ($alias.expansion)"
     ]
 
@@ -285,82 +293,73 @@ def build-alias-page [alias: record] {
 }
 
 # Show help on nushell aliases.
-#
-# Examples:
-#     > let us define a bunch of aliases
-#     > ```nushell
-#     > # my foo alias
-#     > alias foo = echo "this is foo"
-#     >
-#     > # my bar alias
-#     > alias bar = echo "this is bar"
-#     >
-#     > # my baz alias
-#     > alias baz = echo "this is baz"
-#     >
-#     > # a multiline alias
-#     > alias multi = echo "this
-#     > is
-#     > a
-#     > multiline
-#     > string"
-#     > ```
-#
-#     show all aliases
-#     > help aliases
-#     ╭───┬───────┬────────────────────┬───────────────────╮
-#     │ # │ name  │     expansion      │    description    │
-#     ├───┼───────┼────────────────────┼───────────────────┤
-#     │ 0 │ bar   │ echo "this is bar" │ my bar alias      │
-#     │ 1 │ baz   │ echo "this is baz" │ my baz alias      │
-#     │ 2 │ foo   │ echo "this is foo" │ my foo alias      │
-#     │ 3 │ multi │ echo "this         │ a multiline alias │
-#     │   │       │ is                 │                   │
-#     │   │       │ a                  │                   │
-#     │   │       │ multiline          │                   │
-#     │   │       │ string"            │                   │
-#     ╰───┴───────┴────────────────────┴───────────────────╯
-#
-#     search for string in alias names
-#     > help aliases --find ba
-#     ╭───┬──────┬────────────────────┬──────────────╮
-#     │ # │ name │     expansion      │ description  │
-#     ├───┼──────┼────────────────────┼──────────────┤
-#     │ 0 │ bar  │ echo "this is bar" │ my bar alias │
-#     │ 1 │ baz  │ echo "this is baz" │ my baz alias │
-#     ╰───┴──────┴────────────────────┴──────────────╯
-#
-#     search help for single alias
-#     > help aliases multi
-#     a multiline alias
-#
-#     Alias: multi
-#
-#     Expansion:
-#       echo "this
-#     is
-#     a
-#     multiline
-#     string"
-#
-#     search for an alias that does not exist
-#     > help aliases "does not exist"
-#     Error:
-#       × std::help::alias_not_found
-#        ╭─[entry #21:1:1]
-#      1 │ help aliases "does not exist"
-#        ·              ────────┬───────
-#        ·                      ╰── alias not found
-#        ╰────
+@example "let us define a bunch of aliases" {
+# my foo alias
+alias foo = echo "this is foo"
+
+# my bar alias
+alias bar = echo "this is bar"
+
+# my baz alias
+alias baz = echo "this is baz"
+
+# a multiline alias
+alias multi = echo "this
+is
+a
+multiline
+string"
+}
+@example "show all aliases" {help aliases} --result [
+    [name expansion description];
+    [bar `echo "this is bar` "my bar alias"]
+    [baz `echo "this is baz` "my baz alias"]
+    [foo `echo "this is foo"` "my foo alias"]
+    [
+        multi
+        "echo \"this\nis\na\nmultiline\nstring\""
+        "a multiline alias"
+    ]
+]
+@example "search for string in alias names" {
+    help aliases --find ba
+} --result [
+    [name expansion description];
+    [bar `echo "this is bar` "my bar alias"]
+    [baz `echo "this is baz` "my baz alias"]
+]
+@example "search help for single alias" {
+    help aliases multi
+} --result $"a multiline alias
+
+(ansi g)Alias(ansi rst):
+multi
+
+(ansi g)Expansion(ansi rst):
+  echo \"this
+is
+a
+multiline
+string\"
+"
+@example "search for an alias that does not exist" {
+    help aliases "does not exist"
+} --result $"Error: (ansi red)nu::shell::error(ansi rst)
+  (ansi red)× std::help::alias_not_found(ansi rst)
+   ╭─[(ansi cb)(ansi u)entry #21:1:1(ansi rst)]
+ 1 │ help aliases \"does not exist\"
+   ·              (ansi m)────────┬───────(ansi rst)
+   ·                      (ansi m)╰── alias not found(ansi rst)
+   ╰────"
 export def aliases [
     ...alias: string@"nu-complete list-aliases"  # the name of alias to get help on
     --find (-f): string  # string to find in alias names
 ] {
     let aliases = (scope aliases | sort-by name)
 
-    if not ($find | is-empty) {
+    if ($find | is-not-empty) {
         $aliases | find $find --columns [name description]
-    } else if not ($alias | is-empty) {
+    } else if ($alias | is-not-empty) {
         let found_alias = ($aliases | where name == ($alias | str join " "))
 
         if ($found_alias | is-empty) {
@@ -374,13 +373,13 @@ export def aliases [
 }
 
 def build-extern-page [extern: record] {
-    let description = (if not ($extern.description? | is-empty) {[
+    let description = (if ($extern.description? | is-not-empty) {[
         $extern.description
         ""
     ]} else { [] })
 
     let rest = [
-        (build-help-header -n "Extern")
+        (build-help-header "Extern")
         $" ($extern.name)"
     ]
 
@@ -394,15 +393,15 @@ export def externs [
 ] {
     let externs = (
         scope commands
-        | where is_extern
-        | select name module_name description
+        | where type == "external"
+        | select name description
         | sort-by name
         | str trim
     )
 
-    if not ($find | is-empty) {
+    if ($find | is-not-empty) {
         $externs | find $find --columns [name description]
-    } else if not ($extern | is-empty) {
+    } else if ($extern | is-not-empty) {
         let found_extern = ($externs | where name == ($extern | str join " "))
 
         if ($found_extern | is-empty) {
@@ -417,58 +416,55 @@ export def externs [
 
 def build-operator-page [operator: record] {
     [
-        (build-help-header -n "Description")
+        (build-help-header "Description")
         $"    ($operator.description)"
-        ""
-        (build-help-header -n "Operator")
-        $"  ($operator.name) (char lparen)(ansi cyan_bold)($operator.operator)(ansi reset)(char rparen)"
-        (build-help-header -n "Type")
-        $"  ($operator.type)"
-        (build-help-header -n "Precedence")
-        $"  ($operator.precedence)"
+        (build-help-header "Operator")
+        $"    ($operator.name) (char lparen)(ansi cyan_bold)($operator.operator)(ansi reset)(char rparen)"
+        (build-help-header "Type")
+        $"    ($operator.type)"
+        (build-help-header "Precedence")
+        $"    ($operator.precedence)"
     ] | str join "\n"
 }
 
+alias "help operators" = operators # Command args are different
+
 # Show help on nushell operators.
-#
-# Examples:
-#     search for string in operators names
-#     > help operators --find Bit
-#     ╭───┬─────────┬──────────┬────────┬───────────────────────────────────────┬────────────╮
-#     │ # │  type   │ operator │  name  │              description              │ precedence │
-#     ├───┼─────────┼──────────┼────────┼───────────────────────────────────────┼────────────┤
-#     │ 0 │ Bitwise │ bit-and  │ BitAnd │ Performs a bitwise AND on two values. │         75 │
-#     │ 1 │ Bitwise │ bit-or   │ BitOr  │ Performs a bitwise OR on two values.  │         60 │
-#     │ 2 │ Bitwise │ bit-xor  │ BitXor │ Performs a bitwise XOR on two values. │         70 │
-#     ╰───┴─────────┴──────────┴────────┴───────────────────────────────────────┴────────────╯
-#
-#     search help for single operator
-#     > help operators NotRegexMatch
-#     Description:
-#         Checks if a value does not match a regular expression.
-#
-#     Operator: NotRegexMatch (!~)
-#     Type: Comparison
-#     Precedence: 80
-#
-#     search for an operator that does not exist
-#     > help operator "does not exist"
-#     Error:
-#       × std::help::operator_not_found
-#        ╭─[entry #21:1:1]
-#      1 │ help operator "does not exist"
-#        ·               ────────┬───────
-#        ·                       ╰── operator not found
-#        ╰────
+@example "search for string in operators names" {
+    help operators --find Bit
+} --result [
+    [type operator name description precedence];
+    [Bitwise bit-and  BitAnd "Performs a bitwise AND on two values." 75]
+    [Bitwise bit-or   BitOr  "Performs a bitwise OR on two values."  60]
+    [Bitwise bit-xor  BitXor "Performs a bitwise XOR on two values." 70]
+]
+@example "search help for single operator" {
+    help operators NotRegexMatch
+} --result `(ansi g)Description(ansi rst):
+    Checks if a value does not match a regular expression.
+
+(ansi g)Operator(ansi rst): NotRegexMatch (!~)
+(ansi g)Type(ansi rst): Comparison
+(ansi g)Precedence(ansi rst): 80
+`
+@example "search for an operator that does not exist" {
+    help operator "does not exist"
+} --result $"Error: (ansi red)nu::shell::error(ansi rst)
+  (ansi red)× std::help::operator_not_found(ansi rst)
+   ╭─[(ansi cb)(ansi u)entry #21:1:1(ansi rst)]
+ 1 │ help operator \"does not exist\"
+   ·               (ansi m)────────┬───────(ansi rst)
+   ·                       (ansi m)╰── operator not found(ansi rst)
+   ╰────"
 export def operators [
     ...operator: string@"nu-complete list-operators"  # the name of operator to get help on
     --find (-f): string  # string to find in operator names
 ] {
     let operators = (get-all-operators)
 
-    if not ($find | is-empty) {
+    if ($find | is-not-empty) {
         $operators | find $find --columns [type name]
-    } else if not ($operator | is-empty) {
+    } else if ($operator | is-not-empty) {
         let found_operator = ($operators | where name == ($operator | str join " "))
 
         if ($found_operator | is-empty) {
@@ -481,74 +477,84 @@ export def operators [
     }
 }
 
+def get-extension-by-prefix [prefix: string] {
+  scope commands
+  | where name starts-with $prefix
+  | insert extension { get name | parse $"($prefix){ext}" | get ext.0 | $"*.($in)" }
+  | select extension name
+  | rename --column { name: command }
+}
+
+def get-command-extensions [command: string] {
+  # low-tech version of `nu-highlight`, which produces suboptimal results with unknown commands
+  def hl [shape: string] {
+    let color = $env.config.color_config | get $"shape_($shape)"
+    $"(ansi $color)($in)(ansi reset)"
+  }
+
+  let extensions = {
+    "open": {||
+      [
+        (
+          $"('open' | hl internalcall) will attempt to automatically parse the file according to its extension,"
+          + $" by calling ('from ext' | hl internalcall) on the file contents. For example,"
+          + $" ('open' | hl internalcall) ('file.json' | hl globpattern) will call"
+          + $" ('from json' | hl internalcall). If the file is not a supported type, its content will be returned"
+          + $" as a binary stream instead."
+        )
+        ""
+        "The following extensions are recognized:"
+        (get-extension-by-prefix "from " | table --index false)
+      ]
+    }
+
+    "save": {||
+      [
+        (
+          $"('save' | hl internalcall) will attempt to automatically serialize its input into the format"
+          + $" determined by the file extension, by calling ('to ext' | hl internalcall) before writing the data"
+          + $" to the file. For example, ('save' | hl internalcall) ('file.json' | hl globpattern)"
+          + $" will call ('to json' | hl internalcall)."
+        )
+        ""
+        "The following extensions are recognized:"
+        (get-extension-by-prefix "to " | table --index false)
+      ]
+    }
+  }
+
+  if $command in $extensions {
+    $extensions
+    | get $command
+    | do $in
+    | each { lines | each { $"  ($in)" } | str join "\n" }
+  } else {
+    []
+  }
+}
+
 def build-command-page [command: record] {
-    let description = (if not ($command.description? | is-empty) {[
-        $command.description
+    let description = (if ($command.description? | is-not-empty) {[
+        ($command.description | highlight-description)
     ]} else { [] })
-    let extra_description = (if not ($command.extra_description? | is-empty) {[
+    let extra_description = (if ($command.extra_description? | is-not-empty) {[
         ""
-        $command.extra_description
-    ]} else { [] })
-
-    let search_terms = (if not ($command.search_terms? | is-empty) {[
-        ""
-        $"(build-help-header -n 'Search terms') ($command.search_terms)"
+        ($command.extra_description | highlight-description)
     ]} else { [] })
 
-    let module = (if not ($command.module_name? | is-empty) {[
+    let search_terms = (if ($command.search_terms? | is-not-empty) {[
         ""
-        $"(build-help-header -n 'Module') ($command.module_name)"
+        $"(build-help-header 'Search terms') ($command.search_terms)"
     ]} else { [] })
 
-    let category = (if not ($command.category? | is-empty) {[
+    let category = (if ($command.category? | is-not-empty) {[
         ""
-        $"(build-help-header -n 'Category') ($command.category)"
+        $"(build-help-header 'Category') ($command.category)"
     ]} else { [] })
-
-    let this = ([
-        ""
-        "This command:"
-    ] | append (
-        if ($command.creates_scope) {
-            $"- (ansi cyan)does create(ansi reset) a scope."
-        } else {
-            $"- (ansi cyan)does not create(ansi reset) a scope."
-        }
-    ) | append (
-        if ($command.type == "built-in") {
-            $"- (ansi cyan)is(ansi reset) a built-in command."
-        } else {
-            $"- (ansi cyan)is not(ansi reset) a built-in command."
-        }
-    ) | append (
-        if ($command.is_sub) {
-            $"- (ansi cyan)is(ansi reset) a subcommand."
-        } else {
-            $"- (ansi cyan)is not(ansi reset) a subcommand."
-        }
-    ) | append (
-        if ($command.type == "plugin") {
-            $"- (ansi cyan)is part(ansi reset) of a plugin."
-        } else {
-            $"- (ansi cyan)is not part(ansi reset) of a plugin."
-        }
-    ) | append (
-        if ($command.type == "custom") {
-            $"- (ansi cyan)is(ansi reset) a custom command."
-        } else {
-            $"- (ansi cyan)is not(ansi reset) a custom command."
-        }
-    ) | append (
-        if ($command.type == "keyword") {
-            $"- (ansi cyan)is(ansi reset) a keyword."
-        } else {
-            $"- (ansi cyan)is not(ansi reset) a keyword."
-        }
-    ))
 
     let signatures = ($command.signatures | transpose | get column1)
 
-    let cli_usage = (if not ($signatures | is-empty) {
+    let cli_usage = (if ($signatures | is-not-empty) {
         let parameters = ($signatures | get 0 | where parameter_type != input and parameter_type != output)
 
         let positionals = ($parameters | where parameter_type == positional and parameter_type != rest)
@@ -556,10 +562,10 @@ def build-command-page [command: record] {
 
         [
             ""
-            (build-help-header -n "Usage")
+            (build-help-header "Usage")
             ([
                 $"  > ($command.name) "
-                (if not ($flags | is-empty) { "{flags} " } else "")
+                (if ($flags | is-not-empty) { "{flags} " } else "")
                 ($positionals | each {|param|
                     $"<($param.parameter_name)> "
                 })
@@ -569,31 +575,46 @@ def build-command-page [command: record] {
     } else { [] })
 
     let subcommands = (scope commands | where name =~ $"^($command.name) " | select name description)
-    let subcommands = (if not ($subcommands | is-empty) {[
+    let subcommands = (if ($subcommands | is-not-empty) {[
         (build-help-header "Subcommands")
         ($subcommands | each {|subcommand |
             $"  (ansi teal)($subcommand.name)(ansi reset) - ($subcommand.description)"
         } | str join "\n")
     ]} else { [] })
 
-    let rest = (if not ($signatures | is-empty) {
+    let rest = (if ($signatures | is-not-empty) {
         let parameters = ($signatures | get 0 | where parameter_type != input and parameter_type != output)
 
         let positionals = ($parameters | where parameter_type == positional and parameter_type != rest)
-        let flags = ($parameters | where parameter_type != positional and parameter_type != rest)
+        let flags = (
+            $parameters
+            | where parameter_type != positional and parameter_type != rest
+            | if "help" not-in $in.parameter_name or "h" not-in $in.short_flag {
+                $in ++ [{
+                    parameter_name: "help"
+                    short_flag: (if "h" not-in $in.short_flag {"h"})
+                    syntax_shape: null
+                    description: "Display the help message for this command"
+                    parameter_default: null
+                }]
+            }
+        )
         let is_rest = (not ($parameters | where parameter_type == rest | is-empty))
 
+            # ...[(if not ("help" in $flags.parameter_name or "h" in $flags.short_flag) {
+            #     $"  -(ansi teal)h(ansi reset), --(ansi teal)help(ansi reset) - Display the help message for this command"
+            # })]
         ([
             ""
             (build-help-header "Flags")
             ($flags | each {|flag|
                 [
                     "  ",
-                    (if ($flag.short_flag | is-empty) { "" } else {
-                        $"-(ansi teal)($flag.short_flag)(ansi reset), "
-                    }),
                     (if ($flag.parameter_name | is-empty) { "" } else {
                         $"--(ansi teal)($flag.parameter_name)(ansi reset)"
+                    }),
+                    (if ($flag.short_flag | is-empty) { "" } else {
+                        $", -(ansi teal)($flag.short_flag)(ansi reset)"
                     }),
                     (if ($flag.syntax_shape | is-empty) { "" } else {
                         $": <(ansi light_blue)($flag.syntax_shape)(ansi reset)>"
@@ -602,24 +623,24 @@ def build-command-page [command: record] {
                         $" - ($flag.description)"
                     }),
                     (if ($flag.parameter_default | is-empty) { "" } else {
-                        $" \(default: ($flag.parameter_default)\)"
+                        $" \(default: ($flag.parameter_default | if ($in | describe -d).type == string { debug -v } else {})\)"
                     }),
                 ] | str join ""
             } | str join "\n")
-            $"  (ansi teal)-h(ansi reset), --(ansi teal)help(ansi reset) - Display the help message for this command"
+
 
             ""
             (build-help-header "Signatures")
             ($signatures | each {|signature|
                 let input = ($signature | where parameter_type == input | get 0)
                 let output = ($signature | where parameter_type == output | get 0)
-
                 ([
-                    $"  <($input.syntax_shape)> | ($command.name)"
-                    ($positionals | each {|positional|
-                        $" <($positional.syntax_shape)>"
-                    })
-                    $" -> <($output.syntax_shape)>"
+                    "  "
+                    ...[(if $input.syntax_shape != nothing {
+                        $"<(ansi b)($input.syntax_shape)(ansi rst)> | "
+                    })]
+                    $"($command.name | nu-highlight)"
+                    $" -> <(ansi blue)($output.syntax_shape)(ansi rst)>"
                 ] | str join "")
             } | str join "\n")
 
@@ -650,23 +671,37 @@ def build-command-page [command: record] {
         ] | flatten)
     } else { [] })
 
-    let examples = (if not ($command.examples | is-empty) {[
+    # This section documents how the command can be extended
+    # E.g. `open` can be extended by adding more `from ...` commands
+    let extensions = (
+      get-command-extensions $command.name
+      | if ($in | is-not-empty) {
+        prepend [
+          ""
+          (build-help-header "Extensions")
+        ]
+      } else {}
+    )
+
+    let examples = (if ($command.examples | is-not-empty) {[
         ""
-        (build-help-header -n "Examples")
+        (build-help-header "Examples")
         ($command.examples | each {|example| [
-            $"  ($example.description)"
-            $"  > ($example.example | nu-highlight)"
-            (if not ($example.result | is-empty) {
+            $"  (ansi d)($example.description)(ansi rst)"
+            $"  > ($example.example | if (config use-colors) { nu-highlight } else {})"
+            ...[(if ($example.result | is-not-empty) {
                 $example.result
                 | table -e
                 | to text
-                | if ($example.result | describe) == "binary" { str join } else { lines }
+                | str trim --right
+                | lines
+                | skip until { is-not-empty }
                 | each {|line|
                     $"  ($line)"
                 }
+                | $in ++ [""]
                 | str join "\n"
-            })
-            ""
+            })]
         ] | str join "\n"})
     ] | flatten} else { [] })
 
@@ -674,12 +709,11 @@ def build-command-page [command: record] {
         $description
         $extra_description
         $search_terms
-        $module
         $category
-        $this
         $cli_usage
         $subcommands
         $rest
+        $extensions
         $examples
     ] | flatten | str join "\n"
 }
@@ -690,10 +724,10 @@ def scope-commands [
 ] {
     let commands = (scope commands | sort-by name)
 
-    if not ($find | is-empty) {
+    if ($find | is-not-empty) {
         # TODO: impl find for external commands
         $commands | find $find --columns [name description search_terms] | select name category description signatures search_terms
-    } else if not ($command | is-empty) {
+    } else if ($command | is-not-empty) {
         let target_command = ($command | str join " ")
         let found_command = ($commands | where name == $target_command)
 
@@ -710,9 +744,13 @@ def scope-commands [
 def external-commands [
     ...command: string@"nu-complete list-commands",
 ] {
-    let target_command = $command | str join " "
+    let target_command = $command | str join " " | str replace "^" ""
     print $"(ansi default_italic)Help pages from external command ($target_command | pretty-cmd):(ansi reset)"
-    ^($env.NU_HELPER? | default "man") $target_command
+    if $env.NU_HELPER? == "--help" {
+        run-external ($target_command | split row " ") "--help" | if $nu.os-info.name == "windows" { collect } else {}
+    } else {
+        ^($env.NU_HELPER? | default "man") $target_command
+    }
 }
 
 # Show help on commands.
@@ -732,59 +770,48 @@ def pretty-cmd [] {
     $"(ansi default_dimmed)(ansi default_italic)($cmd)(ansi reset)"
 }
 
-# Display help information about different parts of Nushell.
+# Welcome to Nushell! Display help information about different parts of Nushell.
 #
 # `help word` searches for "word" in commands, aliases and modules, in that order.
+# If not found as internal to nushell, you can set `$env.NU_HELPER` to a program
+# (default: man) and "word" will be passed as the first argument.
+# Alternatively, you can set `$env.NU_HELPER` to `--help` and it will run "word" as
+# an external and pass `--help` as the last argument (this could cause unintended
+# behaviour if it doesn't support the flag, use it carefully).
 #
-# Examples:
-#   show help for single command, alias, or module
-#   > help match
+# Here are some tips to help you get started.
+#   * `help -h` or `help help` - show available `help` subcommands and examples
+#   * `help commands` - list all available commands
+#   * `help <name>` - display help about a particular command, alias, or module
+#   * `help --find <text to search>` - search through all help commands table
 #
-#   show help for single sub-command, alias, or module
-#   > help str join
+# Nushell works on the idea of a `pipeline`. Pipelines are commands connected
+# with the `|` character. Each stage in the pipeline works together to load,
+# parse, and display information to you.
 #
-#   search for string in command names, description and search terms
-#   > help --find char
+# You can also learn more at https://www.nushell.sh/book/
+@example "show help for single command, alias, or module" {help match}
+@example "show help for single sub-command, alias, or module" {help str join}
+@example "search for string in command names, description and search terms" {help --find char}
 export def main [
     ...item: string@"nu-complete main-help"  # the name of the help item to get help on
     --find (-f): string  # string to find in help items names and description
 ] {
     if ($item | is-empty) and ($find | is-empty) {
-        print $"Welcome to Nushell.
-
-Here are some tips to help you get started.
-  * ('help -h' | pretty-cmd) or ('help help' | pretty-cmd) - show available ('help' | pretty-cmd) subcommands and examples
-  * ('help commands' | pretty-cmd) - list all available commands
-  * ('help <name>' | pretty-cmd) - display help about a particular command, alias, or module
-  * ('help --find <text to search>' | pretty-cmd) - search through all help commands table
-
-Nushell works on the idea of a "(ansi default_italic)pipeline(ansi reset)". Pipelines are commands connected with the '|' character.
-Each stage in the pipeline works together to load, parse, and display information to you.
-
-(ansi green)Examples(ansi reset):
-    List the files in the current directory, sorted by size
-    > ('ls | sort-by size' | nu-highlight)
-
-    Get the current system host name
-    > ('sys host | get hostname' | nu-highlight)
-
-    Get the processes on your system actively using CPU
-    > ('ps | where cpu > 0' | nu-highlight)
-
-You can also learn more at (ansi default_italic)(ansi light_cyan_underline)https://www.nushell.sh/book/(ansi reset)"
+        print (main help)
         return
     }
 
     let target_item = ($item | str join " ")
 
     let commands = (try { scope-commands $target_item --find $find })
-    if not ($commands | is-empty) { return $commands }
+    if ($commands | is-not-empty) { return $commands }
 
     let aliases = (try { aliases $target_item --find $find })
-    if not ($aliases | is-empty) { return $aliases }
+    if ($aliases | is-not-empty) { return $aliases }
 
     let modules = (try { modules $target_item --find $find })
-    if not ($modules | is-empty) { return $modules }
+    if ($modules | is-not-empty) { return $modules }
 
     if ($find | is-not-empty) {
         print -e $"No help results found mentioning: ($find)"

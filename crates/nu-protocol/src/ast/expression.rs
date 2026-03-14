@@ -1,7 +1,7 @@
 use crate::{
+    BlockId, GetSpan, IN_VARIABLE_ID, Signature, Span, SpanId, Type, VarId,
     ast::{Argument, Block, Expr, ExternalArgument, ImportPattern, MatchPattern, RecordItem},
     engine::StateWorkingSet,
-    BlockId, DeclId, GetSpan, Signature, Span, SpanId, Type, VarId, IN_VARIABLE_ID,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -15,7 +15,6 @@ pub struct Expression {
     pub span: Span,
     pub span_id: SpanId,
     pub ty: Type,
-    pub custom_completion: Option<DeclId>,
 }
 
 impl Expression {
@@ -26,7 +25,6 @@ impl Expression {
             span,
             span_id,
             ty: Type::Any,
-            custom_completion: None,
         }
     }
 
@@ -73,6 +71,13 @@ impl Expression {
         }
     }
 
+    pub fn as_keyword_with_name(&self) -> Option<(&[u8], &Expression)> {
+        match &self.expr {
+            Expr::Keyword(kw) => Some((&kw.keyword, &kw.expr)),
+            _ => None,
+        }
+    }
+
     pub fn as_var(&self) -> Option<VarId> {
         match self.expr {
             Expr::Var(var_id) => Some(var_id),
@@ -104,13 +109,17 @@ impl Expression {
 
     pub fn has_in_variable(&self, working_set: &StateWorkingSet) -> bool {
         match &self.expr {
+            Expr::AttributeBlock(ab) => ab.item.has_in_variable(working_set),
             Expr::BinaryOp(left, _, right) => {
                 left.has_in_variable(working_set) || right.has_in_variable(working_set)
             }
             Expr::UnaryNot(expr) => expr.has_in_variable(working_set),
             Expr::Block(block_id) | Expr::Closure(block_id) => {
                 let block = working_set.get_block(*block_id);
-                block.captures.contains(&IN_VARIABLE_ID)
+                block
+                    .captures
+                    .iter()
+                    .any(|(var_id, _)| var_id == &IN_VARIABLE_ID)
                     || block
                         .pipelines
                         .iter()
@@ -130,10 +139,10 @@ impl Expression {
                             }
                         }
                         Argument::Named(named) => {
-                            if let Some(expr) = &named.2 {
-                                if expr.has_in_variable(working_set) {
-                                    return true;
-                                }
+                            if let Some(expr) = &named.2
+                                && expr.has_in_variable(working_set)
+                            {
+                                return true;
                             }
                         }
                     }
@@ -190,20 +199,20 @@ impl Expression {
             Expr::Operator(_) => false,
             Expr::MatchBlock(_) => false,
             Expr::Range(range) => {
-                if let Some(left) = &range.from {
-                    if left.has_in_variable(working_set) {
-                        return true;
-                    }
+                if let Some(left) = &range.from
+                    && left.has_in_variable(working_set)
+                {
+                    return true;
                 }
-                if let Some(middle) = &range.next {
-                    if middle.has_in_variable(working_set) {
-                        return true;
-                    }
+                if let Some(middle) = &range.next
+                    && middle.has_in_variable(working_set)
+                {
+                    return true;
                 }
-                if let Some(right) = &range.to {
-                    if right.has_in_variable(working_set) {
-                        return true;
-                    }
+                if let Some(right) = &range.to
+                    && right.has_in_variable(working_set)
+                {
+                    return true;
                 }
                 false
             }
@@ -280,6 +289,7 @@ impl Expression {
             self.span = new_span;
         }
         match &mut self.expr {
+            Expr::AttributeBlock(ab) => ab.item.replace_span(working_set, replaced, new_span),
             Expr::BinaryOp(left, _, right) => {
                 left.replace_span(working_set, replaced, new_span);
                 right.replace_span(working_set, replaced, new_span);
@@ -428,6 +438,7 @@ impl Expression {
 
     pub fn replace_in_variable(&mut self, working_set: &mut StateWorkingSet, new_var_id: VarId) {
         match &mut self.expr {
+            Expr::AttributeBlock(ab) => ab.item.replace_in_variable(working_set, new_var_id),
             Expr::Bool(_) => {}
             Expr::Int(_) => {}
             Expr::Float(_) => {}
@@ -483,7 +494,13 @@ impl Expression {
             | Expr::Subexpression(block_id) => {
                 let mut block = Block::clone(working_set.get_block(*block_id));
                 block.replace_in_variable(working_set, new_var_id);
-                *working_set.get_block_mut(*block_id) = block;
+                if block_id.get() < working_set.permanent_state.num_blocks() {
+                    // For aliased blocks, duplicate to avoid panics
+                    // TODO: consider making them mutable in the future
+                    *block_id = working_set.add_block(Arc::new(block));
+                } else {
+                    *working_set.get_block_mut(*block_id) = block;
+                }
             }
             Expr::UnaryNot(expr) => {
                 expr.replace_in_variable(working_set, new_var_id);
@@ -566,7 +583,6 @@ impl Expression {
             span,
             span_id,
             ty,
-            custom_completion: None,
         }
     }
 
@@ -576,7 +592,6 @@ impl Expression {
             span,
             span_id,
             ty,
-            custom_completion: None,
         }
     }
 
@@ -586,7 +601,6 @@ impl Expression {
             span,
             span_id: SpanId::new(0),
             ty,
-            custom_completion: None,
         }
     }
 
@@ -596,7 +610,6 @@ impl Expression {
             span: self.span,
             span_id,
             ty: self.ty,
-            custom_completion: self.custom_completion,
         }
     }
 

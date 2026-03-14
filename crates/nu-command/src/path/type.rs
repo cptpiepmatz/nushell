@@ -1,7 +1,7 @@
 use super::PathSubcommandArguments;
 use nu_engine::command_prelude::*;
 use nu_path::AbsolutePathBuf;
-use nu_protocol::engine::StateWorkingSet;
+use nu_protocol::{engine::StateWorkingSet, shell_error::io::IoError};
 use std::{io, path::Path};
 
 struct Arguments {
@@ -11,9 +11,9 @@ struct Arguments {
 impl PathSubcommandArguments for Arguments {}
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct PathType;
 
-impl Command for SubCommand {
+impl Command for PathType {
     fn name(&self) -> &str {
         "path type"
     }
@@ -57,7 +57,7 @@ If the path does not exist, null will be returned."#
         };
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(
@@ -78,7 +78,7 @@ If the path does not exist, null will be returned."#
         };
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(
@@ -87,15 +87,15 @@ If the path does not exist, null will be returned."#
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Show type of a filepath",
+                description: "Show type of a filepath.",
                 example: "'.' | path type",
                 result: Some(Value::test_string("dir")),
             },
             Example {
-                description: "Show type of a filepaths in a list",
+                description: "Show type of filepaths in a list.",
                 example: "ls | get name | path type",
                 result: None,
             },
@@ -108,7 +108,7 @@ fn path_type(path: &Path, span: Span, args: &Arguments) -> Value {
     match path.symlink_metadata() {
         Ok(metadata) => Value::string(get_file_type(&metadata), span),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Value::nothing(span),
-        Err(err) => Value::error(err.into_spanned(span).into(), span),
+        Err(err) => Value::error(IoError::new(err, span, None).into(), span),
     }
 }
 
@@ -144,9 +144,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(PathType)
     }
 }

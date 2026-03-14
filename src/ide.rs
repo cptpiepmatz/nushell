@@ -1,12 +1,14 @@
 use miette::IntoDiagnostic;
 use nu_cli::NuCompleter;
-use nu_parser::{flatten_block, parse, FlatShape};
+use nu_parser::{FlatShape, flatten_block, parse};
 use nu_protocol::{
+    DeclId, ShellError, Span, Value, VarId,
     engine::{EngineState, Stack, StateWorkingSet},
-    report_shell_error, DeclId, ShellError, Span, Value, VarId,
+    report_shell_error,
+    shell_error::io::{IoError, IoErrorExt, NotFound},
 };
 use reedline::Completer;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Debug)]
@@ -54,15 +56,16 @@ fn read_in_file<'a>(
     file_path: &str,
 ) -> (Vec<u8>, StateWorkingSet<'a>) {
     let file = std::fs::read(file_path)
-        .into_diagnostic()
-        .unwrap_or_else(|e| {
-            report_shell_error(
-                engine_state,
-                &ShellError::FileNotFoundCustom {
-                    msg: format!("Could not read file '{}': {:?}", file_path, e.to_string()),
-                    span: Span::unknown(),
-                },
-            );
+        .map_err(|err| {
+            ShellError::Io(IoError::new_with_additional_context(
+                err.not_found_as(NotFound::File),
+                Span::unknown(),
+                PathBuf::from(file_path),
+                "Could not read file",
+            ))
+        })
+        .unwrap_or_else(|err| {
+            report_shell_error(None, engine_state, &err);
             std::process::exit(1);
         });
 
@@ -244,7 +247,7 @@ pub fn hover(engine_state: &mut EngineState, file_path: &str, location: &Value) 
                     }
                     description.push_str("  ");
                     if let Some(short_flag) = &named.short {
-                        description.push_str(&format!("`-{}`", short_flag));
+                        description.push_str(&format!("`-{short_flag}`"));
                     }
 
                     if !named.long.is_empty() {
@@ -400,13 +403,13 @@ pub fn hover(engine_state: &mut EngineState, file_path: &str, location: &Value) 
                     }
                 })
             ),
-            FlatShape::External => println!(
+            FlatShape::External(alias_span) => println!(
                 "{}",
                 json!({
                     "hover": "external",
                     "span": {
-                        "start": span.start - offset,
-                        "end": span.end - offset
+                        "start": alias_span.start - offset,
+                        "end": alias_span.end - offset
                     }
                 })
             ),
@@ -664,15 +667,15 @@ pub fn ast(engine_state: &mut EngineState, file_path: &str) {
 
 fn json_merge(a: &mut JsonValue, b: &JsonValue) {
     match (a, b) {
-        (JsonValue::Object(ref mut a), JsonValue::Object(b)) => {
+        (JsonValue::Object(a), JsonValue::Object(b)) => {
             for (k, v) in b {
                 json_merge(a.entry(k).or_insert(JsonValue::Null), v);
             }
         }
-        (JsonValue::Array(ref mut a), JsonValue::Array(b)) => {
+        (JsonValue::Array(a), JsonValue::Array(b)) => {
             a.extend(b.clone());
         }
-        (JsonValue::Array(ref mut a), JsonValue::Object(b)) => {
+        (JsonValue::Array(a), JsonValue::Object(b)) => {
             a.extend([JsonValue::Object(b.clone())]);
         }
         (a, b) => {

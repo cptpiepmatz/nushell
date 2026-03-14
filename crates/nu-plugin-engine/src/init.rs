@@ -15,8 +15,8 @@ use nu_plugin_core::{
     ServerCommunicationIo,
 };
 use nu_protocol::{
-    engine::StateWorkingSet, report_shell_error, PluginIdentity, PluginRegistryFile,
-    PluginRegistryItem, PluginRegistryItemData, RegisteredPlugin, ShellError, Span,
+    PluginIdentity, PluginRegistryFile, PluginRegistryItem, PluginRegistryItemData,
+    RegisteredPlugin, ShellError, Span, engine::StateWorkingSet, report_shell_error,
 };
 
 use crate::{
@@ -221,13 +221,18 @@ pub fn load_plugin_file(
     working_set: &mut StateWorkingSet,
     plugin_registry_file: &PluginRegistryFile,
     span: Option<Span>,
-) {
+) -> usize {
+    let mut error_count = 0;
+
     for plugin in &plugin_registry_file.plugins {
         // Any errors encountered should just be logged.
         if let Err(err) = load_plugin_registry_item(working_set, plugin, span) {
-            report_shell_error(working_set.permanent_state, &err)
+            error_count += 1;
+            report_shell_error(None, working_set.permanent_state, &err)
         }
     }
+
+    error_count
 }
 
 /// Load a definition from the plugin file into the engine state

@@ -1,8 +1,8 @@
 use nu_glob::MatchOptions;
-use nu_path::{canonicalize_with, expand_path_with};
-use nu_protocol::{NuGlob, ShellError, Span, Spanned};
+use nu_path::{absolute_with, expand_path_with};
+use nu_protocol::{NuGlob, ShellError, Signals, Span, Spanned, shell_error::io::IoError};
 use std::{
-    fs,
+    fs, io,
     path::{Component, Path, PathBuf},
 };
 
@@ -19,6 +19,7 @@ pub fn glob_from(
     cwd: &Path,
     span: Span,
     options: Option<MatchOptions>,
+    signals: Signals,
 ) -> Result<
     (
         Option<PathBuf>,
@@ -27,6 +28,7 @@ pub fn glob_from(
     ShellError,
 > {
     let no_glob_for_pattern = matches!(pattern.item, NuGlob::DoNotExpand(_));
+    let pattern_span = pattern.span;
     let (prefix, pattern) = if nu_glob::is_glob(pattern.item.as_ref()) {
         // Pattern contains glob, split it
         let mut p = PathBuf::new();
@@ -35,10 +37,10 @@ pub fn glob_from(
         let mut counter = 0;
 
         for c in components {
-            if let Component::Normal(os) = c {
-                if nu_glob::is_glob(os.to_string_lossy().as_ref()) {
-                    break;
-                }
+            if let Component::Normal(os) = c
+                && nu_glob::is_glob(os.to_string_lossy().as_ref())
+            {
+                break;
             }
             p.push(c);
             counter += 1;
@@ -70,20 +72,28 @@ pub fn glob_from(
         if is_symlink {
             (path.parent().map(|parent| parent.to_path_buf()), path)
         } else {
-            let path = if let Ok(p) = canonicalize_with(path.clone(), cwd) {
-                if nu_glob::is_glob(p.to_string_lossy().as_ref()) {
-                    // our path might contain glob metacharacters too.
-                    // in such case, we need to escape our path to make
-                    // glob work successfully
-                    PathBuf::from(nu_glob::Pattern::escape(&p.to_string_lossy()))
-                } else {
-                    p
+            let path = match absolute_with(path.clone(), cwd) {
+                Ok(p) if p.exists() => {
+                    if nu_glob::is_glob(p.to_string_lossy().as_ref()) {
+                        // our path might contain glob metacharacters too.
+                        // in such case, we need to escape our path to make
+                        // glob work successfully
+                        PathBuf::from(nu_glob::Pattern::escape(&p.to_string_lossy()))
+                    } else {
+                        p
+                    }
                 }
-            } else {
-                return Err(ShellError::DirectoryNotFound {
-                    dir: path.to_string_lossy().to_string(),
-                    span: pattern.span,
-                });
+                Ok(_) => {
+                    return Err(IoError::new(
+                        io::Error::from(io::ErrorKind::NotFound),
+                        pattern_span,
+                        path,
+                    )
+                    .into());
+                }
+                Err(err) => {
+                    return Err(IoError::new(err, pattern_span, path).into());
+                }
             };
             (path.parent().map(|parent| parent.to_path_buf()), path)
         }
@@ -92,7 +102,7 @@ pub fn glob_from(
     let pattern = pattern.to_string_lossy().to_string();
     let glob_options = options.unwrap_or_default();
 
-    let glob = nu_glob::glob_with(&pattern, glob_options).map_err(|e| {
+    let glob = nu_glob::glob_with(&pattern, glob_options, signals).map_err(|e| {
         nu_protocol::ShellError::GenericError {
             error: "Error extracting glob pattern".into(),
             msg: e.to_string(),

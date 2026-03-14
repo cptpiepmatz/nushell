@@ -1,9 +1,9 @@
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct StrUpcase;
 
-impl Command for SubCommand {
+impl Command for StrUpcase {
     fn name(&self) -> &str {
         "str upcase"
     }
@@ -29,7 +29,7 @@ impl Command for SubCommand {
     }
 
     fn description(&self) -> &str {
-        "Make text uppercase."
+        "Convert text to uppercase."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -61,9 +61,9 @@ impl Command for SubCommand {
         operate(working_set.permanent(), call, input, column_paths)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Upcase contents",
+            description: "Upcase contents.",
             example: "'nu' | str upcase",
             result: Some(Value::test_string("NU")),
         }]
@@ -116,13 +116,11 @@ fn action(input: &Value, head: Span) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::{action, SubCommand};
+    use super::{StrUpcase, action};
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StrUpcase)
     }
 
     #[test]

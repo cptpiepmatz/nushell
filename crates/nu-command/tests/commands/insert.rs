@@ -1,15 +1,12 @@
-use nu_test_support::{nu, pipeline};
+use nu_test_support::nu;
 
 #[test]
 fn insert_the_column() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            open cargo_sample.toml
-            | insert dev-dependencies.new_assertions "0.7.0"
-            | get dev-dependencies.new_assertions
-        "#
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        open cargo_sample.toml
+        | insert dev-dependencies.new_assertions "0.7.0"
+        | get dev-dependencies.new_assertions
+    "#);
 
     assert_eq!(actual.out, "0.7.0");
 }
@@ -23,17 +20,16 @@ fn doesnt_convert_record_to_table() {
 
 #[test]
 fn insert_the_column_conflict() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            open cargo_sample.toml
-            | insert dev-dependencies.pretty_assertions "0.7.0"
-        "#
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        open cargo_sample.toml
+        | insert dev-dependencies.pretty_assertions "0.7.0"
+    "#);
 
-    assert!(actual
-        .err
-        .contains("column 'pretty_assertions' already exists"));
+    assert!(
+        actual
+            .err
+            .contains("column 'pretty_assertions' already exists")
+    );
 }
 
 #[test]
@@ -61,9 +57,11 @@ fn insert_at_end_of_list() {
 fn insert_past_end_of_list() {
     let actual = nu!("[1, 2, 3] | insert 5 abc");
 
-    assert!(actual
-        .err
-        .contains("can't insert at index (the next available index is 3)"));
+    assert!(
+        actual
+            .err
+            .contains("can't insert at index (the next available index is 3)")
+    );
 }
 
 #[test]
@@ -84,9 +82,11 @@ fn insert_at_end_of_list_stream() {
 fn insert_past_end_of_list_stream() {
     let actual = nu!("[1, 2, 3] | every 1 | insert 5 abc");
 
-    assert!(actual
-        .err
-        .contains("can't insert at index (the next available index is 3)"));
+    assert!(
+        actual
+            .err
+            .contains("can't insert at index (the next available index is 3)")
+    );
 }
 
 #[test]
@@ -178,4 +178,15 @@ fn list_stream_replacement_closure() {
 
     let actual = nu!("[[a]; [text]] | every 1 | insert b { $in.a | str upcase } | to nuon");
     assert_eq!(actual.out, "[[a, b]; [text, TEXT]]");
+}
+
+#[test]
+fn insert_new_to_table_cell_mixed_rows() {
+    let actual = nu!(experimental: vec!["reorder-cell-paths".to_string()], r#"
+        let table = [ [foo]; ['a'] ['b'] ];
+        let t = ($table | insert bar.0 'z');
+        $t.0.bar
+    "#);
+
+    assert_eq!(actual.out, "z")
 }

@@ -29,7 +29,7 @@ impl Command for Drop {
         vec!["delete", "remove"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "[0,1,2,3] | drop",
@@ -101,9 +101,7 @@ mod test {
     use crate::Drop;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Drop {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Drop)
     }
 }

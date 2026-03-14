@@ -1,24 +1,30 @@
-use nu_test_support::fs::Stub::FileWithContentToBeTrimmed;
-use nu_test_support::playground::Playground;
-use nu_test_support::{nu, pipeline};
+use nu_test_support::{fs::Stub::FileWithContentToBeTrimmed, prelude::*};
 
 #[test]
-fn table_to_json_text_and_from_json_text_back_into_table() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            open sgml_description.json
-            | to json
-            | from json
-            | get glossary.GlossDiv.GlossList.GlossEntry.GlossSee
-        "#
-    ));
+fn table_to_json_text_and_from_json_text_back_into_table() -> Result {
+    let code = r#"
+        open sgml_description.json
+        | to json
+        | from json
+        | get glossary.GlossDiv.GlossList.GlossEntry.GlossSee
+    "#;
 
-    assert_eq!(actual.out, "markup");
+    test()
+        .cwd("tests/fixtures/formats")
+        .run(code)
+        .expect_value_eq("markup")
 }
 
 #[test]
-fn from_json_text_to_table() {
+fn table_to_json_float_doesnt_become_int() -> Result {
+    let code = "[[a]; [1.0]] | to json | from json | get 0.a";
+    let outcome: Value = test().run(code)?;
+    assert!(matches!(outcome, Value::Float { .. }));
+    Ok(())
+}
+
+#[test]
+fn from_json_text_to_table() -> Result {
     Playground::setup("filter_from_json_test_1", |dirs, sandbox| {
         sandbox.with_files(&[FileWithContentToBeTrimmed(
             "katz.txt",
@@ -34,17 +40,20 @@ fn from_json_text_to_table() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: dirs.test(),
-            "open katz.txt | from json | get katz | get rusty_luck | length "
-        );
+        let code = r#"
+            open katz.txt
+            | from json
+            | get katz
+            | get rusty_luck
+            | length
+        "#;
 
-        assert_eq!(actual.out, "4");
+        test().cwd(dirs.test()).run(code).expect_value_eq(4)
     })
 }
 
 #[test]
-fn from_json_text_to_table_strict() {
+fn from_json_text_to_table_strict() -> Result {
     Playground::setup("filter_from_json_test_1_strict", |dirs, sandbox| {
         sandbox.with_files(&[FileWithContentToBeTrimmed(
             "katz.txt",
@@ -60,17 +69,20 @@ fn from_json_text_to_table_strict() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: dirs.test(),
-            "open katz.txt | from json -s | get katz | get rusty_luck | length "
-        );
+        let code = r#"
+            open katz.txt
+            | from json -s
+            | get katz
+            | get rusty_luck
+            | length
+        "#;
 
-        assert_eq!(actual.out, "4");
+        test().cwd(dirs.test()).run(code).expect_value_eq(4)
     })
 }
 
 #[test]
-fn from_json_text_recognizing_objects_independently_to_table() {
+fn from_json_text_recognizing_objects_independently_to_table() -> Result {
     Playground::setup("filter_from_json_test_2", |dirs, sandbox| {
         sandbox.with_files(&[FileWithContentToBeTrimmed(
             "katz.txt",
@@ -82,22 +94,19 @@ fn from_json_text_recognizing_objects_independently_to_table() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            r#"
-                open katz.txt
-                | from json -o
-                | where name == "GorbyPuff"
-                | get rusty_luck.0
-            "#
-        ));
+        let code = r#"
+            open katz.txt
+            | from json -o
+            | where name == "GorbyPuff"
+            | get rusty_luck.0
+        "#;
 
-        assert_eq!(actual.out, "3");
+        test().cwd(dirs.test()).run(code).expect_value_eq(3)
     })
 }
 
 #[test]
-fn from_json_text_objects_is_stream() {
+fn from_json_text_objects_is_stream() -> Result {
     Playground::setup("filter_from_json_test_2_is_stream", |dirs, sandbox| {
         sandbox.with_files(&[FileWithContentToBeTrimmed(
             "katz.txt",
@@ -109,21 +118,18 @@ fn from_json_text_objects_is_stream() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            r#"
-                open katz.txt
-                | from json -o
-                | describe -n
-            "#
-        ));
+        let code = r#"
+            open katz.txt
+            | from json -o
+            | describe -n
+        "#;
 
-        assert_eq!(actual.out, "stream");
+        test().cwd(dirs.test()).run(code).expect_value_eq("stream")
     })
 }
 
 #[test]
-fn from_json_text_recognizing_objects_independently_to_table_strict() {
+fn from_json_text_recognizing_objects_independently_to_table_strict() -> Result {
     Playground::setup("filter_from_json_test_2_strict", |dirs, sandbox| {
         sandbox.with_files(&[FileWithContentToBeTrimmed(
             "katz.txt",
@@ -135,22 +141,19 @@ fn from_json_text_recognizing_objects_independently_to_table_strict() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            r#"
-                open katz.txt
-                | from json -o -s
-                | where name == "GorbyPuff"
-                | get rusty_luck.0
-            "#
-        ));
+        let code = r#"
+            open katz.txt
+            | from json -o -s
+            | where name == "GorbyPuff"
+            | get rusty_luck.0
+        "#;
 
-        assert_eq!(actual.out, "3");
+        test().cwd(dirs.test()).run(code).expect_value_eq(3)
     })
 }
 
 #[test]
-fn table_to_json_text() {
+fn table_to_json_text() -> Result {
     Playground::setup("filter_to_json_test", |dirs, sandbox| {
         sandbox.with_files(&[FileWithContentToBeTrimmed(
             "sample.txt",
@@ -160,26 +163,26 @@ fn table_to_json_text() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            r#"
-                open sample.txt
-                | lines
-                | split column "," name luck
-                | select name
-                | to json
-                | from json
-                | get 0
-                | get name
-            "#
-        ));
+        let code = r#"
+            open sample.txt
+            | lines
+            | split column "," name luck
+            | select name
+            | to json
+            | from json
+            | get 0
+            | get name
+        "#;
 
-        assert_eq!(actual.out, "JonAndrehudaTZ");
+        test()
+            .cwd(dirs.test())
+            .run(code)
+            .expect_value_eq("JonAndrehudaTZ")
     })
 }
 
 #[test]
-fn table_to_json_text_strict() {
+fn table_to_json_text_strict() -> Result {
     Playground::setup("filter_to_json_test_strict", |dirs, sandbox| {
         sandbox.with_files(&[FileWithContentToBeTrimmed(
             "sample.txt",
@@ -189,109 +192,145 @@ fn table_to_json_text_strict() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: dirs.test(), pipeline(
-            r#"
-                open sample.txt
-                | lines
-                | split column "," name luck
-                | select name
-                | to json
-                | from json -s
-                | get 0
-                | get name
-            "#
-        ));
+        let code = r#"
+            open sample.txt
+            | lines
+            | split column "," name luck
+            | select name
+            | to json
+            | from json -s
+            | get 0
+            | get name
+        "#;
 
-        assert_eq!(actual.out, "JonAndrehudaTZ");
+        test()
+            .cwd(dirs.test())
+            .run(code)
+            .expect_value_eq("JonAndrehudaTZ")
     })
 }
 
 #[test]
-fn top_level_values_from_json() {
+fn top_level_values_from_json() -> Result {
     for (value, type_name) in [("null", "nothing"), ("true", "bool"), ("false", "bool")] {
-        let actual = nu!(r#""{}" | from json | to json"#, value);
-        assert_eq!(actual.out, value);
-        let actual = nu!(r#""{}" | from json | describe"#, value);
-        assert_eq!(actual.out, type_name);
+        let code = format!(r#""{value}" | from json | to json"#);
+        test().run(&code).expect_value_eq(value)?;
+
+        let code = format!(r#""{value}" | from json | describe"#);
+        test().run(&code).expect_value_eq(type_name)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn top_level_values_from_json_strict() -> Result {
+    for (value, type_name) in [("null", "nothing"), ("true", "bool"), ("false", "bool")] {
+        let code = format!(r#""{value}" | from json -s | to json"#);
+        test().run(&code).expect_value_eq(value)?;
+
+        let code = format!(r#""{value}" | from json -s | describe"#);
+        test().run(&code).expect_value_eq(type_name)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn strict_parsing_fails_on_comment() -> Result {
+    let code = r#"'{ "a": 1, /* comment */ "b": 2 }' | from json -s"#;
+
+    let err = test().run(code).expect_shell_error()?;
+    match err {
+        ShellError::GenericError { msg, .. } => {
+            assert_contains("error parsing JSON text", msg);
+            Ok(())
+        }
+        other => Err(other.into()),
     }
 }
 
 #[test]
-fn top_level_values_from_json_strict() {
-    for (value, type_name) in [("null", "nothing"), ("true", "bool"), ("false", "bool")] {
-        let actual = nu!(r#""{}" | from json -s | to json"#, value);
-        assert_eq!(actual.out, value);
-        let actual = nu!(r#""{}" | from json -s | describe"#, value);
-        assert_eq!(actual.out, type_name);
+fn strict_parsing_fails_on_trailing_comma() -> Result {
+    let code = r#"'{ "a": 1, "b": 2, }' | from json -s"#;
+
+    let err = test().run(code).expect_shell_error()?;
+    match err {
+        ShellError::GenericError { msg, .. } => {
+            assert_contains("error parsing JSON text", msg);
+            Ok(())
+        }
+        other => Err(other.into()),
     }
 }
 
 #[test]
-fn strict_parsing_fails_on_comment() {
-    let actual = nu!(r#"'{ "a": 1, /* comment */ "b": 2 }' | from json -s"#);
-    assert!(actual.err.contains("error parsing JSON text"));
+fn ranges_to_json_as_array() -> Result {
+    let code = "1..3 | to json";
+    test().run(code).expect_value_eq("[\n  1,\n  2,\n  3\n]")
 }
 
 #[test]
-fn strict_parsing_fails_on_trailing_comma() {
-    let actual = nu!(r#"'{ "a": 1, "b": 2, }' | from json -s"#);
-    assert!(actual.err.contains("error parsing JSON text"));
+fn unbounded_from_in_range_fails() -> Result {
+    let code = "1.. | to json";
+
+    let err = test().run(code).expect_shell_error()?;
+    match err {
+        ShellError::GenericError { error, .. } => {
+            assert_contains("Cannot create range", error);
+            Ok(())
+        }
+        other => Err(other.into()),
+    }
 }
 
 #[test]
-fn ranges_to_json_as_array() {
-    let value = r#"[  1,  2,  3]"#;
-    let actual = nu!(r#"1..3 | to json"#);
-    assert_eq!(actual.out, value);
+fn inf_in_range_fails() -> Result {
+    let code = "inf..5 | to json";
+    let err = test().run(code).expect_shell_error()?;
+    assert!(matches!(err, ShellError::CannotCreateRange { .. }));
+
+    let code = "5..inf | to json";
+    let err = test().run(code).expect_shell_error()?;
+    let ShellError::GenericError { msg, .. } = err else {
+        panic!("unexpected err, {err:?}")
+    };
+    assert_eq!(
+        msg,
+        "Unbounded ranges are not allowed when converting to this format"
+    );
+
+    let code = "-inf..inf | to json";
+    let err = test().run(code).expect_shell_error()?;
+    assert!(matches!(err, ShellError::CannotCreateRange { .. }));
+
+    Ok(())
 }
 
 #[test]
-fn unbounded_from_in_range_fails() {
-    let actual = nu!(r#"1.. | to json"#);
-    assert!(actual.err.contains("Cannot create range"));
-}
-
-#[test]
-fn inf_in_range_fails() {
-    let actual = nu!(r#"inf..5 | to json"#);
-    assert!(actual.err.contains("can't convert to countable values"));
-    let actual = nu!(r#"5..inf | to json"#);
-    assert!(actual
-        .err
-        .contains("Unbounded ranges are not allowed when converting to this format"));
-    let actual = nu!(r#"-inf..inf | to json"#);
-    assert!(actual.err.contains("can't convert to countable values"));
-}
-
-#[test]
-fn test_indent_flag() {
-    let actual = nu!(
-    cwd: "tests/fixtures/formats", pipeline(
-    r#"
+fn test_indent_flag() -> Result {
+    let code = r#"
         echo '{ "a": 1, "b": 2, "c": 3 }'
         | from json
         | to json --indent 3
-    "#
-    ));
+    "#;
 
-    let expected_output = "{   \"a\": 1,   \"b\": 2,   \"c\": 3}";
-
-    assert_eq!(actual.out, expected_output);
+    let expected_output = "{\n   \"a\": 1,\n   \"b\": 2,\n   \"c\": 3\n}";
+    test()
+        .cwd("tests/fixtures/formats")
+        .run(code)
+        .expect_value_eq(expected_output)
 }
 
 #[test]
-fn test_tabs_indent_flag() {
-    let actual = nu!(
-    cwd: "tests/fixtures/formats", pipeline(
-    r#"
+fn test_tabs_indent_flag() -> Result {
+    let code = r#"
         echo '{ "a": 1, "b": 2, "c": 3 }'
         | from json
         | to json --tabs 2
-    "#
-    ));
+    "#;
 
-    let expected_output = "{\t\t\"a\": 1,\t\t\"b\": 2,\t\t\"c\": 3}";
-
-    assert_eq!(actual.out, expected_output);
+    let expected_output = "{\n\t\t\"a\": 1,\n\t\t\"b\": 2,\n\t\t\"c\": 3\n}";
+    test()
+        .cwd("tests/fixtures/formats")
+        .run(code)
+        .expect_value_eq(expected_output)
 }

@@ -2,16 +2,16 @@
 //!
 //! This module provides for Hjson deserialization with the type `Deserializer`.
 
-use std::char;
-use std::io;
-use std::marker::PhantomData;
-use std::str;
-
-use serde::de;
-
 use super::error::{Error, ErrorCode, Result};
 use super::util::StringReader;
 use super::util::{Number, ParseNumber};
+use serde::de;
+use std::{
+    char, io,
+    io::{BufReader, Read},
+    marker::PhantomData,
+    str,
+};
 
 enum State {
     Normal,
@@ -457,7 +457,7 @@ where
                                             .error(ErrorCode::LoneLeadingSurrogateInHexEscape));
                                     }
 
-                                    let n = (((n1 - 0xD800) as u32) << 10 | (n2 - 0xDC00) as u32)
+                                    let n = ((((n1 - 0xD800) as u32) << 10) | (n2 - 0xDC00) as u32)
                                         + 0x1_0000;
 
                                     match char::from_u32(n) {
@@ -505,7 +505,7 @@ where
     }
 }
 
-impl<'de, 'a, Iter> de::Deserializer<'de> for &'a mut Deserializer<Iter>
+impl<'de, Iter> de::Deserializer<'de> for &mut Deserializer<Iter>
 where
     Iter: Iterator<Item = u8>,
 {
@@ -565,7 +565,7 @@ impl<'a, Iter: Iterator<Item = u8>> SeqVisitor<'a, Iter> {
     }
 }
 
-impl<'de, 'a, Iter> de::SeqAccess<'de> for SeqVisitor<'a, Iter>
+impl<'de, Iter> de::SeqAccess<'de> for SeqVisitor<'_, Iter>
 where
     Iter: Iterator<Item = u8>,
 {
@@ -616,7 +616,7 @@ impl<'a, Iter: Iterator<Item = u8>> MapVisitor<'a, Iter> {
     }
 }
 
-impl<'de, 'a, Iter> de::MapAccess<'de> for MapVisitor<'a, Iter>
+impl<'de, Iter> de::MapAccess<'de> for MapVisitor<'_, Iter>
 where
     Iter: Iterator<Item = u8>,
 {
@@ -671,7 +671,7 @@ where
     }
 }
 
-impl<'de, 'a, Iter> de::VariantAccess<'de> for &'a mut Deserializer<Iter>
+impl<'de, Iter> de::VariantAccess<'de> for &mut Deserializer<Iter>
 where
     Iter: Iterator<Item = u8>,
 {
@@ -804,7 +804,10 @@ where
     R: io::Read,
     T: de::DeserializeOwned,
 {
-    from_iter(rdr.bytes())
+    // Use a buffered reader so that calling `.bytes()` is efficient and
+    // doesn't trigger clippy's `unbuffered_bytes` lint when the input
+    // comes from a non-memory source.
+    from_iter(BufReader::new(rdr).bytes())
 }
 
 /// Decodes a Hjson value from a byte slice `&[u8]`.

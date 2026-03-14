@@ -1,13 +1,15 @@
 //! Foundational [`Eval`] trait allowing dispatch between const-eval and regular evaluation
+use nu_path::expand_path;
+
 use crate::{
+    BlockId, Config, ENV_VARIABLE_ID, GetSpan, Range, Record, ShellError, Span, Value, VarId,
     ast::{
-        eval_operator, Assignment, Bits, Boolean, Call, Comparison, Expr, Expression,
-        ExternalArgument, ListItem, Math, Operator, RecordItem,
+        Assignment, Bits, Boolean, Call, Comparison, Expr, Expression, ExternalArgument, ListItem,
+        Math, Operator, RecordItem, eval_operator,
     },
     debugger::DebugContext,
-    BlockId, Config, GetSpan, Range, Record, ShellError, Span, Value, VarId, ENV_VARIABLE_ID,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 /// To share implementations for regular eval and const eval
 pub trait Eval {
@@ -27,13 +29,28 @@ pub trait Eval {
         let expr_span = expr.span(&state);
 
         match &expr.expr {
+            Expr::AttributeBlock(ab) => Self::eval::<D>(state, mut_state, &ab.item),
             Expr::Bool(b) => Ok(Value::bool(*b, expr_span)),
             Expr::Int(i) => Ok(Value::int(*i, expr_span)),
             Expr::Float(f) => Ok(Value::float(*f, expr_span)),
             Expr::Binary(b) => Ok(Value::binary(b.clone(), expr_span)),
-            Expr::Filepath(path, quoted) => Self::eval_filepath(state, mut_state, path.clone(), *quoted, expr_span),
+            Expr::Filepath(path, quoted) => {
+                if *quoted {
+                    Ok(Value::string(path, expr_span))
+                } else {
+                    let path = expand_path(path, true);
+                    Ok(Value::string(path.to_string_lossy(), expr_span))
+                }
+            }
             Expr::Directory(path, quoted) => {
-                Self::eval_directory(state, mut_state, path.clone(), *quoted, expr_span)
+                if path == "-" {
+                    Ok(Value::string("-", expr_span))
+                } else if *quoted {
+                    Ok(Value::string(path, expr_span))
+                } else {
+                    let path = expand_path(path, true);
+                    Ok(Value::string(path.to_string_lossy(), expr_span))
+                }
             }
             Expr::Var(var_id) => Self::eval_var(state, mut_state, *var_id, expr_span),
             Expr::CellPath(cell_path) => Ok(Value::cell_path(cell_path.clone(), expr_span)),
@@ -42,11 +59,16 @@ pub trait Eval {
 
                 // Cell paths are usually case-sensitive, but we give $env
                 // special treatment.
-                if cell_path.head.expr == Expr::Var(ENV_VARIABLE_ID) {
-                    value.follow_cell_path(&cell_path.tail, true)
+                let tail = if cell_path.head.expr == Expr::Var(ENV_VARIABLE_ID) {
+                    let mut tail = cell_path.tail.clone();
+                    if let Some(pm) = tail.first_mut() {
+                        pm.make_insensitive();
+                    }
+                    Cow::Owned(tail)
                 } else {
-                    value.follow_cell_path(&cell_path.tail, false)
-                }
+                    Cow::Borrowed(&cell_path.tail)
+                };
+                value.follow_cell_path(&tail).map(Cow::into_owned)
             }
             Expr::DateTime(dt) => Ok(Value::date(*dt, expr_span)),
             Expr::List(list) => {
@@ -56,6 +78,7 @@ pub trait Eval {
                         ListItem::Item(expr) => output.push(Self::eval::<D>(state, mut_state, expr)?),
                         ListItem::Spread(_, expr) => match Self::eval::<D>(state, mut_state, expr)? {
                             Value::List { vals, .. } => output.extend(vals),
+                            Value::Nothing { .. } => (),
                             _ => return Err(ShellError::CannotSpreadAsList { span: expr_span }),
                         },
                     }
@@ -234,14 +257,14 @@ pub trait Eval {
                         let rhs = Self::eval::<D>(state, mut_state, rhs)?;
 
                         match math {
-                            Math::Plus => lhs.add(op_span, &rhs, expr_span),
-                            Math::Minus => lhs.sub(op_span, &rhs, expr_span),
+                            Math::Add => lhs.add(op_span, &rhs, expr_span),
+                            Math::Subtract => lhs.sub(op_span, &rhs, expr_span),
                             Math::Multiply => lhs.mul(op_span, &rhs, expr_span),
                             Math::Divide => lhs.div(op_span, &rhs, expr_span),
-                            Math::Concat => lhs.concat(op_span, &rhs, expr_span),
+                            Math::FloorDivide => lhs.floor_div(op_span, &rhs, expr_span),
                             Math::Modulo => lhs.modulo(op_span, &rhs, expr_span),
-                            Math::FloorDivision => lhs.floor_div(op_span, &rhs, expr_span),
                             Math::Pow => lhs.pow(op_span, &rhs, expr_span),
+                            Math::Concatenate => lhs.concat(op_span, &rhs, expr_span),
                         }
                     }
                     Operator::Comparison(comparison) => {
@@ -256,8 +279,12 @@ pub trait Eval {
                             Comparison::NotEqual => lhs.ne(op_span, &rhs, expr_span),
                             Comparison::In => lhs.r#in(op_span, &rhs, expr_span),
                             Comparison::NotIn => lhs.not_in(op_span, &rhs, expr_span),
+                            Comparison::Has => lhs.has(op_span, &rhs, expr_span),
+                            Comparison::NotHas => lhs.not_has(op_span, &rhs, expr_span),
                             Comparison::StartsWith => lhs.starts_with(op_span, &rhs, expr_span),
+                            Comparison::NotStartsWith => lhs.not_starts_with(op_span, &rhs, expr_span),
                             Comparison::EndsWith => lhs.ends_with(op_span, &rhs, expr_span),
+                            Comparison::NotEndsWith => lhs.not_ends_with(op_span, &rhs, expr_span),
                             Comparison::RegexMatch => {
                                 Self::regex_match(state, op_span, &lhs, &rhs, false, expr_span)
                             }
@@ -320,22 +347,6 @@ pub trait Eval {
     }
 
     fn get_config(state: Self::State<'_>, mut_state: &mut Self::MutState) -> Arc<Config>;
-
-    fn eval_filepath(
-        state: Self::State<'_>,
-        mut_state: &mut Self::MutState,
-        path: String,
-        quoted: bool,
-        span: Span,
-    ) -> Result<Value, ShellError>;
-
-    fn eval_directory(
-        state: Self::State<'_>,
-        mut_state: &mut Self::MutState,
-        path: String,
-        quoted: bool,
-        span: Span,
-    ) -> Result<Value, ShellError>;
 
     fn eval_var(
         state: Self::State<'_>,

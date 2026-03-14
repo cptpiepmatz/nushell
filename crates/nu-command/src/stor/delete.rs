@@ -1,4 +1,4 @@
-use crate::database::{SQLiteDatabase, MEMORY_DB};
+use crate::database::{MEMORY_DB, SQLiteDatabase};
 use nu_engine::command_prelude::*;
 use nu_protocol::Signals;
 
@@ -16,13 +16,13 @@ impl Command for StorDelete {
             .required_named(
                 "table-name",
                 SyntaxShape::String,
-                "name of the table you want to delete or delete from",
+                "Name of the table you want to delete or delete from.",
                 Some('t'),
             )
             .named(
                 "where-clause",
                 SyntaxShape::String,
-                "a sql string to use as a where clause without the WHERE keyword",
+                "A sql string to use as a where clause without the WHERE keyword.",
                 Some('w'),
             )
             .allow_variants_without_examples(true)
@@ -37,7 +37,7 @@ impl Command for StorDelete {
         vec!["sqlite", "remove", "table", "saving", "drop"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Delete a table from the in-memory sqlite database",
@@ -45,8 +45,7 @@ impl Command for StorDelete {
                 result: None,
             },
             Example {
-                description:
-                    "Delete some rows from the in-memory sqlite database with a where clause",
+                description: "Delete some rows from the in-memory sqlite database with a where clause",
                 example: "stor delete --table-name nudb --where-clause \"int1 == 5\"",
                 result: None,
             },
@@ -88,35 +87,36 @@ impl Command for StorDelete {
             Signals::empty(),
         ));
 
-        if let Some(new_table_name) = table_name_opt {
-            if let Ok(conn) = db.open_connection() {
-                let sql_stmt = match where_clause_opt {
-                    None => {
-                        // We're deleting an entire table
-                        format!("DROP TABLE {}", new_table_name)
-                    }
-                    Some(where_clause) => {
-                        // We're just deleting some rows
-                        let mut delete_stmt = format!("DELETE FROM {} ", new_table_name);
+        if let Some(new_table_name) = table_name_opt
+            && let Ok(conn) = db.open_connection()
+        {
+            let sql_stmt = match where_clause_opt {
+                None => {
+                    // We're deleting an entire table
+                    format!("DROP TABLE {new_table_name}")
+                }
+                Some(where_clause) => {
+                    // We're just deleting some rows
+                    let mut delete_stmt = format!("DELETE FROM {new_table_name} ");
 
-                        // Yup, this is a bit janky, but I'm not sure a better way to do this without having
-                        // --and and --or flags as well as supporting ==, !=, <>, is null, is not null, etc.
-                        // and other sql syntax. So, for now, just type a sql where clause as a string.
-                        delete_stmt.push_str(&format!("WHERE {}", where_clause));
-                        delete_stmt
-                    }
-                };
+                    // Yup, this is a bit janky, but I'm not sure a better way to do this without having
+                    // --and and --or flags as well as supporting ==, !=, <>, is null, is not null, etc.
+                    // and other sql syntax. So, for now, just type a sql where clause as a string.
+                    delete_stmt.push_str(&format!("WHERE {where_clause}"));
+                    delete_stmt
+                }
+            };
 
-                // dbg!(&sql_stmt);
-                conn.execute(&sql_stmt, [])
-                    .map_err(|err| ShellError::GenericError {
-                        error: "Failed to open SQLite connection in memory from delete".into(),
-                        msg: err.to_string(),
-                        span: Some(Span::test_data()),
-                        help: None,
-                        inner: vec![],
-                    })?;
-            }
+            // dbg!(&sql_stmt);
+            conn.execute(&sql_stmt, [])
+                .map_err(|err| ShellError::GenericError {
+                    error: "Failed to delete using the SQLite connection in memory from delete.rs."
+                        .into(),
+                    msg: err.to_string(),
+                    span: Some(Span::test_data()),
+                    help: None,
+                    inner: vec![],
+                })?;
         }
         // dbg!(db.clone());
         Ok(Value::custom(db, span).into_pipeline_data())
@@ -128,9 +128,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(StorDelete {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StorDelete)
     }
 }

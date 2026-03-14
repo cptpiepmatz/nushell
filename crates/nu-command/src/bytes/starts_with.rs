@@ -1,5 +1,6 @@
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
+use nu_protocol::shell_error::io::IoError;
 use std::io::Read;
 
 struct Arguments {
@@ -40,7 +41,7 @@ impl Command for BytesStartsWith {
     }
 
     fn description(&self) -> &str {
-        "Check if bytes starts with a pattern."
+        "Check if binary data starts with a pattern."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -71,7 +72,7 @@ impl Command for BytesStartsWith {
             reader
                 .take(pattern.len() as u64)
                 .read_to_end(&mut start)
-                .err_span(span)?;
+                .map_err(|err| IoError::new(err, span, None))?;
 
             Ok(Value::bool(start == pattern, head).into_pipeline_data())
         } else {
@@ -83,20 +84,20 @@ impl Command for BytesStartsWith {
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Checks if binary starts with `0x[1F FF AA]`",
+                description: "Checks if binary starts with `0x[1F FF AA]`.",
                 example: "0x[1F FF AA AA] | bytes starts-with 0x[1F FF AA]",
                 result: Some(Value::test_bool(true)),
             },
             Example {
-                description: "Checks if binary starts with `0x[1F]`",
+                description: "Checks if binary starts with `0x[1F]`.",
                 example: "0x[1F FF AA AA] | bytes starts-with 0x[1F]",
                 result: Some(Value::test_bool(true)),
             },
             Example {
-                description: "Checks if binary starts with `0x[1F]`",
+                description: "Checks if binary starts with `0x[1F]`.",
                 example: "0x[1F FF AA AA] | bytes starts-with 0x[11]",
                 result: Some(Value::test_bool(false)),
             },
@@ -127,9 +128,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(BytesStartsWith {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(BytesStartsWith)
     }
 }

@@ -1,16 +1,16 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 use polars::df;
 use polars::prelude::UniqueKeepStrategy;
 
-use crate::values::CustomValueSupport;
 use crate::PolarsPlugin;
+use crate::values::CustomValueSupport;
+use crate::values::PolarsPluginType;
 
-use crate::values::utils::convert_columns_string;
 use crate::values::NuDataFrame;
+use crate::values::utils::convert_columns_string;
 
 #[derive(Clone)]
 pub struct DropDuplicates;
@@ -31,22 +31,28 @@ impl PluginCommand for DropDuplicates {
             .optional(
                 "subset",
                 SyntaxShape::Table(vec![]),
-                "subset of columns to drop duplicates",
+                "Subset of columns to drop duplicates.",
             )
-            .switch("maintain", "maintain order", Some('m'))
+            .switch("maintain", "Maintain order.", Some('m'))
             .switch(
                 "last",
-                "keeps last duplicate value (by default keeps first)",
+                "Keeps last duplicate value (by default keeps first).",
                 Some('l'),
             )
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "drop duplicates",
             example: "[[a b]; [1 2] [3 4] [1 2]] | polars into-df
@@ -72,7 +78,10 @@ impl PluginCommand for DropDuplicates {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

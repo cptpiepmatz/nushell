@@ -1,10 +1,10 @@
 use std::{
     collections::BTreeMap,
-    sync::{atomic::AtomicU64, Mutex},
+    sync::{Mutex, atomic::AtomicU64},
 };
 
 use handle_custom_value::HandleCustomValue;
-use nu_plugin::{serve_plugin, EngineInterface, MsgPackSerializer, Plugin, PluginCommand};
+use nu_plugin::{EngineInterface, MsgPackSerializer, Plugin, PluginCommand, serve_plugin};
 
 mod cool_custom_value;
 mod handle_custom_value;
@@ -93,10 +93,10 @@ impl Plugin for CustomValuePlugin {
         // This is how we implement our drop behavior.
         if let Some(drop_check) = custom_value.as_any().downcast_ref::<DropCheckValue>() {
             drop_check.notify();
-        } else if let Some(handle) = custom_value.as_any().downcast_ref::<HandleCustomValue>() {
-            if let Ok(mut handles) = self.handles.lock() {
-                handles.remove(&handle.0);
-            }
+        } else if let Some(handle) = custom_value.as_any().downcast_ref::<HandleCustomValue>()
+            && let Ok(mut handles) = self.handles.lock()
+        {
+            handles.remove(&handle.0);
         }
         Ok(())
     }

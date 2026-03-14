@@ -1,5 +1,5 @@
 use crate::{
-    cool_custom_value::CoolCustomValue, second_custom_value::SecondCustomValue, CustomValuePlugin,
+    CustomValuePlugin, cool_custom_value::CoolCustomValue, second_custom_value::SecondCustomValue,
 };
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, Example, LabeledError, ShellError, Signature, Span, Value};
@@ -21,7 +21,7 @@ impl SimplePluginCommand for Update {
         Signature::build(self.name()).category(Category::Experimental)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "custom-value generate | custom-value update",

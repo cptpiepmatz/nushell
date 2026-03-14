@@ -1,26 +1,22 @@
-use nu_test_support::fs::Stub::FileWithContentToBeTrimmed;
+use nu_test_support::fs::Stub::{FileWithContent, FileWithContentToBeTrimmed};
+use nu_test_support::nu;
 use nu_test_support::playground::Playground;
-use nu_test_support::{nu, pipeline};
 use pretty_assertions::assert_eq;
 
 #[test]
 fn takes_rows_of_nu_value_strings_and_pipes_it_to_stdin_of_external() {
-    let sample = r#"
-                [[name, rusty_luck, origin];
-                 [Jason, 1, Canada],
-                 [JT, 1, "New Zealand"],
-                 [Andrés, 1, Ecuador],
-                 [AndKitKatz, 1, "Estados Unidos"]]
-            "#;
-
-    let actual = nu!(pipeline(&format!(
-        "
-            {sample}
-            | get origin
-            | each {{ |it| nu --testbin cococo $it | nu --testbin chop }}
-            | get 2
-            "
-    )));
+    let actual = nu!(r###"
+        [
+            [name rusty_luck origin];
+            [Jason 1 Canada]
+            [JT 1 "New Zealand"]
+            [Andrés 1 Ecuador]
+            [AndKitKatz 1 "Estados Unidos"]
+        ]
+        | get origin
+        | each {|it| nu --testbin cococo $it | nu --testbin chop}
+        | get 2
+    "###);
 
     // chop will remove the last escaped double quote from \"Estados Unidos\"
     assert_eq!(actual.out, "Ecuado");
@@ -37,16 +33,13 @@ fn treats_dot_dot_as_path_not_range() {
             ",
         )]);
 
-        let actual = nu!(
-        cwd: dirs.test(), pipeline(
-        "
+        let actual = nu!(cwd: dirs.test(), "
             mkdir temp;
             cd temp;
             print (open ../nu_times.csv).name.0 | table;
             cd ..;
             rmdir temp
-            "
-        ));
+            ");
 
         // chop will remove the last escaped double quote from \"Estados Unidos\"
         assert_eq!(actual.out, "Jason");
@@ -94,15 +87,12 @@ fn subexpression_handles_dot() {
             ",
         )]);
 
-        let actual = nu!(
-        cwd: dirs.test(), pipeline(
-        "
+        let actual = nu!(cwd: dirs.test(), "
             echo (open nu_times.csv)
             | get name
             | each { |it| nu --testbin chop $it }
             | get 3
-            "
-        ));
+            ");
 
         assert_eq!(actual.out, "AndKitKat");
     });
@@ -759,71 +749,41 @@ fn range_with_mixed_types() {
         echo 1..10.5 | math sum
         ");
 
-    assert_eq!(actual.out, "55");
+    assert_eq!(actual.out, "55.0");
 }
 
 #[test]
 fn filesize_math() {
-    let actual = nu!("
-        100 * 10kib
-        ");
-
-    assert_eq!(actual.out, "1000.0 KiB");
-    // why 1000.0 KB instead of 1.0 MB?
-    // looks like `byte.get_appropriate_unit(false)` behaves this way
+    let actual = nu!("100 * 10kB");
+    assert_eq!(actual.out, "1.0 MB");
 }
 
 #[test]
 fn filesize_math2() {
-    let actual = nu!("
-        100 / 10kb
-        ");
-
-    assert!(actual.err.contains("doesn't support"));
+    let actual = nu!("100 / 10kB");
+    assert!(
+        actual
+            .err
+            .contains("nu::parser::operator_incompatible_types")
+    );
 }
 
 #[test]
 fn filesize_math3() {
-    let actual = nu!("
-        100kib / 10
-        ");
-
-    assert_eq!(actual.out, "10.0 KiB");
+    let actual = nu!("100kB / 10");
+    assert_eq!(actual.out, "10.0 kB");
 }
+
 #[test]
 fn filesize_math4() {
-    let actual = nu!("
-        100kib * 5
-        ");
-
-    assert_eq!(actual.out, "500.0 KiB");
+    let actual = nu!("100kB * 5");
+    assert_eq!(actual.out, "500.0 kB");
 }
 
 #[test]
 fn filesize_math5() {
-    let actual = nu!("
-        1000 * 1kib
-        ");
-
-    assert_eq!(actual.out, "1000.0 KiB");
-}
-
-#[test]
-fn filesize_math6() {
-    let actual = nu!("
-        1000 * 1mib
-        ");
-
-    assert_eq!(actual.out, "1000.0 MiB");
-}
-
-#[test]
-fn filesize_math7() {
-    let actual = nu!("
-        1000 * 1gib
-        ");
-
-    assert_eq!(actual.out, "1000.0 GiB");
+    let actual = nu!("100 * 1kB");
+    assert_eq!(actual.out, "100.0 kB");
 }
 
 #[test]
@@ -832,7 +792,7 @@ fn exclusive_range_with_mixed_types() {
         echo 1..<10.5 | math sum
         ");
 
-    assert_eq!(actual.out, "55");
+    assert_eq!(actual.out, "55.0");
 }
 
 #[test]
@@ -846,22 +806,18 @@ fn table_with_commas() {
 
 #[test]
 fn duration_overflow() {
-    let actual = nu!(pipeline(
-        "
-        ls | get modified | each { |it| $it + 10000000000000000day }
-        "
-    ));
+    let actual = nu!("
+    ls | get modified | each { |it| $it + 10000000000000000day }
+    ");
 
     assert!(actual.err.contains("duration too large"));
 }
 
 #[test]
 fn date_and_duration_overflow() {
-    let actual = nu!(pipeline(
-        "
-        ls | get modified | each { |it| $it + 1000000000day }
-        "
-    ));
+    let actual = nu!("
+    ls | get modified | each { |it| $it + 1000000000day }
+    ");
 
     // assert_eq!(actual.err, "overflow");
     assert!(actual.err.contains("duration too large"));
@@ -869,101 +825,85 @@ fn date_and_duration_overflow() {
 
 #[test]
 fn pipeline_params_simple() {
-    let actual = nu!(pipeline(
-        "
-        echo 1 2 3 | $in.1 * $in.2
-        "
-    ));
+    let actual = nu!("
+    echo 1 2 3 | $in.1 * $in.2
+    ");
 
     assert_eq!(actual.out, "6");
 }
 
 #[test]
 fn pipeline_params_inner() {
-    let actual = nu!(pipeline(
-        "
-        echo 1 2 3 | (echo $in.2 6 7 | $in.0 * $in.1 * $in.2)
-        "
-    ));
+    let actual = nu!("
+    echo 1 2 3 | (echo $in.2 6 7 | $in.0 * $in.1 * $in.2)
+    ");
 
     assert_eq!(actual.out, "126");
 }
 
 #[test]
 fn better_table_lex() {
-    let actual = nu!(pipeline(
-        "
-        let table = [
-            [name, size];
-            [small, 7]
-            [medium, 10]
-            [large, 12]
-        ];
-        $table.1.size
-        "
-    ));
+    let actual = nu!("
+    let table = [
+        [name, size];
+        [small, 7]
+        [medium, 10]
+        [large, 12]
+    ];
+    $table.1.size
+    ");
 
     assert_eq!(actual.out, "10");
 }
 
 #[test]
 fn better_subexpr_lex() {
-    let actual = nu!(pipeline(
-        "
-        (echo boo
-        sam | str length | math sum)
-        "
-    ));
+    let actual = nu!("
+    (echo boo
+    sam | str length | math sum)
+    ");
 
     assert_eq!(actual.out, "6");
 }
 
 #[test]
 fn subsubcommand() {
-    let actual = nu!(pipeline(
-        r#"
-        def "aws s3 rb" [url] { $url + " loaded" }; aws s3 rb localhost
-        "#
-    ));
+    let actual = nu!(r#"
+    def "aws s3 rb" [url] { $url + " loaded" }; aws s3 rb localhost
+    "#);
 
     assert_eq!(actual.out, "localhost loaded");
 }
 
 #[test]
 fn manysubcommand() {
-    let actual = nu!(pipeline(
-        r#"
-        def "aws s3 rb ax vf qqqq rrrr" [url] { $url + " loaded" }; aws s3 rb ax vf qqqq rrrr localhost
-        "#
-    ));
+    let actual = nu!(r#"
+    def "aws s3 rb ax vf qqqq rrrr" [url] { $url + " loaded" }; aws s3 rb ax vf qqqq rrrr localhost
+    "#);
 
     assert_eq!(actual.out, "localhost loaded");
 }
 
 #[test]
 fn nothing_string_1() {
-    let actual = nu!(pipeline(
-        r#"
-        null == "foo"
-        "#
-    ));
+    let actual = nu!(r#"
+    null == "foo"
+    "#);
 
     assert_eq!(actual.out, "false");
 }
 
 #[test]
 fn hide_alias_shadowing() {
-    let actual = nu!(pipeline(
-        "
-        def test-shadowing [] {
-            alias greet = echo hello;
-            let xyz = {|| greet };
-            hide greet;
-            do $xyz
-        };
-        test-shadowing
-        "
-    ));
+    let actual = nu!("
+    def test-shadowing [] {
+        alias greet = echo hello;
+        let xyz = {|| greet };
+        hide greet;
+        do $xyz
+    };
+    test-shadowing
+    ");
     assert_eq!(actual.out, "hello");
 }
 
@@ -971,31 +911,27 @@ fn hide_alias_shadowing() {
 #[ignore]
 #[test]
 fn hide_alias_does_not_escape_scope() {
-    let actual = nu!(pipeline(
-        "
-        def test-alias [] {
-            alias greet = echo hello;
-            (hide greet);
-            greet
-        };
-        test-alias
-        "
-    ));
+    let actual = nu!("
+    def test-alias [] {
+        alias greet = echo hello;
+        (hide greet);
+        greet
+    };
+    test-alias
+    ");
     assert_eq!(actual.out, "hello");
 }
 
 #[test]
 fn hide_alias_hides_alias() {
-    let actual = nu!(pipeline(
-        "
-        def test-alias [] {
-            alias ll = ls -l;
-            hide ll;
-            ll
-        };
-        test-alias
-        "
-    ));
+    let actual = nu!("
+    def test-alias [] {
+        alias ll = ls -l;
+        hide ll;
+        ll
+    };
+    test-alias
+    ");
 
     assert!(
         actual.err.contains("Command `ll` not found") && actual.err.contains("Did you mean `all`?")
@@ -1165,7 +1101,117 @@ fn command_not_found_error_shows_not_found_2() {
 #[test]
 fn error_on_out_greater_pipe() {
     let actual = nu!(r#""foo" o>| print"#);
-    assert!(actual
-        .err
-        .contains("Redirecting stdout to a pipe is the same as normal piping"))
+    assert!(
+        actual
+            .err
+            .contains("Redirecting stdout to a pipe is the same as normal piping")
+    )
+}
+
+#[test]
+fn error_with_backtrace() {
+    Playground::setup("error with backtrace", |dirs, sandbox| {
+        sandbox.with_files(&[FileWithContent("tmp_env.nu", "$env.NU_BACKTRACE = 1")]);
+
+        let actual = nu!(
+            env_config: "tmp_env.nu",
+            cwd: dirs.test(),
+            r#"def a [x] { if $x == 3 { error make {msg: 'a custom error'}}};a 3"#);
+        let chained_error_cnt: Vec<&str> = actual
+            .err
+            .matches("diagnostic code: chained_error")
+            .collect();
+        // run `a 3`, and it raises error, so there should be 1.
+        assert_eq!(chained_error_cnt.len(), 1);
+        assert!(actual.err.contains("a custom error"));
+
+        let actual = nu!(
+            env_config: "tmp_env.nu",
+            cwd: dirs.test(),
+            r#"def a [x] { if $x == 3 { error make {msg: 'a custom error'}}};def b [] { a 1; a 3; a 2 };b"#);
+
+        let chained_error_cnt: Vec<&str> = actual
+            .err
+            .matches("diagnostic code: chained_error")
+            .collect();
+        // run `b`, it runs `a 3`, and it raises error, so there should be 2.
+        assert_eq!(chained_error_cnt.len(), 2);
+        assert!(actual.err.contains("a custom error"));
+
+        let actual = nu!(
+            env_config: "tmp_env.nu",
+            cwd: dirs.test(),
+            r#"error make {msg: 'a custom err'}"#);
+        let chained_error_cnt: Vec<&str> = actual
+            .err
+            .matches("diagnostic code: chained_error")
+            .collect();
+        // run error make directly, show no backtrace is available
+        assert_eq!(chained_error_cnt.len(), 0);
+    });
+}
+
+#[test]
+fn liststream_error_with_backtrace_custom() {
+    Playground::setup("liststream error with backtrace", |dirs, sandbox| {
+        sandbox.with_files(&[FileWithContent("tmp_env.nu", "$env.NU_BACKTRACE = 1")]);
+
+        let actual = nu!(
+            env_config: "tmp_env.nu",
+            cwd: dirs.test(),
+            r#"def a [x] { if $x == 3 { [1] | each {error make {'msg': 'a custom error'}}}};a 3"#);
+        assert!(actual.err.contains("a custom error"));
+    });
+}
+
+#[test]
+fn liststream_error_with_backtrace_function() {
+    Playground::setup("liststream error with backtrace", |dirs, sandbox| {
+        sandbox.with_files(&[FileWithContent("tmp_env.nu", "$env.NU_BACKTRACE = 1")]);
+        let actual = nu!(
+            env_config: "tmp_env.nu",
+            cwd: dirs.test(),
+            r#"def a [x] {
+    if $x == 3 {
+        [1]
+        | each {
+            error make {
+                msg: 'a custom error'
+            }
+        }
+    }
+}
+def b [] {
+    a 1
+    a 3
+    a 2
+}
+b
+"#);
+        let chained_error_cnt: Vec<&str> = actual
+            .err
+            .matches("diagnostic code: chained_error")
+            .collect();
+        assert_eq!(chained_error_cnt.len(), 1);
+        assert!(actual.err.contains("a custom error"));
+        let eval_with_input_cnt: Vec<&str> = actual.err.matches("eval_block_with_input").collect();
+        assert_eq!(eval_with_input_cnt.len(), 2);
+    });
+}
+
+#[test]
+fn liststream_error_with_backtrace_single_stream() {
+    Playground::setup("liststream error with backtrace", |dirs, sandbox| {
+        sandbox.with_files(&[FileWithContent("tmp_env.nu", "$env.NU_BACKTRACE = 1")]);
+        let actual = nu!(
+            env_config: "tmp_env.nu",
+            cwd: dirs.test(),
+            r#"[1] | each { error make {msg: 'a custom err'} }"#);
+        let chained_error_cnt: Vec<&str> = actual
+            .err
+            .matches("diagnostic code: chained_error")
+            .collect();
+        // run error make directly, show no backtrace is available
+        assert_eq!(chained_error_cnt.len(), 0);
+    });
 }

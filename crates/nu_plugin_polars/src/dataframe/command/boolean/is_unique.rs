@@ -1,10 +1,13 @@
-use crate::{values::CustomValueSupport, PolarsPlugin};
+use crate::{
+    PolarsPlugin,
+    values::{CustomValueSupport, PolarsPluginType},
+};
 
 use super::super::super::values::{Column, NuDataFrame};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Type, Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Value,
 };
 use polars::prelude::IntoSeries;
 
@@ -24,14 +27,20 @@ impl PluginCommand for IsUnique {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Create mask indicating unique values",
@@ -58,8 +67,7 @@ impl PluginCommand for IsUnique {
             },
             Example {
                 description: "Create mask indicating duplicated rows in a dataframe",
-                example:
-                    "[[a, b]; [1 2] [1 2] [3 3] [3 3] [1 1]] | polars into-df | polars is-unique",
+                example: "[[a, b]; [1 2] [1 2] [3 3] [3 3] [1 1]] | polars into-df | polars is-unique",
                 result: Some(
                     NuDataFrame::try_from_columns(
                         vec![Column::new(
@@ -88,7 +96,10 @@ impl PluginCommand for IsUnique {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

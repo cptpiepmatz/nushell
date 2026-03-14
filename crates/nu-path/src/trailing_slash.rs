@@ -5,7 +5,7 @@ use std::{
 
 /// Strip any trailing slashes from a non-root path. This is required in some contexts, for example
 /// for the `PWD` environment variable.
-pub fn strip_trailing_slash(path: &Path) -> Cow<Path> {
+pub fn strip_trailing_slash(path: &Path) -> Cow<'_, Path> {
     if has_trailing_slash(path) {
         // If there are, the safest thing to do is have Rust parse the path for us and build it
         // again. This will correctly handle a root directory, but it won't add the trailing slash.
@@ -40,7 +40,7 @@ pub fn has_trailing_slash(path: &Path) -> bool {
 #[cfg(target_arch = "wasm32")]
 pub fn has_trailing_slash(path: &Path) -> bool {
     // in the web paths are often just URLs, they are separated by forward slashes
-    path.to_str().map_or(false, |s| s.ends_with('/'))
+    path.to_str().is_some_and(|s| s.ends_with('/'))
 }
 
 #[cfg(test)]
@@ -110,6 +110,15 @@ mod tests {
         assert_eq!(
             Path::new(r"\\foo\bar"),
             strip_trailing_slash(Path::new(r"\\foo\bar\"))
+        );
+    }
+
+    #[cfg_attr(not(windows), ignore = "only for Windows")]
+    #[test]
+    fn strip_trailing_windows_device() {
+        assert_eq!(
+            Path::new(r"\\.\foo"),
+            strip_trailing_slash(Path::new(r"\\.\foo\"))
         );
     }
 }

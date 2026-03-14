@@ -1,4 +1,7 @@
-use nu_engine::command_prelude::*;
+use nu_engine::{
+    command_prelude::*,
+    exit::{cleanup, cleanup_exit},
+};
 
 #[derive(Clone)]
 pub struct Exit;
@@ -16,6 +19,7 @@ impl Command for Exit {
                 SyntaxShape::Int,
                 "Exit code to return immediately with.",
             )
+            .switch("abort", "Exit by abort.", None)
             .category(Category::Shells)
     }
 
@@ -36,14 +40,20 @@ impl Command for Exit {
     ) -> Result<PipelineData, ShellError> {
         let exit_code: Option<i64> = call.opt(engine_state, stack, 0)?;
 
-        if let Some(exit_code) = exit_code {
-            std::process::exit(exit_code as i32);
-        }
+        let abort = call.has_flag(engine_state, stack, "abort")?;
+        let exit_code = exit_code.map_or(0, |it| it as i32);
 
-        std::process::exit(0);
+        if abort {
+            cleanup_exit((), engine_state, exit_code);
+            Ok(Value::nothing(call.head).into_pipeline_data())
+        } else if cleanup((), engine_state).is_some() {
+            Ok(Value::nothing(call.head).into_pipeline_data())
+        } else {
+            Err(ShellError::Exit { code: exit_code })
+        }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Exit the current shell",
             example: "exit",

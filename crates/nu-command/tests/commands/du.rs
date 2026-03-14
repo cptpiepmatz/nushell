@@ -1,46 +1,38 @@
 use nu_test_support::fs::Stub::EmptyFile;
-use nu_test_support::{nu, pipeline, playground::Playground};
+use nu_test_support::{nu, playground::Playground};
 use rstest::rstest;
 
 #[test]
 fn test_du_flag_min_size() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            du -m -1
-        "#
-    ));
-    assert!(actual
-        .err
-        .contains("Negative value passed when positive one is required"));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        du -m -1
+    "#);
+    assert!(
+        actual
+            .err
+            .contains("Negative value passed when positive one is required")
+    );
 
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            du -m 1
-        "#
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        du -m 1
+    "#);
     assert!(actual.err.is_empty());
 }
 
 #[test]
 fn test_du_flag_max_depth() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            du -d -2
-        "#
-    ));
-    assert!(actual
-        .err
-        .contains("Negative value passed when positive one is required"));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        du -d -2
+    "#);
+    assert!(
+        actual
+            .err
+            .contains("Negative value passed when positive one is required")
+    );
 
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        r#"
-            du -d 2
-        "#
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", r#"
+        du -d 2
+    "#);
     assert!(actual.err.is_empty());
 }
 
@@ -57,8 +49,10 @@ fn du_files_with_glob_metachars(#[case] src_name: &str) {
 
         let actual = nu!(
             cwd: dirs.test(),
-            "du -d 1 '{}'",
-            src.display(),
+            format!(
+                "du -d 1 '{}'",
+                src.display(),
+            )
         );
 
         assert!(actual.err.is_empty());
@@ -66,8 +60,10 @@ fn du_files_with_glob_metachars(#[case] src_name: &str) {
         // also test for variables.
         let actual = nu!(
             cwd: dirs.test(),
-            "let f = '{}'; du -d 1 $f",
-            src.display(),
+            format!(
+                "let f = '{}'; du -d 1 $f",
+                src.display(),
+            )
         );
 
         assert!(actual.err.is_empty());
@@ -93,7 +89,7 @@ fn du_with_multiple_path() {
 
     // report errors if one path not exists
     let actual = nu!(cwd: "tests/fixtures", "du cp asdf | get path | path basename");
-    assert!(actual.err.contains("directory not found"));
+    assert!(actual.err.contains("nu::shell::io::not_found"));
     assert!(!actual.status.success());
 
     // du with spreading empty list should returns nothing.
@@ -113,4 +109,24 @@ fn test_du_output_columns() {
         "du -m 1 -l | columns | str join ','"
     );
     assert_eq!(actual.out, "path,apparent,physical,directories,files");
+}
+
+#[test]
+fn du_wildcards() {
+    Playground::setup("du_wildcards", |dirs, sandbox| {
+        sandbox.with_files(&[EmptyFile(".a")]);
+
+        // by default, wildcard don't match dot files.
+        let actual = nu!(
+            cwd: dirs.test(),
+            "du * | length",
+        );
+        assert_eq!(actual.out, "0");
+        // unless `-a` flag is provided.
+        let actual = nu!(
+            cwd: dirs.test(),
+            "du -a * | length",
+        );
+        assert_eq!(actual.out, "1");
+    });
 }

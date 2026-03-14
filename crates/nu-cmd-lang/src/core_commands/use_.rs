@@ -22,7 +22,11 @@ impl Command for Use {
         Signature::build("use")
             .input_output_types(vec![(Type::Nothing, Type::Nothing)])
             .allow_variants_without_examples(true)
-            .required("module", SyntaxShape::String, "Module or module file.")
+            .required(
+                "module",
+                SyntaxShape::OneOf(vec![SyntaxShape::String, SyntaxShape::Nothing]),
+                "Module or module file (`null` for no-op).",
+            )
             .rest(
                 "members",
                 SyntaxShape::Any,
@@ -54,6 +58,9 @@ This command is a parser keyword. For details, check:
         call: &Call,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
+        if call.get_parser_info(caller_stack, "noop").is_some() {
+            return Ok(PipelineData::empty());
+        }
         let Some(Expression {
             expr: Expr::ImportPattern(import_pattern),
             ..
@@ -159,35 +166,35 @@ This command is a parser keyword. For details, check:
         Ok(PipelineData::empty())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Define a custom command in a module and call it",
+                description: "Define a custom command in a module and call it.",
                 example: r#"module spam { export def foo [] { "foo" } }; use spam foo; foo"#,
                 result: Some(Value::test_string("foo")),
             },
             Example {
-                description: "Define a custom command that participates in the environment in a module and call it",
+                description: "Define a custom command that participates in the environment in a module and call it.",
                 example: r#"module foo { export def --env bar [] { $env.FOO_BAR = "BAZ" } }; use foo bar; bar; $env.FOO_BAR"#,
                 result: Some(Value::test_string("BAZ")),
             },
             Example {
-                description: "Use a plain module name to import its definitions qualified by the module name",
+                description: "Use a plain module name to import its definitions qualified by the module name.",
                 example: r#"module spam { export def foo [] { "foo" }; export def bar [] { "bar" } }; use spam; (spam foo) + (spam bar)"#,
                 result: Some(Value::test_string("foobar")),
             },
             Example {
-                description: "Specify * to use all definitions in a module",
+                description: "Specify * to use all definitions in a module.",
                 example: r#"module spam { export def foo [] { "foo" }; export def bar [] { "bar" } }; use spam *; (foo) + (bar)"#,
                 result: Some(Value::test_string("foobar")),
             },
             Example {
-                description: "To use commands with spaces, like subcommands, surround them with quotes",
+                description: "To use commands with spaces, like subcommands, surround them with quotes.",
                 example: r#"module spam { export def 'foo bar' [] { "baz" } }; use spam 'foo bar'; foo bar"#,
                 result: Some(Value::test_string("baz")),
             },
             Example {
-                description: "To use multiple definitions from a module, wrap them in a list",
+                description: "To use multiple definitions from a module, wrap them in a list.",
                 example: r#"module spam { export def foo [] { "foo" }; export def 'foo bar' [] { "baz" } }; use spam ['foo', 'foo bar']; (foo) + (foo bar)"#,
                 result: Some(Value::test_string("foobaz")),
             },
@@ -198,9 +205,8 @@ This command is a parser keyword. For details, check:
 #[cfg(test)]
 mod test {
     #[test]
-    fn test_examples() {
+    fn test_examples() -> nu_test_support::Result {
         use super::Use;
-        use crate::test_examples;
-        test_examples(Use {})
+        nu_test_support::test().examples(Use)
     }
 }

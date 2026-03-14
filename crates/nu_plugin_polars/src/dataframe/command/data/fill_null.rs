@@ -1,12 +1,11 @@
 use crate::{
-    dataframe::values::{Column, NuDataFrame, NuExpression, NuLazyFrame},
-    values::{cant_convert_err, CustomValueSupport, PolarsPluginObject, PolarsPluginType},
     PolarsPlugin,
+    dataframe::values::{Column, NuDataFrame, NuExpression, NuLazyFrame},
+    values::{CustomValueSupport, PolarsPluginObject, PolarsPluginType, cant_convert_err},
 };
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 
 #[derive(Clone)]
@@ -28,37 +27,73 @@ impl PluginCommand for LazyFillNull {
             .required(
                 "fill",
                 SyntaxShape::Any,
-                "Expression to use to fill the null values",
+                "Expression to use to fill the null values.",
             )
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
+                ),
+            ])
             .category(Category::Custom("lazyframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
-        vec![Example {
-            description: "Fills the null values by 0",
-            example: "[1 2 2 3 3] | polars into-df | polars shift 2 | polars fill-null 0",
-            result: Some(
-                NuDataFrame::try_from_columns(
-                    vec![Column::new(
-                        "0".to_string(),
-                        vec![
-                            Value::test_int(0),
-                            Value::test_int(0),
-                            Value::test_int(1),
-                            Value::test_int(2),
-                            Value::test_int(2),
-                        ],
-                    )],
-                    None,
-                )
-                .expect("simple df for test should not fail")
-                .into_value(Span::test_data()),
-            ),
-        }]
+    fn examples(&self) -> Vec<Example<'_>> {
+        vec![
+            Example {
+                description: "Fills the null values by 0",
+                example: "[1 2 2 3 3] | polars into-df | polars shift 2 | polars fill-null 0",
+                result: Some(
+                    NuDataFrame::try_from_columns(
+                        vec![Column::new(
+                            "0".to_string(),
+                            vec![
+                                Value::test_int(0),
+                                Value::test_int(0),
+                                Value::test_int(1),
+                                Value::test_int(2),
+                                Value::test_int(2),
+                            ],
+                        )],
+                        None,
+                    )
+                    .expect("simple df for test should not fail")
+                    .into_value(Span::test_data()),
+                ),
+            },
+            Example {
+                description: "Fills the null values in expression",
+                example: "[[a]; [1] [2] [2] [3] [3]]
+                    | polars into-df
+                    | polars select (polars col a | polars shift 2 | polars fill-null 0)
+                    | polars collect",
+                result: Some(
+                    NuDataFrame::try_from_columns(
+                        vec![Column::new(
+                            "a".to_string(),
+                            vec![
+                                Value::test_int(0),
+                                Value::test_int(0),
+                                Value::test_int(1),
+                                Value::test_int(2),
+                                Value::test_int(2),
+                            ],
+                        )],
+                        None,
+                    )
+                    .expect("simple df for test should not fail")
+                    .into_value(Span::test_data()),
+                ),
+            },
+        ]
     }
 
     fn run(
@@ -68,6 +103,7 @@ impl PluginCommand for LazyFillNull {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let fill: Value = call.req(0)?;
         let value = input.into_value(call.head)?;
 
@@ -85,6 +121,7 @@ impl PluginCommand for LazyFillNull {
             )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

@@ -1,9 +1,9 @@
 use crate::ClosureEvalOnce;
-use nu_path::canonicalize_with;
+use nu_path::absolute_with;
 use nu_protocol::{
-    ast::Expr,
-    engine::{Call, EngineState, Stack, StateWorkingSet},
     ShellError, Span, Type, Value, VarId,
+    ast::Expr,
+    engine::{Call, EngineState, EnvName, Stack},
 };
 use std::{
     collections::HashMap,
@@ -32,7 +32,7 @@ pub fn convert_env_vars(
 ) -> Result<(), ShellError> {
     let conversions = conversions.as_record()?;
     for (key, conversion) in conversions.into_iter() {
-        if let Some(val) = stack.get_env_var_insensitive(engine_state, key) {
+        if let Some(val) = stack.get_env_var(engine_state, key) {
             match val.get_type() {
                 Type::String => {}
                 _ => continue,
@@ -52,7 +52,7 @@ pub fn convert_env_vars(
                 .run_with_value(val.clone())?
                 .into_value(val.span())?;
 
-            stack.add_env_var(key.clone(), new_val);
+            stack.add_env_var(key.to_string(), new_val);
         }
     }
     Ok(())
@@ -64,7 +64,10 @@ pub fn convert_env_vars(
 /// It returns Option instead of Result since we do want to translate all the values we can and
 /// skip errors. This function is called in the main() so we want to keep running, we cannot just
 /// exit.
-pub fn convert_env_values(engine_state: &mut EngineState, stack: &Stack) -> Result<(), ShellError> {
+pub fn convert_env_values(
+    engine_state: &mut EngineState,
+    stack: &mut Stack,
+) -> Result<(), ShellError> {
     let mut error = None;
 
     let mut new_scope = HashMap::new();
@@ -89,13 +92,13 @@ pub fn convert_env_values(engine_state: &mut EngineState, stack: &Stack) -> Resu
         }
     }
 
-    error = error.or_else(|| ensure_path(&mut new_scope, "PATH"));
+    error = error.or_else(|| ensure_path(engine_state, stack));
 
     if let Ok(last_overlay_name) = &stack.last_overlay_name() {
         if let Some(env_vars) = Arc::make_mut(&mut engine_state.env_vars).get_mut(last_overlay_name)
         {
             for (k, v) in new_scope {
-                env_vars.insert(k, v);
+                env_vars.insert(EnvName::from(k), v);
             }
         } else {
             error = error.or_else(|| {
@@ -134,18 +137,18 @@ pub fn env_to_string(
                     // Try to convert PATH/Path list to a string
                     match value {
                         Value::List { vals, .. } => {
-                            let paths = vals
+                            let paths: Vec<String> = vals
                                 .iter()
-                                .map(Value::coerce_str)
-                                .collect::<Result<Vec<_>, _>>()?;
+                                .filter_map(|v| v.coerce_str().ok())
+                                .map(|s| nu_path::expand_tilde(&*s).to_string_lossy().into_owned())
+                                .collect();
 
-                            match std::env::join_paths(paths.iter().map(AsRef::as_ref)) {
-                                Ok(p) => Ok(p.to_string_lossy().to_string()),
-                                Err(_) => Err(ShellError::EnvVarNotAString {
+                            std::env::join_paths(paths.iter().map(AsRef::<str>::as_ref))
+                                .map(|p| p.to_string_lossy().to_string())
+                                .map_err(|_| ShellError::EnvVarNotAString {
                                     envvar_name: env_name.to_string(),
                                     span: value.span(),
-                                }),
-                            }
+                                })
                         }
                         _ => Err(ShellError::EnvVarNotAString {
                             envvar_name: env_name.to_string(),
@@ -183,66 +186,14 @@ pub fn env_to_strings(
     Ok(env_vars_str)
 }
 
-/// Returns the current working directory as a String, which is guaranteed to be canonicalized.
-/// Unlike `current_dir_str_const()`, this also considers modifications to the current working directory made on the stack.
-///
-/// Returns an error if $env.PWD doesn't exist, is not a String, or is not an absolute path.
-#[deprecated(since = "0.92.3", note = "please use `EngineState::cwd()` instead")]
-pub fn current_dir_str(engine_state: &EngineState, stack: &Stack) -> Result<String, ShellError> {
-    #[allow(deprecated)]
-    current_dir(engine_state, stack).map(|path| path.to_string_lossy().to_string())
-}
-
-/// Returns the current working directory as a String, which is guaranteed to be canonicalized.
-///
-/// Returns an error if $env.PWD doesn't exist, is not a String, or is not an absolute path.
-#[deprecated(since = "0.92.3", note = "please use `EngineState::cwd()` instead")]
-pub fn current_dir_str_const(working_set: &StateWorkingSet) -> Result<String, ShellError> {
-    #[allow(deprecated)]
-    current_dir_const(working_set).map(|path| path.to_string_lossy().to_string())
-}
-
-/// Returns the current working directory, which is guaranteed to be canonicalized.
-/// Unlike `current_dir_const()`, this also considers modifications to the current working directory made on the stack.
-///
-/// Returns an error if $env.PWD doesn't exist, is not a String, or is not an absolute path.
-#[deprecated(since = "0.92.3", note = "please use `EngineState::cwd()` instead")]
-pub fn current_dir(engine_state: &EngineState, stack: &Stack) -> Result<PathBuf, ShellError> {
-    let cwd = engine_state.cwd(Some(stack))?;
-    // `EngineState::cwd()` always returns absolute path.
-    // We're using `canonicalize_with` instead of `fs::canonicalize()` because
-    // we still need to simplify Windows paths. "." is safe because `cwd` should
-    // be an absolute path already.
-    canonicalize_with(&cwd, ".").map_err(|_| ShellError::DirectoryNotFound {
-        dir: cwd.to_string_lossy().to_string(),
-        span: Span::unknown(),
-    })
-}
-
-/// Returns the current working directory, which is guaranteed to be canonicalized.
-///
-/// Returns an error if $env.PWD doesn't exist, is not a String, or is not an absolute path.
-#[deprecated(since = "0.92.3", note = "please use `EngineState::cwd()` instead")]
-pub fn current_dir_const(working_set: &StateWorkingSet) -> Result<PathBuf, ShellError> {
-    let cwd = working_set.permanent_state.cwd(None)?;
-    // `EngineState::cwd()` always returns absolute path.
-    // We're using `canonicalize_with` instead of `fs::canonicalize()` because
-    // we still need to simplify Windows paths. "." is safe because `cwd` should
-    // be an absolute path already.
-    canonicalize_with(&cwd, ".").map_err(|_| ShellError::DirectoryNotFound {
-        dir: cwd.to_string_lossy().to_string(),
-        span: Span::unknown(),
-    })
-}
-
 /// Get the contents of path environment variable as a list of strings
 pub fn path_str(
     engine_state: &EngineState,
     stack: &Stack,
     span: Span,
 ) -> Result<String, ShellError> {
-    let (pathname, pathval) = match stack.get_env_var_insensitive(engine_state, "path") {
-        Some(v) => Ok((if cfg!(windows) { "Path" } else { "PATH" }, v)),
+    let pathval = match stack.get_env_var(engine_state, "path") {
+        Some(v) => Ok(v),
         None => Err(ShellError::EnvVarNotFoundAtRuntime {
             envvar_name: if cfg!(windows) {
                 "Path".to_string()
@@ -252,6 +203,9 @@ pub fn path_str(
             span,
         }),
     }?;
+
+    // Hardcoded pathname needed for case-sensitive ENV_CONVERSIONS lookup to ensure consistent PATH/Path conversion on Windows.
+    let pathname = if cfg!(windows) { "Path" } else { "PATH" };
 
     env_to_string(pathname, pathval, engine_state, stack)
 }
@@ -293,11 +247,13 @@ pub fn find_in_dirs_env(
                     cwd
                 } else {
                     return Err(ShellError::GenericError {
-                            error: "Invalid current directory".into(),
-                            msg: format!("The 'FILE_PWD' environment variable must be set to an absolute path. Found: '{cwd}'"),
-                            span: Some(pwd.span()),
-                            help: None,
-                            inner: vec![]
+                        error: "Invalid current directory".into(),
+                        msg: format!(
+                            "The 'FILE_PWD' environment variable must be set to an absolute path. Found: '{cwd}'"
+                        ),
+                        span: Some(pwd.span()),
+                        help: None,
+                        inner: vec![],
                     });
                 }
             }
@@ -308,7 +264,11 @@ pub fn find_in_dirs_env(
     };
 
     let check_dir = |lib_dirs: Option<&Value>| -> Option<PathBuf> {
-        if let Ok(p) = canonicalize_with(filename, &cwd) {
+        fn exists_with<P: AsRef<Path>, Q: AsRef<Path>>(path: P, relative_to: Q) -> Option<PathBuf> {
+            let path = absolute_with(path, relative_to).ok()?;
+            path.exists().then_some(path)
+        }
+        if let Some(p) = exists_with(filename, &cwd) {
             return Some(p);
         }
         let path = Path::new(filename);
@@ -322,8 +282,8 @@ pub fn find_in_dirs_env(
             .iter()
             .map(|lib_dir| -> Option<PathBuf> {
                 let dir = lib_dir.to_path().ok()?;
-                let dir_abs = canonicalize_with(dir, &cwd).ok()?;
-                canonicalize_with(filename, dir_abs).ok()
+                let dir_abs = exists_with(dir, &cwd)?;
+                exists_with(filename, dir_abs)
             })
             .find(Option::is_some)
             .flatten()
@@ -362,11 +322,12 @@ fn get_converted_value(
     )
 }
 
-fn ensure_path(scope: &mut HashMap<String, Value>, env_path_name: &str) -> Option<ShellError> {
+fn ensure_path(engine_state: &EngineState, stack: &mut Stack) -> Option<ShellError> {
     let mut error = None;
+    let preserve_case_name = if cfg!(windows) { "Path" } else { "PATH" };
 
     // If PATH/Path is still a string, force-convert it to a list
-    if let Some(value) = scope.get(env_path_name) {
+    if let Some(value) = stack.get_env_var(engine_state, "Path") {
         let span = value.span();
         match value {
             Value::String { val, .. } => {
@@ -375,15 +336,17 @@ fn ensure_path(scope: &mut HashMap<String, Value>, env_path_name: &str) -> Optio
                     .map(|p| Value::string(p.to_string_lossy().to_string(), span))
                     .collect();
 
-                scope.insert(env_path_name.to_string(), Value::list(paths, span));
+                stack.add_env_var(preserve_case_name.to_string(), Value::list(paths, span));
             }
             Value::List { vals, .. } => {
                 // Must be a list of strings
                 if !vals.iter().all(|v| matches!(v, Value::String { .. })) {
                     error = error.or_else(|| {
                         Some(ShellError::GenericError {
-                            error: format!("Wrong {env_path_name} environment variable value"),
-                            msg: format!("{env_path_name} must be a list of strings"),
+                            error: format!(
+                                "Incorrect {preserve_case_name} environment variable value"
+                            ),
+                            msg: format!("{preserve_case_name} must be a list of strings"),
                             span: Some(span),
                             help: None,
                             inner: vec![],
@@ -398,8 +361,8 @@ fn ensure_path(scope: &mut HashMap<String, Value>, env_path_name: &str) -> Optio
 
                 error = error.or_else(|| {
                     Some(ShellError::GenericError {
-                        error: format!("Wrong {env_path_name} environment variable value"),
-                        msg: format!("{env_path_name} must be a list of strings"),
+                        error: format!("Incorrect {preserve_case_name} environment variable value"),
+                        msg: format!("{preserve_case_name} must be a list of strings"),
                         span: Some(span),
                         help: None,
                         inner: vec![],

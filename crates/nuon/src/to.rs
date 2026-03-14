@@ -1,16 +1,77 @@
 use core::fmt::Write;
-
 use nu_engine::get_columns;
-use nu_protocol::{Range, ShellError, Span, Value};
-use nu_utils::{escape_quote_string, needs_quoting};
+use nu_protocol::{Range, ShellError, Span, Value, engine::EngineState};
+use nu_utils::{ObviousFloat, as_raw_string, escape_quote_string, needs_quoting};
 
-use std::ops::Bound;
+/// Configuration for converting Nushell [`Value`] to NUON data.
+///
+/// Use [`ToNuonConfig::default()`] to get started, then chain builder methods.
+///
+/// # Example
+/// ```ignore
+/// let config = ToNuonConfig::default()
+///     .style(ToStyle::Spaces(2))
+///     .raw_strings(true);
+/// to_nuon(&engine_state, &value, config)?;
+/// ```
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct ToNuonConfig {
+    /// Formatting style (indentation)
+    pub style: ToStyle,
+    /// Optional span for error reporting
+    pub span: Option<Span>,
+    /// Serialize non-serializable types (like closures) as strings
+    pub serialize_types: bool,
+    /// Prefer raw string syntax (`r#'...'#`) when strings contain quotes or backslashes
+    pub raw_strings: bool,
+    /// Serialize list-of-records values as list-of-records instead of table syntax
+    pub list_of_records: bool,
+}
+
+impl ToNuonConfig {
+    /// Set the formatting style
+    pub fn style(mut self, style: ToStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Set the span for error reporting
+    pub fn span(mut self, span: Option<Span>) -> Self {
+        self.span = span;
+        self
+    }
+
+    /// Enable serialization of non-serializable types as strings
+    pub fn serialize_types(mut self, serialize_types: bool) -> Self {
+        self.serialize_types = serialize_types;
+        self
+    }
+
+    /// Prefer raw string syntax when strings contain quotes or backslashes
+    pub fn raw_strings(mut self, raw_strings: bool) -> Self {
+        self.raw_strings = raw_strings;
+        self
+    }
+
+    /// Serialize list-of-records values as list-of-records instead of table syntax
+    pub fn list_of_records(mut self, list_of_records: bool) -> Self {
+        self.list_of_records = list_of_records;
+        self
+    }
+}
 
 /// control the way Nushell [`Value`] is converted to NUON data
+#[derive(Clone, Debug, Default)]
 pub enum ToStyle {
-    /// no indentation at all
+    /// no extra indentation
     ///
     /// `{ a: 1, b: 2 }` will be converted to `{a: 1, b: 2}`
+    #[default]
+    Default,
+    /// no white space at all
+    ///
+    /// `{ a: 1, b: 2 }` will be converted to `{a:1,b:2}`
     Raw,
     #[allow(clippy::tabs_in_doc_comments)]
     /// tabulation-based indentation
@@ -44,27 +105,62 @@ pub enum ToStyle {
 /// > using this function in a command implementation such as [`to nuon`](https://www.nushell.sh/commands/docs/to_nuon.html).
 ///
 /// also see [`super::from_nuon`] for the inverse operation
-pub fn to_nuon(input: &Value, style: ToStyle, span: Option<Span>) -> Result<String, ShellError> {
-    let span = span.unwrap_or(Span::unknown());
+///
+/// # Example
+/// ```ignore
+/// use nuon::{to_nuon, ToNuonConfig, ToStyle};
+///
+/// let config = ToNuonConfig::default()
+///     .style(ToStyle::Spaces(2))
+///     .raw_strings(true);
+/// let result = to_nuon(&engine_state, &value, config)?;
+/// ```
+pub fn to_nuon(
+    engine_state: &EngineState,
+    input: &Value,
+    config: ToNuonConfig,
+) -> Result<String, ShellError> {
+    let span = config.span.unwrap_or(Span::unknown());
 
-    let indentation = match style {
-        ToStyle::Raw => None,
+    let indentation = match config.style {
+        ToStyle::Default => None,
+        ToStyle::Raw => Some("".to_string()),
         ToStyle::Tabs(t) => Some("\t".repeat(t)),
         ToStyle::Spaces(s) => Some(" ".repeat(s)),
     };
 
-    let res = value_to_string(input, span, 0, indentation.as_deref())?;
+    let res = value_to_string(
+        engine_state,
+        input,
+        span,
+        0,
+        indentation.as_deref(),
+        StringifyOptions {
+            serialize_types: config.serialize_types,
+            raw_strings: config.raw_strings,
+            list_of_records: config.list_of_records,
+        },
+    )?;
 
     Ok(res)
 }
 
+#[derive(Clone, Copy)]
+struct StringifyOptions {
+    serialize_types: bool,
+    raw_strings: bool,
+    list_of_records: bool,
+}
+
 fn value_to_string(
+    engine_state: &EngineState,
     v: &Value,
     span: Span,
     depth: usize,
     indent: Option<&str>,
+    options: StringifyOptions,
 ) -> Result<String, ShellError> {
-    let (nl, sep) = get_true_separators(indent);
+    let (nl, sep, kv_sep) = get_true_separators(indent);
     let idt = get_true_indentation(depth, indent);
     let idt_po = get_true_indentation(depth + 1, indent);
     let idt_pt = get_true_indentation(depth + 2, indent);
@@ -84,12 +180,21 @@ fn value_to_string(
             }
             Ok(format!("0x[{s}]"))
         }
-        Value::Closure { .. } => Err(ShellError::UnsupportedInput {
-            msg: "closures are currently not nuon-compatible".into(),
-            input: "value originates from here".into(),
-            msg_span: span,
-            input_span: v.span(),
-        }),
+        Value::Closure { val, .. } => {
+            if options.serialize_types {
+                Ok(quote_string(
+                    &val.coerce_into_string(engine_state, span)?,
+                    options.raw_strings,
+                ))
+            } else {
+                Err(ShellError::UnsupportedInput {
+                    msg: "closures are currently not deserializable (use --serialize to serialize as a string)".into(),
+                    input: "value originates from here".into(),
+                    msg_span: span,
+                    input_span: v.span(),
+                })
+            }
+        }
         Value::Bool { val, .. } => {
             if *val {
                 Ok("true".to_string())
@@ -111,18 +216,14 @@ fn value_to_string(
         Value::Error { error, .. } => Err(*error.clone()),
         // FIXME: make filesizes use the shortest lossless representation.
         Value::Filesize { val, .. } => Ok(format!("{}b", val.get())),
-        Value::Float { val, .. } => {
-            // This serialises these as 'nan', 'inf' and '-inf', respectively.
-            if &val.round() == val && val.is_finite() {
-                Ok(format!("{}.0", *val))
-            } else {
-                Ok(val.to_string())
-            }
-        }
+        Value::Float { val, .. } => Ok(ObviousFloat(*val).to_string()),
         Value::Int { val, .. } => Ok(val.to_string()),
         Value::List { vals, .. } => {
             let headers = get_columns(vals);
-            if !headers.is_empty() && vals.iter().all(|x| x.columns().eq(headers.iter())) {
+            let is_table =
+                !headers.is_empty() && vals.iter().all(|x| x.columns().eq(headers.iter()));
+
+            if is_table && !options.list_of_records {
                 // Table output
                 let headers: Vec<String> = headers
                     .iter()
@@ -144,10 +245,12 @@ fn value_to_string(
                     if let Value::Record { val, .. } = val {
                         for val in val.values() {
                             row.push(value_to_string_without_quotes(
+                                engine_state,
                                 val,
                                 span,
                                 depth + 2,
                                 indent,
+                                options,
                             )?);
                         }
                     }
@@ -160,12 +263,41 @@ fn value_to_string(
                     headers_output,
                     table_output.join(&format!("{nl}{idt_po}],{sep}{nl}{idt_po}[{nl}{idt_pt}"))
                 ))
+            } else if is_table && options.list_of_records {
+                let mut collection = vec![];
+                let row_indent = if indent == Some("") { Some("") } else { None };
+
+                for val in vals {
+                    collection.push(format!(
+                        "{idt_po}{}",
+                        value_to_string_without_quotes(
+                            engine_state,
+                            val,
+                            span,
+                            depth + 1,
+                            row_indent,
+                            options,
+                        )?
+                    ));
+                }
+
+                Ok(format!(
+                    "[{nl}{}{nl}{idt}]",
+                    collection.join(&format!(",{sep}{nl}"))
+                ))
             } else {
                 let mut collection = vec![];
                 for val in vals {
                     collection.push(format!(
                         "{idt_po}{}",
-                        value_to_string_without_quotes(val, span, depth + 1, indent,)?
+                        value_to_string_without_quotes(
+                            engine_state,
+                            val,
+                            span,
+                            depth + 1,
+                            indent,
+                            options,
+                        )?
                     ));
                 }
                 Ok(format!(
@@ -177,23 +309,7 @@ fn value_to_string(
         Value::Nothing { .. } => Ok("null".to_string()),
         Value::Range { val, .. } => match **val {
             Range::IntRange(range) => Ok(range.to_string()),
-            Range::FloatRange(range) => {
-                let start =
-                    value_to_string(&Value::float(range.start(), span), span, depth + 1, indent)?;
-                match range.end() {
-                    Bound::Included(end) => Ok(format!(
-                        "{}..{}",
-                        start,
-                        value_to_string(&Value::float(end, span), span, depth + 1, indent)?
-                    )),
-                    Bound::Excluded(end) => Ok(format!(
-                        "{}..<{}",
-                        start,
-                        value_to_string(&Value::float(end, span), span, depth + 1, indent)?
-                    )),
-                    Bound::Unbounded => Ok(format!("{start}..",)),
-                }
-            }
+            Range::FloatRange(range) => Ok(range.to_string()),
         },
         Value::Record { val, .. } => {
             let mut collection = vec![];
@@ -204,8 +320,15 @@ fn value_to_string(
                     col
                 };
                 collection.push(format!(
-                    "{idt_po}{col}: {}",
-                    value_to_string_without_quotes(val, span, depth + 1, indent)?
+                    "{idt_po}{col}:{kv_sep}{}",
+                    value_to_string_without_quotes(
+                        engine_state,
+                        val,
+                        span,
+                        depth + 1,
+                        indent,
+                        options,
+                    )?
                 ));
             }
             Ok(format!(
@@ -215,8 +338,8 @@ fn value_to_string(
         }
         // All strings outside data structures are quoted because they are in 'command position'
         // (could be mistaken for commands by the Nu parser)
-        Value::String { val, .. } => Ok(escape_quote_string(val)),
-        Value::Glob { val, .. } => Ok(escape_quote_string(val)),
+        Value::String { val, .. } => Ok(quote_string(val, options.raw_strings)),
+        Value::Glob { val, .. } => Ok(quote_string(val, options.raw_strings)),
     }
 }
 
@@ -227,27 +350,43 @@ fn get_true_indentation(depth: usize, indent: Option<&str>) -> String {
     }
 }
 
-fn get_true_separators(indent: Option<&str>) -> (String, String) {
+/// Quote a string, using raw string syntax if `raw_strings` is true and the string
+/// contains quotes or backslashes.
+fn quote_string(s: &str, raw_strings: bool) -> String {
+    if raw_strings && let Some(raw) = as_raw_string(s) {
+        return raw;
+    }
+    escape_quote_string(s)
+}
+
+/// Converts the provided indent into three types of separator:
+/// - New line separators
+/// - Inline separator
+/// - Key-value separators inside Records
+fn get_true_separators(indent: Option<&str>) -> (String, String, String) {
     match indent {
-        Some(_) => ("\n".to_string(), "".to_string()),
-        None => ("".to_string(), " ".to_string()),
+        Some("") => ("".to_string(), "".to_string(), "".to_string()),
+        Some(_) => ("\n".to_string(), "".to_string(), " ".to_string()),
+        None => ("".to_string(), " ".to_string(), " ".to_string()),
     }
 }
 
 fn value_to_string_without_quotes(
+    engine_state: &EngineState,
     v: &Value,
     span: Span,
     depth: usize,
     indent: Option<&str>,
+    options: StringifyOptions,
 ) -> Result<String, ShellError> {
     match v {
         Value::String { val, .. } => Ok({
             if needs_quoting(val) {
-                escape_quote_string(val)
+                quote_string(val, options.raw_strings)
             } else {
                 val.clone()
             }
         }),
-        _ => value_to_string(v, span, depth, indent),
+        _ => value_to_string(engine_state, v, span, depth, indent, options),
     }
 }

@@ -1,11 +1,12 @@
-use nu_engine::command_prelude::*;
-use nu_protocol::HistoryFileFormat;
-use reedline::{
-    FileBackedHistory, History as ReedlineHistory, HistoryItem, SearchDirection, SearchQuery,
-    SqliteBackedHistory,
-};
-
 use super::fields;
+use nu_engine::command_prelude::*;
+use nu_protocol::{
+    HistoryFileFormat,
+    shell_error::{self, io::IoError},
+};
+#[cfg(feature = "sqlite")]
+use reedline::SqliteBackedHistory;
+use reedline::{FileBackedHistory, History as ReedlineHistory, SearchDirection, SearchQuery};
 
 #[derive(Clone)]
 pub struct History;
@@ -23,13 +24,38 @@ impl Command for History {
         Signature::build("history")
             .input_output_types(vec![(Type::Nothing, Type::Any)])
             .allow_variants_without_examples(true)
-            .switch("clear", "Clears out the history entries", Some('c'))
+            .switch("clear", "Clears out the history entries.", Some('c'))
             .switch(
                 "long",
-                "Show long listing of entries for sqlite history",
+                "Show long format with timestamps and additional details.",
                 Some('l'),
             )
             .category(Category::History)
+    }
+
+    fn examples(&self) -> Vec<Example<'_>> {
+        vec![
+            Example {
+                example: "history | length",
+                description: "Get current history length",
+                result: None,
+            },
+            Example {
+                example: "history | last 5",
+                description: "Show last 5 commands you have ran",
+                result: None,
+            },
+            Example {
+                example: "history --long | last 5",
+                description: "Show last 5 commands with full details",
+                result: None,
+            },
+            Example {
+                example: "history | where command =~ cargo | get command",
+                description: "Search all the commands from history that contains 'cargo'",
+                result: None,
+            },
+        ]
     }
 
     fn run(
@@ -46,7 +72,7 @@ impl Command for History {
         };
         // todo for sqlite history this command should be an alias to `open ~/.config/nushell/history.sqlite3 | get history`
         let Some(history_path) = history.file_path() else {
-            return Err(ShellError::ConfigDirNotFound { span: Some(head) });
+            return Err(ShellError::ConfigDirNotFound { span: head });
         };
 
         if call.has_flag(engine_state, stack, "clear")? {
@@ -55,9 +81,12 @@ impl Command for History {
             return Ok(PipelineData::empty());
         }
 
+        #[cfg_attr(not(feature = "sqlite"), allow(unused_variables))]
         let long = call.has_flag(engine_state, stack, "long")?;
+
         let signals = engine_state.signals().clone();
         let history_reader: Option<Box<dyn ReedlineHistory>> = match history.file_format {
+            #[cfg(feature = "sqlite")]
             HistoryFileFormat::Sqlite => {
                 SqliteBackedHistory::with_file(history_path.clone(), None, None)
                     .map(|inner| {
@@ -65,6 +94,17 @@ impl Command for History {
                         boxed
                     })
                     .ok()
+            }
+            // this variant should never happen, the config value is handled in the `UpdateFromValue` impl
+            #[cfg(not(feature = "sqlite"))]
+            HistoryFileFormat::Sqlite => {
+                return Err(ShellError::GenericError {
+                    error: "Could not open history reader".into(),
+                    msg: "SQLite is not supported".to_string(),
+                    span: Some(call.head),
+                    help: "Compile Nushell with `sqlite` feature".to_string().into(),
+                    inner: vec![],
+                });
             }
             HistoryFileFormat::Plaintext => {
                 FileBackedHistory::with_file(history.max_size as usize, history_path.clone())
@@ -93,113 +133,50 @@ impl Command for History {
                         )
                     })
                 })
-                .ok_or(ShellError::FileNotFound {
-                    file: history_path.display().to_string(),
-                    span: head,
-                })?
+                .ok_or(IoError::new(
+                    shell_error::io::ErrorKind::FileNotFound,
+                    head,
+                    history_path,
+                ))?
                 .into_pipeline_data(head, signals)),
-            HistoryFileFormat::Sqlite => Ok(history_reader
-                .and_then(|h| {
-                    h.search(SearchQuery::everything(SearchDirection::Forward, None))
-                        .ok()
-                })
-                .map(move |entries| {
-                    entries
-                        .into_iter()
-                        .enumerate()
-                        .map(move |(idx, entry)| create_history_record(idx, entry, long, head))
-                })
-                .ok_or(ShellError::FileNotFound {
-                    file: history_path.display().to_string(),
-                    span: head,
-                })?
-                .into_pipeline_data(head, signals)),
+            // this variant should never happen, the config value is handled in the `UpdateFromValue` impl
+            #[cfg(not(feature = "sqlite"))]
+            HistoryFileFormat::Sqlite => {
+                return Err(ShellError::GenericError {
+                    error: "Could not open history reader".into(),
+                    msg: "SQLite is not supported".to_string(),
+                    span: Some(call.head),
+                    help: "Compile Nushell with `sqlite` feature".to_string().into(),
+                    inner: vec![],
+                });
+            }
+            #[cfg(feature = "sqlite")]
+            HistoryFileFormat::Sqlite => {
+                // Return a lazy SQLiteQueryBuilder for the history table
+                let mut table = nu_command::SQLiteQueryBuilder::new(
+                    history_path,
+                    "history".to_string(),
+                    signals,
+                );
+                if long {
+                    table = table.with_select("id as item_id, start_timestamp, command_line as command, session_id, hostname, cwd, duration_ms as duration, exit_status, rowid as idx".to_string());
+                } else {
+                    table = table.with_select(
+                        "start_timestamp, command_line as command, cwd, duration_ms as duration, exit_status"
+                            .to_string(),
+                    );
+                }
+                table = table
+                    // Keep sqlite history output deterministic and append-ordered unless
+                    // the user explicitly requests a different sort.
+                    .with_order_by("rowid ASC".to_string())
+                    .with_unix_millis_datetime_column(fields::START_TIMESTAMP.to_string())
+                    .with_millis_duration_column(fields::DURATION.to_string());
+                Ok(PipelineData::Value(
+                    Value::custom(Box::new(table), head),
+                    None,
+                ))
+            }
         }
-    }
-
-    fn examples(&self) -> Vec<Example> {
-        vec![
-            Example {
-                example: "history | length",
-                description: "Get current history length",
-                result: None,
-            },
-            Example {
-                example: "history | last 5",
-                description: "Show last 5 commands you have ran",
-                result: None,
-            },
-            Example {
-                example: "history | where command =~ cargo | get command",
-                description: "Search all the commands from history that contains 'cargo'",
-                result: None,
-            },
-        ]
-    }
-}
-
-fn create_history_record(idx: usize, entry: HistoryItem, long: bool, head: Span) -> Value {
-    //1. Format all the values
-    //2. Create a record of either short or long columns and values
-
-    let item_id_value = Value::int(
-        entry
-            .id
-            .and_then(|id| id.to_string().parse::<i64>().ok())
-            .unwrap_or_default(),
-        head,
-    );
-    let start_timestamp_value = Value::string(
-        entry
-            .start_timestamp
-            .map(|time| time.to_string())
-            .unwrap_or_default(),
-        head,
-    );
-    let command_value = Value::string(entry.command_line, head);
-    let session_id_value = Value::int(
-        entry
-            .session_id
-            .and_then(|id| id.to_string().parse::<i64>().ok())
-            .unwrap_or_default(),
-        head,
-    );
-    let hostname_value = Value::string(entry.hostname.unwrap_or_default(), head);
-    let cwd_value = Value::string(entry.cwd.unwrap_or_default(), head);
-    let duration_value = Value::duration(
-        entry
-            .duration
-            .and_then(|d| d.as_nanos().try_into().ok())
-            .unwrap_or(0),
-        head,
-    );
-    let exit_status_value = Value::int(entry.exit_status.unwrap_or(0), head);
-    let index_value = Value::int(idx as i64, head);
-    if long {
-        Value::record(
-            record! {
-                "item_id" => item_id_value,
-                fields::START_TIMESTAMP => start_timestamp_value,
-                fields::COMMAND_LINE => command_value,
-                fields::SESSION_ID => session_id_value,
-                fields::HOSTNAME => hostname_value,
-                fields::CWD => cwd_value,
-                fields::DURATION => duration_value,
-                fields::EXIT_STATUS => exit_status_value,
-                "idx" => index_value,
-            },
-            head,
-        )
-    } else {
-        Value::record(
-            record! {
-                fields::START_TIMESTAMP => start_timestamp_value,
-                fields::COMMAND_LINE => command_value,
-                fields::CWD => cwd_value,
-                fields::DURATION => duration_value,
-                fields::EXIT_STATUS => exit_status_value,
-            },
-            head,
-        )
     }
 }

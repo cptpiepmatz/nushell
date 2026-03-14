@@ -1,4 +1,4 @@
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
 use nu_utils::IgnoreCaseExt;
@@ -16,9 +16,9 @@ impl CmdArgument for Arguments {
 }
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct StrEndswith;
 
-impl Command for SubCommand {
+impl Command for StrEndswith {
     fn name(&self) -> &str {
         "str ends-with"
     }
@@ -38,7 +38,7 @@ impl Command for SubCommand {
                 SyntaxShape::CellPath,
                 "For a data structure input, check strings at the given cell paths, and replace with result.",
             )
-            .switch("ignore-case", "search is case insensitive", Some('i'))
+            .switch("ignore-case", "Search is case insensitive.", Some('i'))
             .category(Category::Strings)
     }
 
@@ -93,15 +93,15 @@ impl Command for SubCommand {
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Checks if string ends with '.rb'",
+                description: "Checks if string ends with '.rb'.",
                 example: "'my_library.rb' | str ends-with '.rb'",
                 result: Some(Value::test_bool(true)),
             },
             Example {
-                description: "Checks if strings end with '.txt'",
+                description: "Checks if strings end with '.txt'.",
                 example: "['my_library.rb', 'README.txt'] | str ends-with '.txt'",
                 result: Some(Value::test_list(vec![
                     Value::test_bool(false),
@@ -109,7 +109,7 @@ impl Command for SubCommand {
                 ])),
             },
             Example {
-                description: "Checks if string ends with '.RB', case-insensitive",
+                description: "Checks if string ends with '.RB', case-insensitive.",
                 example: "'my_library.rb' | str ends-with --ignore-case '.RB'",
                 result: Some(Value::test_bool(true)),
             },
@@ -146,9 +146,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StrEndswith)
     }
 }

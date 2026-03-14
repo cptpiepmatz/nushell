@@ -1,4 +1,4 @@
-use crate::{cool_custom_value::CoolCustomValue, CustomValuePlugin};
+use crate::{CustomValuePlugin, cool_custom_value::CoolCustomValue};
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, Example, LabeledError, Signature, Span, Value};
 
@@ -19,7 +19,7 @@ impl SimplePluginCommand for Generate {
         Signature::build(self.name()).category(Category::Experimental)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             example: "custom-value generate",
             description: "Generate a new CoolCustomValue",

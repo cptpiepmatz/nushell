@@ -1,37 +1,33 @@
-use nu_test_support::{nu, pipeline};
+use nu_test_support::prelude::*;
 
 #[test]
-fn splits_empty_path() {
-    let actual = nu!(
-        cwd: "tests", pipeline(
-        r#"
-            echo '' | path split | is-empty
-        "#
-    ));
+fn splits_empty_path() -> Result {
+    let code = r#"
+        echo '' | path split | is-empty
+    "#;
 
-    assert_eq!(actual.out, "true");
+    let outcome: bool = test().cwd("tests").run(code)?;
+    assert!(outcome);
+    Ok(())
 }
 
 #[test]
-fn splits_correctly_single_path() {
-    let actual = nu!(
-        cwd: "tests", pipeline(
-        r#"
-            'home/viking/spam.txt'
-            | path split
-            | last
-        "#
-    ));
+fn splits_correctly_single_path() -> Result {
+    let code = r#"
+        'home/viking/spam.txt'
+        | path split
+        | last
+    "#;
 
-    assert_eq!(actual.out, "spam.txt");
+    test().cwd("tests").run(code).expect_value_eq("spam.txt")
 }
 
 #[test]
-fn splits_correctly_single_path_const() {
-    let actual = nu!(r#"
+fn splits_correctly_single_path_const() -> Result {
+    let code = r#"
         const result = ('home/viking/spam.txt' | path split);
         $result | last
-    "#);
+    "#;
 
-    assert_eq!(actual.out, "spam.txt");
+    test().run(code).expect_value_eq("spam.txt")
 }

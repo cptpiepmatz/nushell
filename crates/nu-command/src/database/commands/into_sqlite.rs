@@ -1,9 +1,12 @@
-use crate::database::values::sqlite::{open_sqlite_db, values_to_sql};
+use crate::{
+    MEMORY_DB,
+    database::values::sqlite::{open_sqlite_db, values_to_sql},
+};
 use nu_engine::command_prelude::*;
 
 use itertools::Itertools;
 use nu_protocol::Signals;
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 pub const DEFAULT_TABLE_NAME: &str = "main";
 
@@ -31,7 +34,7 @@ impl Command for IntoSqliteDb {
             .named(
                 "table-name",
                 SyntaxShape::String,
-                "Specify table name to store the data in",
+                "Specify table name to store the data in.",
                 Some('t'),
             )
     }
@@ -54,28 +57,39 @@ impl Command for IntoSqliteDb {
         vec!["convert", "database"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Convert ls entries into a SQLite database with 'main' as the table name",
+                description: "Convert ls entries into a SQLite database with 'main' as the table name.",
                 example: "ls | into sqlite my_ls.db",
                 result: None,
             },
             Example {
-                description: "Convert ls entries into a SQLite database with 'my_table' as the table name",
+                description: "Convert ls entries into a SQLite database with 'my_table' as the table name.",
                 example: "ls | into sqlite my_ls.db -t my_table",
                 result: None,
             },
             Example {
-                description: "Convert table literal into a SQLite database with 'main' as the table name",
+                description: "Convert table literal into a SQLite database with 'main' as the table name.",
                 example: "[[name]; [-----] [someone] [=====] [somename] ['(((((']] | into sqlite filename.db",
                 result: None,
             },
             Example {
-                description: "Insert a single record into a SQLite database",
+                description: "Insert a single record into a SQLite database.",
                 example: "{ foo: bar, baz: quux } | into sqlite filename.db",
                 result: None,
             },
+            Example {
+                description: "Insert data that contains records, lists or tables, that will be stored as JSONB columns
+These columns will be automatically turned back into nu objects when read directly via cell-path",
+                example: "{a_record: {foo: bar, baz: quux}, a_list: [1 2 3], a_table: [[a b]; [0 1] [2 3]]} | into sqlite filename.db -t my_table
+(open filename.db).my_table.0.a_list",
+                result: Some(Value::test_list(vec![
+                    Value::test_int(1),
+                    Value::test_int(2),
+                    Value::test_int(3)
+                ]))
+            }
         ]
     }
 }
@@ -83,23 +97,38 @@ impl Command for IntoSqliteDb {
 struct Table {
     conn: rusqlite::Connection,
     table_name: String,
+    span: Span,
 }
 
 impl Table {
     pub fn new(
         db_path: &Spanned<String>,
         table_name: Option<Spanned<String>>,
+        engine_state: &EngineState,
+        stack: &Stack,
     ) -> Result<Self, nu_protocol::ShellError> {
-        let table_name = if let Some(table_name) = table_name {
-            table_name.item
-        } else {
-            DEFAULT_TABLE_NAME.to_string()
+        let table_name = table_name
+            .map(|table_name| table_name.item)
+            .unwrap_or_else(|| DEFAULT_TABLE_NAME.to_string());
+
+        let span = db_path.span;
+        let db_path: Cow<'_, Path> = match db_path.item.as_str() {
+            MEMORY_DB => Cow::Borrowed(Path::new(&db_path.item)),
+            item => engine_state
+                .cwd(Some(stack))?
+                .join(item)
+                .to_std_path_buf()
+                .into(),
         };
 
         // create the sqlite database table
-        let conn = open_sqlite_db(Path::new(&db_path.item), db_path.span)?;
+        let conn = open_sqlite_db(&db_path, span)?;
 
-        Ok(Self { conn, table_name })
+        Ok(Self {
+            conn,
+            table_name,
+            span,
+        })
     }
 
     pub fn name(&self) -> &String {
@@ -109,9 +138,9 @@ impl Table {
     fn try_init(
         &mut self,
         record: &Record,
-    ) -> Result<rusqlite::Transaction, nu_protocol::ShellError> {
+    ) -> Result<rusqlite::Transaction<'_>, nu_protocol::ShellError> {
         let first_row_null = record.values().any(Value::is_nothing);
-        let columns = get_columns_with_sqlite_types(record)?;
+        let columns = get_columns_with_sqlite_types(record, self.span)?;
 
         let table_exists_query = format!(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{}';",
@@ -122,9 +151,9 @@ impl Table {
             .conn
             .query_row(&table_exists_query, [], |row| row.get(0))
             .map_err(|err| ShellError::GenericError {
-                error: format!("{:#?}", err),
-                msg: format!("{:#?}", err),
-                span: None,
+                error: format!("{err:#?}"),
+                msg: format!("{err:#?}"),
+                span: Some(self.span),
                 help: None,
                 inner: Vec::new(),
             })?;
@@ -155,7 +184,7 @@ If this is undesirable, you can create the table first with your desired schema.
                 .map_err(|err| ShellError::GenericError {
                     error: "Failed to create table".into(),
                     msg: err.to_string(),
-                    span: None,
+                    span: Some(self.span),
                     help: None,
                     inner: Vec::new(),
                 })?;
@@ -166,7 +195,7 @@ If this is undesirable, you can create the table first with your desired schema.
             .map_err(|err| ShellError::GenericError {
                 error: "Failed to open transaction".into(),
                 msg: err.to_string(),
-                span: None,
+                span: Some(self.span),
                 help: None,
                 inner: Vec::new(),
             })
@@ -182,11 +211,12 @@ fn operate(
     let span = call.head;
     let file_name: Spanned<String> = call.req(engine_state, stack, 0)?;
     let table_name: Option<Spanned<String>> = call.get_flag(engine_state, stack, "table-name")?;
-    let table = Table::new(&file_name, table_name)?;
-    Ok(action(input, table, span, engine_state.signals())?.into_pipeline_data())
+    let table = Table::new(&file_name, table_name, engine_state, stack)?;
+    Ok(action(engine_state, input, table, span, engine_state.signals())?.into_pipeline_data())
 }
 
 fn action(
+    engine_state: &EngineState,
     input: PipelineData,
     table: Table,
     span: Span,
@@ -194,17 +224,17 @@ fn action(
 ) -> Result<Value, ShellError> {
     match input {
         PipelineData::ListStream(stream, _) => {
-            insert_in_transaction(stream.into_iter(), span, table, signals)
+            insert_in_transaction(engine_state, stream.into_iter(), span, table, signals)
         }
         PipelineData::Value(value @ Value::List { .. }, _) => {
             let span = value.span();
             let vals = value
                 .into_list()
                 .expect("Value matched as list above, but is not a list");
-            insert_in_transaction(vals.into_iter(), span, table, signals)
+            insert_in_transaction(engine_state, vals.into_iter(), span, table, signals)
         }
         PipelineData::Value(val, _) => {
-            insert_in_transaction(std::iter::once(val), span, table, signals)
+            insert_in_transaction(engine_state, std::iter::once(val), span, table, signals)
         }
         _ => Err(ShellError::OnlySupportsThisInputType {
             exp_input_type: "list".into(),
@@ -216,6 +246,7 @@ fn action(
 }
 
 fn insert_in_transaction(
+    engine_state: &EngineState,
     stream: impl Iterator<Item = Value>,
     span: Span,
     mut table: Table,
@@ -241,7 +272,7 @@ fn insert_in_transaction(
     let tx = table.try_init(&first_val)?;
 
     for stream_value in stream {
-        if let Err(err) = signals.check(span) {
+        if let Err(err) = signals.check(&span) {
             tx.rollback().map_err(|e| ShellError::GenericError {
                 error: "Failed to rollback SQLite transaction".into(),
                 msg: e.to_string(),
@@ -257,7 +288,7 @@ fn insert_in_transaction(
         let insert_statement = format!(
             "INSERT INTO [{}] ({}) VALUES ({})",
             table_name,
-            Itertools::intersperse(val.columns().map(|c| format!("`{}`", c)), ", ".to_string())
+            Itertools::intersperse(val.columns().map(|c| format!("`{c}`")), ", ".to_string())
                 .collect::<String>(),
             Itertools::intersperse(itertools::repeat_n("?", val.len()), ", ").collect::<String>(),
         );
@@ -272,7 +303,7 @@ fn insert_in_transaction(
                     inner: Vec::new(),
                 })?;
 
-        let result = insert_value(stream_value, &mut insert_statement);
+        let result = insert_value(engine_state, stream_value, span, &mut insert_statement);
 
         insert_statement
             .finalize()
@@ -299,20 +330,22 @@ fn insert_in_transaction(
 }
 
 fn insert_value(
+    engine_state: &EngineState,
     stream_value: Value,
+    call_span: Span,
     insert_statement: &mut rusqlite::Statement<'_>,
 ) -> Result<(), ShellError> {
     match stream_value {
         // map each column value into its SQL representation
         Value::Record { val, .. } => {
-            let sql_vals = values_to_sql(val.values().cloned())?;
+            let sql_vals = values_to_sql(engine_state, val.values().cloned(), call_span)?;
 
             insert_statement
                 .execute(rusqlite::params_from_iter(sql_vals))
                 .map_err(|e| ShellError::GenericError {
                     error: "Failed to execute SQLite statement".into(),
                     msg: e.to_string(),
-                    span: None,
+                    span: Some(call_span),
                     help: None,
                     inner: Vec::new(),
                 })?;
@@ -322,7 +355,7 @@ fn insert_value(
         val => Err(ShellError::OnlySupportsThisInputType {
             exp_input_type: "record".into(),
             wrong_type: val.get_type().to_string(),
-            dst_span: Span::unknown(),
+            dst_span: call_span,
             src_span: val.span(),
         }),
     }
@@ -334,7 +367,7 @@ fn insert_value(
 // REAL. The value is a floating point value, stored as an 8-byte IEEE floating point number.
 // TEXT. The value is a text string, stored using the database encoding (UTF-8, UTF-16BE or UTF-16LE).
 // BLOB. The value is a blob of data, stored exactly as it was input.
-fn nu_value_to_sqlite_type(val: &Value) -> Result<&'static str, ShellError> {
+fn nu_value_to_sqlite_type(val: &Value, dst_span: Span) -> Result<&'static str, ShellError> {
     match val.get_type() {
         Type::String => Ok("TEXT"),
         Type::Int => Ok("INTEGER"),
@@ -345,6 +378,7 @@ fn nu_value_to_sqlite_type(val: &Value) -> Result<&'static str, ShellError> {
         Type::Date => Ok("DATETIME"),
         Type::Duration => Ok("BIGINT"),
         Type::Filesize => Ok("INTEGER"),
+        Type::List(_) | Type::Record(_) | Type::Table(_) => Ok("JSONB"),
 
         // [NOTE] On null values, we just assume TEXT. This could end up
         // creating a table where the column type is wrong in the table schema.
@@ -356,17 +390,14 @@ fn nu_value_to_sqlite_type(val: &Value) -> Result<&'static str, ShellError> {
         | Type::Block
         | Type::CellPath
         | Type::Closure
+        | Type::OneOf(_)
         | Type::Custom(_)
         | Type::Error
-        | Type::List(_)
         | Type::Range
-        | Type::Record(_)
-        | Type::Signature
-        | Type::Glob
-        | Type::Table(_) => Err(ShellError::OnlySupportsThisInputType {
+        | Type::Glob => Err(ShellError::OnlySupportsThisInputType {
             exp_input_type: "sql".into(),
             wrong_type: val.get_type().to_string(),
-            dst_span: Span::unknown(),
+            dst_span,
             src_span: val.span(),
         }),
     }
@@ -374,6 +405,7 @@ fn nu_value_to_sqlite_type(val: &Value) -> Result<&'static str, ShellError> {
 
 fn get_columns_with_sqlite_types(
     record: &Record,
+    dst_span: Span,
 ) -> Result<Vec<(String, &'static str)>, ShellError> {
     let mut columns: Vec<(String, &'static str)> = vec![];
 
@@ -383,23 +415,9 @@ fn get_columns_with_sqlite_types(
             .map(|name| (format!("`{}`", name.0), name.1))
             .any(|(name, _)| name == *c)
         {
-            columns.push((format!("`{}`", c), nu_value_to_sqlite_type(v)?));
+            columns.push((format!("`{c}`"), nu_value_to_sqlite_type(v, dst_span)?));
         }
     }
 
     Ok(columns)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    // use super::{action, IntoSqliteDb};
-    // use nu_protocol::Type::Error;
-
-    #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(IntoSqliteDb {})
-    }
 }

@@ -27,7 +27,7 @@ impl Command for FromMsgpack {
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .input_output_type(Type::Binary, Type::Any)
-            .switch("objects", "Read multiple objects from input", None)
+            .switch("objects", "Read multiple objects from input.", None)
             .category(Category::Formats)
     }
 
@@ -48,10 +48,10 @@ MessagePack: https://msgpack.org/
 "#
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Read a list of values from MessagePack",
+                description: "Read a list of values from MessagePack.",
                 example: "0x[93A3666F6F2AC2] | from msgpack",
                 result: Some(Value::test_list(vec![
                     Value::test_string("foo"),
@@ -60,7 +60,7 @@ MessagePack: https://msgpack.org/
                 ])),
             },
             Example {
-                description: "Read a stream of multiple values from MessagePack",
+                description: "Read a stream of multiple values from MessagePack.",
                 example: "0x[81A76E757368656C6CA5726F636B73A9736572696F75736C79] | from msgpack --objects",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -70,7 +70,7 @@ MessagePack: https://msgpack.org/
                 ])),
             },
             Example {
-                description: "Read a table from MessagePack",
+                description: "Read a table from MessagePack.",
                 example: "0x[9282AA6576656E745F6E616D65B141706F6C6C6F203131204C616E64696E67A474696D65C70CFF00000000FFFFFFFFFF2CAB5B82AA6576656E745F6E616D65B44E757368656C6C20666972737420636F6D6D6974A474696D65D6FF5CD5ADE0] | from msgpack",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -212,7 +212,7 @@ impl From<ReadError> for ShellError {
             },
             ReadError::TypeMismatch(marker, span) => ShellError::GenericError {
                 error: "Invalid marker while reading MessagePack data".into(),
-                msg: format!("unexpected {:?} in data", marker),
+                msg: format!("unexpected {marker:?} in data"),
                 span: Some(span),
                 help: None,
                 inner: vec![],
@@ -514,15 +514,14 @@ fn assert_eof(input: &mut impl io::Read, span: Span) -> Result<(), ShellError> {
 mod test {
     use nu_cmd_lang::eval_pipeline_without_terminal_expression;
 
+    use crate::Reject;
     use crate::{Metadata, MetadataSet, ToMsgpack};
 
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(FromMsgpack {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(FromMsgpack)
     }
 
     #[test]
@@ -535,6 +534,7 @@ mod test {
             working_set.add_decl(Box::new(FromMsgpack {}));
             working_set.add_decl(Box::new(Metadata {}));
             working_set.add_decl(Box::new(MetadataSet {}));
+            working_set.add_decl(Box::new(Reject {}));
 
             working_set.render()
         };
@@ -543,14 +543,16 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = r#"{a: 1 b: 2} | to msgpack | metadata set --datasource-ls | from msgpack | metadata | $in"#;
+        let cmd = r#"{a: 1 b: 2} | to msgpack | metadata set --path-columns [name] | from msgpack | metadata | reject span | $in"#;
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(record!("source" => Value::test_string("ls"))),
+            Value::test_record(
+                record!("path_columns" => Value::test_list(vec![Value::test_string("name")]))
+            ),
             result.expect("There should be a result")
         )
     }

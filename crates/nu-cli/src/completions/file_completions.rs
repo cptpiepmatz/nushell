@@ -1,41 +1,33 @@
 use crate::completions::{
-    completion_common::{adjust_if_intermediate, complete_item, AdjustView},
     Completer, CompletionOptions,
+    completion_common::{AdjustView, adjust_if_intermediate, complete_item},
 };
 use nu_protocol::{
-    engine::{EngineState, Stack, StateWorkingSet},
-    Span,
+    Span, SuggestionKind,
+    engine::{Stack, StateWorkingSet},
 };
 use reedline::Suggestion;
 use std::path::Path;
 
-use super::{completion_common::FileSuggestion, SemanticSuggestion};
+use super::SemanticSuggestion;
 
-#[derive(Clone, Default)]
-pub struct FileCompletion {}
-
-impl FileCompletion {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
+pub struct FileCompletion;
 
 impl Completer for FileCompletion {
     fn fetch(
         &mut self,
         working_set: &StateWorkingSet,
         stack: &Stack,
-        prefix: &[u8],
+        prefix: impl AsRef<str>,
         span: Span,
         offset: usize,
-        _pos: usize,
         options: &CompletionOptions,
     ) -> Vec<SemanticSuggestion> {
         let AdjustView {
             prefix,
             span,
             readjusted,
-        } = adjust_if_intermediate(prefix, working_set, span);
+        } = adjust_if_intermediate(prefix.as_ref(), working_set, span);
 
         #[allow(deprecated)]
         let items: Vec<_> = complete_item(
@@ -56,10 +48,15 @@ impl Completer for FileCompletion {
                     start: x.span.start - offset,
                     end: x.span.end - offset,
                 },
+                display_override: x.display_override,
+                match_indices: Some(x.match_indices),
                 ..Suggestion::default()
             },
-            // TODO????
-            kind: None,
+            kind: Some(if x.is_dir {
+                SuggestionKind::Directory
+            } else {
+                SuggestionKind::File
+            }),
         })
         .collect();
 
@@ -72,13 +69,13 @@ impl Completer for FileCompletion {
         for item in items.into_iter() {
             let item_path = Path::new(&item.suggestion.value);
 
-            if let Some(value) = item_path.file_name() {
-                if let Some(value) = value.to_str() {
-                    if value.starts_with('.') {
-                        hidden.push(item);
-                    } else {
-                        non_hidden.push(item);
-                    }
+            if let Some(value) = item_path.file_name()
+                && let Some(value) = value.to_str()
+            {
+                if value.starts_with('.') {
+                    hidden.push(item);
+                } else {
+                    non_hidden.push(item);
                 }
             }
         }
@@ -88,15 +85,4 @@ impl Completer for FileCompletion {
 
         non_hidden
     }
-}
-
-pub fn file_path_completion(
-    span: nu_protocol::Span,
-    partial: &str,
-    cwds: &[impl AsRef<str>],
-    options: &CompletionOptions,
-    engine_state: &EngineState,
-    stack: &Stack,
-) -> Vec<FileSuggestion> {
-    complete_item(false, span, partial, cwds, options, engine_state, stack)
 }

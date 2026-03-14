@@ -1,6 +1,5 @@
 use nu_engine::command_prelude::*;
 use nu_protocol::Signals;
-use std::io::Read;
 
 #[derive(Clone)]
 pub struct Take;
@@ -46,8 +45,9 @@ impl Command for Take {
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         let rows_desired: usize = call.req(engine_state, stack, 0)?;
+        let input = input.into_stream_or_original(engine_state);
 
-        let metadata = input.metadata();
+        let metadata = input.metadata().map(|m| m.with_content_type(None));
 
         match input {
             PipelineData::Value(val, _) => {
@@ -63,7 +63,7 @@ impl Command for Take {
                         )),
                     Value::Binary { val, .. } => {
                         let slice: Vec<u8> = val.into_iter().take(rows_desired).collect();
-                        Ok(PipelineData::Value(Value::binary(slice, span), metadata))
+                        Ok(PipelineData::value(Value::binary(slice, span), metadata))
                     }
                     Value::Range { val, .. } => Ok(val
                         .into_range_iter(span, Signals::empty())
@@ -83,26 +83,18 @@ impl Command for Take {
                     }),
                 }
             }
-            PipelineData::ListStream(stream, metadata) => Ok(PipelineData::ListStream(
+            PipelineData::ListStream(stream, metadata) => Ok(PipelineData::list_stream(
                 stream.modify(|iter| iter.take(rows_desired)),
                 metadata,
             )),
             PipelineData::ByteStream(stream, metadata) => {
                 if stream.type_().is_binary_coercible() {
-                    if let Some(reader) = stream.reader() {
-                        // Just take 'rows' bytes off the stream, mimicking the binary behavior
-                        Ok(PipelineData::ByteStream(
-                            ByteStream::read(
-                                reader.take(rows_desired as u64),
-                                head,
-                                Signals::empty(),
-                                ByteStreamType::Binary,
-                            ),
-                            metadata,
-                        ))
-                    } else {
-                        Ok(PipelineData::Empty)
-                    }
+                    let span = stream.span();
+                    Ok(PipelineData::byte_stream(
+                        stream.take(span, rows_desired as u64)?,
+                        // first 5 bytes of an image/png stream are not image/png themselves
+                        metadata.map(|m| m.with_content_type(None)),
+                    ))
                 } else {
                     Err(ShellError::OnlySupportsThisInputType {
                         exp_input_type: "list, binary or range".into(),
@@ -121,15 +113,15 @@ impl Command for Take {
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Return the first item of a list/table",
+                description: "Return the first item of a list/table.",
                 example: "[1 2 3] | take 1",
                 result: Some(Value::test_list(vec![Value::test_int(1)])),
             },
             Example {
-                description: "Return the first 2 items of a list/table",
+                description: "Return the first 2 items of a list/table.",
                 example: "[1 2 3] | take 2",
                 result: Some(Value::test_list(vec![
                     Value::test_int(1),
@@ -137,7 +129,7 @@ impl Command for Take {
                 ])),
             },
             Example {
-                description: "Return the first two rows of a table",
+                description: "Return the first two rows of a table.",
                 example: "[[editions]; [2015] [2018] [2021]] | take 2",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -149,12 +141,12 @@ impl Command for Take {
                 ])),
             },
             Example {
-                description: "Return the first 2 bytes of a binary value",
+                description: "Return the first 2 bytes of a binary value.",
                 example: "0x[01 23 45] | take 2",
                 result: Some(Value::test_binary(vec![0x01, 0x23])),
             },
             Example {
-                description: "Return the first 3 elements of a range",
+                description: "Return the first 3 elements of a range.",
                 example: "1..10 | take 3",
                 result: Some(Value::test_list(vec![
                     Value::test_int(1),
@@ -170,9 +162,7 @@ impl Command for Take {
 mod test {
     use super::*;
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Take {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Take)
     }
 }

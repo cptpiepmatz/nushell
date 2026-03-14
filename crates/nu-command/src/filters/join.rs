@@ -20,6 +20,12 @@ enum IncludeInner {
     Yes,
 }
 
+#[derive(Debug, Default)]
+struct RightColumnRename {
+    prefix: Option<String>,
+    suffix: Option<String>,
+}
+
 impl Command for Join {
     fn name(&self) -> &str {
         "join"
@@ -42,10 +48,22 @@ impl Command for Join {
                 SyntaxShape::String,
                 "Name of column in right table to join on. Defaults to same column as left table.",
             )
-            .switch("inner", "Inner join (default)", Some('i'))
-            .switch("left", "Left-outer join", Some('l'))
-            .switch("right", "Right-outer join", Some('r'))
-            .switch("outer", "Outer join", Some('o'))
+            .named(
+                "prefix",
+                SyntaxShape::String,
+                "Prefix columns from the right table with this string (excluding the shared join key).",
+                Some('p'),
+            )
+            .named(
+                "suffix",
+                SyntaxShape::String,
+                "Suffix columns from the right table with this string (excluding the shared join key).",
+                Some('s'),
+            )
+            .switch("inner", "Inner join (default).", Some('i'))
+            .switch("left", "Left-outer join.", Some('l'))
+            .switch("right", "Right-outer join.", Some('r'))
+            .switch("outer", "Outer join.", Some('o'))
             .input_output_types(vec![(Type::table(), Type::table())])
             .category(Category::Filters)
     }
@@ -65,6 +83,8 @@ impl Command for Join {
         call: &Call,
         input: PipelineData,
     ) -> Result<nu_protocol::PipelineData, nu_protocol::ShellError> {
+        let input = input.into_stream_or_original(engine_state);
+
         let metadata = input.metadata();
         let table_2: Value = call.req(engine_state, stack, 0)?;
         let l_on: Value = call.req(engine_state, stack, 1)?;
@@ -73,6 +93,10 @@ impl Command for Join {
             .unwrap_or_else(|| l_on.clone());
         let span = call.head;
         let join_type = join_type(engine_state, stack, call)?;
+        let rename = RightColumnRename {
+            prefix: call.get_flag(engine_state, stack, "prefix")?,
+            suffix: call.get_flag(engine_state, stack, "suffix")?,
+        };
 
         // FIXME: we should handle ListStreams properly instead of collecting
         let collected_input = input.into_value(span)?;
@@ -84,8 +108,8 @@ impl Command for Join {
                 Value::String { val: l_on, .. },
                 Value::String { val: r_on, .. },
             ) => {
-                let result = join(rows_1, rows_2, l_on, r_on, join_type, span);
-                Ok(PipelineData::Value(result, metadata))
+                let result = join(rows_1, rows_2, l_on, r_on, join_type, &rename, span);
+                Ok(PipelineData::value(result, metadata))
             }
             _ => Err(ShellError::UnsupportedInput {
                 msg: "(PipelineData<table>, table, string, string)".into(),
@@ -102,14 +126,35 @@ impl Command for Join {
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
-        vec![Example {
-            description: "Join two tables",
-            example: "[{a: 1 b: 2}] | join [{a: 1 c: 3}] a",
-            result: Some(Value::test_list(vec![Value::test_record(record! {
-                "a" => Value::test_int(1), "b" => Value::test_int(2), "c" => Value::test_int(3),
-            })])),
-        }]
+    fn examples(&self) -> Vec<Example<'_>> {
+        vec![
+            Example {
+                description: "Join two tables",
+                example: "[{a: 1 b: 2}] | join [{a: 1 c: 3}] a",
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "a" => Value::test_int(1), "b" => Value::test_int(2), "c" => Value::test_int(3),
+                })])),
+            },
+            Example {
+                description: "Join multiple tables with distinct suffixes for the right table's columns",
+                example: "[{id: 1 x: 10}] | join --suffix _a [{id: 1 x: 20}] id | join --suffix _b [{id: 1 x: 30}] id",
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "id" => Value::test_int(1),
+                    "x" => Value::test_int(10),
+                    "x_a" => Value::test_int(20),
+                    "x_b" => Value::test_int(30),
+                })])),
+            },
+            Example {
+                description: "Join multiple tables with a prefix for the right table's columns",
+                example: "[{id: 1 x: 10}] | join --prefix r_ [{id: 1 x: 20}] id",
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "id" => Value::test_int(1),
+                    "x" => Value::test_int(10),
+                    "r_x" => Value::test_int(20),
+                })])),
+            },
+        ]
     }
 }
 
@@ -143,6 +188,7 @@ fn join(
     left_join_key: &str,
     right_join_key: &str,
     join_type: JoinType,
+    rename: &RightColumnRename,
     span: Span,
 ) -> Value {
     // Inner / Right Join
@@ -212,6 +258,7 @@ fn join(
         IncludeInner::Yes,
         sep,
         &config,
+        rename,
         span,
     );
     if is_outer {
@@ -233,6 +280,7 @@ fn join(
             IncludeInner::No,
             sep,
             &config,
+            rename,
             span,
         );
     }
@@ -253,67 +301,83 @@ fn join_rows(
     include_inner: IncludeInner,
     sep: &str,
     config: &Config,
+    rename: &RightColumnRename,
     span: Span,
 ) {
+    if !this
+        .iter()
+        .any(|this_record| match this_record.as_record() {
+            Ok(record) => record.contains(this_join_key),
+            Err(_) => false,
+        })
+    {
+        // `this` table does not contain the join column; do nothing
+        return;
+    }
     for this_row in this {
         if let Value::Record {
             val: this_record, ..
         } = this_row
         {
-            if let Some(this_valkey) = this_record.get(this_join_key) {
-                if let Some(other_rows) = other.get(&this_valkey.to_expanded_string(sep, config)) {
-                    if matches!(include_inner, IncludeInner::Yes) {
-                        for other_record in other_rows {
-                            // `other` table contains rows matching `this` row on the join column
-                            let record = match join_type {
-                                JoinType::Inner | JoinType::Right => merge_records(
-                                    other_record, // `other` (lookup) is the left input table
-                                    this_record,
-                                    shared_join_key,
-                                ),
-                                JoinType::Left => merge_records(
-                                    this_record, // `this` is the left input table
-                                    other_record,
-                                    shared_join_key,
-                                ),
-                                _ => panic!("not implemented"),
-                            };
-                            result.push(Value::record(record, span))
-                        }
+            if let Some(this_valkey) = this_record.get(this_join_key)
+                && let Some(other_rows) = other.get(&this_valkey.to_expanded_string(sep, config))
+            {
+                if let IncludeInner::Yes = include_inner {
+                    for other_record in other_rows {
+                        // `other` table contains rows matching `this` row on the join column
+                        let record = match join_type {
+                            JoinType::Inner | JoinType::Right => merge_records(
+                                other_record, // `other` (lookup) is the left input table
+                                this_record,
+                                shared_join_key,
+                                rename,
+                            ),
+                            JoinType::Left => merge_records(
+                                this_record, // `this` is the left input table
+                                other_record,
+                                shared_join_key,
+                                rename,
+                            ),
+                            _ => panic!("not implemented"),
+                        };
+                        result.push(Value::record(record, span))
                     }
-                } else if !matches!(join_type, JoinType::Inner) {
-                    // `other` table did not contain any rows matching
-                    // `this` row on the join column; emit a single joined
-                    // row with null values for columns not present,
-                    let other_record = other_keys
-                        .iter()
-                        .map(|&key| {
-                            let val = if Some(key.as_ref()) == shared_join_key {
-                                this_record
-                                    .get(key)
-                                    .cloned()
-                                    .unwrap_or_else(|| Value::nothing(span))
-                            } else {
-                                Value::nothing(span)
-                            };
-
-                            (key.clone(), val)
-                        })
-                        .collect();
-
-                    let record = match join_type {
-                        JoinType::Inner | JoinType::Right => {
-                            merge_records(&other_record, this_record, shared_join_key)
-                        }
-                        JoinType::Left => {
-                            merge_records(this_record, &other_record, shared_join_key)
-                        }
-                        _ => panic!("not implemented"),
-                    };
-
-                    result.push(Value::record(record, span))
                 }
-            } // else { a row is missing a value for the join column }
+                continue;
+            }
+            if !matches!(join_type, JoinType::Inner) {
+                // Either `this` row is missing a value for the join column or
+                // `other` table did not contain any rows matching
+                // `this` row on the join column; emit a single joined
+                // row with null values for columns not present
+                let other_record = other_keys
+                    .iter()
+                    .map(|&key| {
+                        let val = if Some(key.as_ref()) == shared_join_key {
+                            this_record
+                                .get(key)
+                                .cloned()
+                                .unwrap_or_else(|| Value::nothing(span))
+                        } else {
+                            Value::nothing(span)
+                        };
+
+                        (key.clone(), val)
+                    })
+                    .collect();
+
+                let record = match join_type {
+                    JoinType::Inner | JoinType::Right => {
+                        merge_records(&other_record, this_record, shared_join_key, rename)
+                    }
+                    JoinType::Left => {
+                        merge_records(this_record, &other_record, shared_join_key, rename)
+                    }
+                    _ => panic!("not implemented"),
+                };
+
+                result.push(Value::record(record, span))
+            }
         };
     }
 }
@@ -341,11 +405,11 @@ fn lookup_table<'a>(
 ) -> HashMap<String, Vec<&'a Record>> {
     let mut map = HashMap::<String, Vec<&'a Record>>::with_capacity(cap);
     for row in rows {
-        if let Value::Record { val: record, .. } = row {
-            if let Some(val) = record.get(on) {
-                let valkey = val.to_expanded_string(sep, config);
-                map.entry(valkey).or_default().push(record);
-            }
+        if let Value::Record { val: record, .. } = row
+            && let Some(val) = record.get(on)
+        {
+            let valkey = val.to_expanded_string(sep, config);
+            map.entry(valkey).or_default().push(record);
         };
     }
     map
@@ -354,25 +418,47 @@ fn lookup_table<'a>(
 // Merge `left` and `right` records, renaming keys in `right` where they clash
 // with keys in `left`. If `shared_key` is supplied then it is the name of a key
 // that should not be renamed (its values are guaranteed to be equal).
-fn merge_records(left: &Record, right: &Record, shared_key: Option<&str>) -> Record {
+fn merge_records(
+    left: &Record,
+    right: &Record,
+    shared_key: Option<&str>,
+    rename: &RightColumnRename,
+) -> Record {
     let cap = max(left.len(), right.len());
     let mut seen = HashSet::with_capacity(cap);
     let mut record = Record::with_capacity(cap);
     for (k, v) in left {
         record.push(k.clone(), v.clone());
-        seen.insert(k);
+        seen.insert(k.clone());
     }
 
     for (k, v) in right {
-        let k_seen = seen.contains(k);
         let k_shared = shared_key == Some(k.as_str());
         // Do not output shared join key twice
-        if !(k_seen && k_shared) {
-            record.push(
-                if k_seen { format!("{}_", k) } else { k.clone() },
-                v.clone(),
-            );
+        if k_shared && seen.contains(k) {
+            continue;
         }
+
+        let mut out_key = if rename.prefix.is_some() || rename.suffix.is_some() {
+            format!(
+                "{}{}{}",
+                rename.prefix.as_deref().unwrap_or(""),
+                k,
+                rename.suffix.as_deref().unwrap_or("")
+            )
+        } else if seen.contains(k) {
+            format!("{k}_")
+        } else {
+            k.clone()
+        };
+
+        // Ensure the output key is truly unique. If not, keep appending "_" until it is.
+        while seen.contains(&out_key) {
+            out_key.push('_');
+        }
+
+        record.push(out_key.clone(), v.clone());
+        seen.insert(out_key);
     }
     record
 }
@@ -382,9 +468,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Join {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Join)
     }
 }

@@ -1,11 +1,10 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 
-use crate::values::CustomValueSupport;
 use crate::PolarsPlugin;
+use crate::values::{CustomValueSupport, PolarsPluginType};
 
 use crate::values::utils::convert_columns_string;
 use crate::values::{Column, NuDataFrame};
@@ -29,16 +28,22 @@ impl PluginCommand for DropNulls {
             .optional(
                 "subset",
                 SyntaxShape::Table(vec![]),
-                "subset of columns to drop nulls",
+                "Subset of columns to drop nulls.",
             )
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "drop null values in dataframe",
@@ -99,7 +104,10 @@ impl PluginCommand for DropNulls {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

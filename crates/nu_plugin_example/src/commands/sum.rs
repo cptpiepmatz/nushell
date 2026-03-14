@@ -30,7 +30,7 @@ impl PluginCommand for Sum {
         vec!["example"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             example: "example seq 1 5 | example sum",
             description: "sum values from 1 to 5",
@@ -57,7 +57,7 @@ impl PluginCommand for Sum {
                     .with_label("can't be used here", call.head));
             }
         }
-        Ok(PipelineData::Value(acc.to_value(call.head), None))
+        Ok(PipelineData::value(acc.to_value(call.head), None))
     }
 }
 
@@ -72,10 +72,10 @@ enum IntOrFloat {
 impl IntOrFloat {
     pub(crate) fn add_i64(&mut self, n: i64) {
         match self {
-            IntOrFloat::Int(ref mut v) => {
+            IntOrFloat::Int(v) => {
                 *v += n;
             }
-            IntOrFloat::Float(ref mut v) => {
+            IntOrFloat::Float(v) => {
                 *v += n as f64;
             }
         }
@@ -86,7 +86,7 @@ impl IntOrFloat {
             IntOrFloat::Int(v) => {
                 *self = IntOrFloat::Float(*v as f64 + n);
             }
-            IntOrFloat::Float(ref mut v) => {
+            IntOrFloat::Float(v) => {
                 *v += n;
             }
         }

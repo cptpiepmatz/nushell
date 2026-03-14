@@ -23,42 +23,42 @@ impl Command for ToCsv {
             .named(
                 "separator",
                 SyntaxShape::String,
-                "a character to separate columns, defaults to ','",
+                "A character to separate columns, defaults to ','.",
                 Some('s'),
             )
             .switch(
                 "noheaders",
-                "do not output the columns names as the first row",
+                "Do not output the columns names as the first row.",
                 Some('n'),
             )
             .named(
                 "columns",
                 SyntaxShape::List(SyntaxShape::String.into()),
-                "the names (in order) of the columns to use",
+                "The names (in order) of the columns to use.",
                 None,
             )
             .category(Category::Formats)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Outputs a CSV string representing the contents of this table",
+                description: "Outputs a CSV string representing the contents of this table.",
                 example: "[[foo bar]; [1 2]] | to csv",
                 result: Some(Value::test_string("foo,bar\n1,2\n")),
             },
             Example {
-                description: "Outputs a CSV string representing the contents of this table",
+                description: "Outputs a CSV string representing the contents of this table.",
                 example: "[[foo bar]; [1 2]] | to csv --separator ';' ",
                 result: Some(Value::test_string("foo;bar\n1;2\n")),
             },
             Example {
-                description: "Outputs a CSV string representing the contents of this record",
+                description: "Outputs a CSV string representing the contents of this record.",
                 example: "{a: 1 b: 2} | to csv",
                 result: Some(Value::test_string("a,b\n1,2\n")),
             },
             Example {
-                description: "Outputs a CSV stream with column names pre-determined",
+                description: "Outputs a CSV stream with column names pre-determined.",
                 example: "[[foo bar baz]; [1 2 3]] | to csv --columns [baz foo]",
                 result: Some(Value::test_string("baz,foo\n3,1\n")),
             },
@@ -142,9 +142,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-        test_examples(ToCsv {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ToCsv)
     }
 
     #[test]
@@ -166,14 +165,14 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = "{a: 1 b: 2} | to csv  | metadata | get content_type";
+        let cmd = "{a: 1 b: 2} | to csv  | metadata | get content_type | $in";
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(record!("content_type" => Value::test_string("text/csv"))),
+            Value::test_string("text/csv"),
             result.expect("There should be a result")
         );
     }

@@ -1,4 +1,4 @@
-use crate::repl::tests::{fail_test, run_test, run_test_std, TestResult};
+use crate::repl::tests::{TestResult, fail_test, run_test, run_test_std};
 
 #[test]
 fn mutate_nu_config() -> TestResult {
@@ -95,8 +95,8 @@ fn mutate_nu_config_nested_history() -> TestResult {
 #[test]
 fn mutate_nu_config_nested_filesize() -> TestResult {
     run_test_std(
-        r#"$env.config.filesize.format = 'kb'; $env.config.filesize.format"#,
-        "kb",
+        r#"$env.config.filesize.unit = 'kB'; $env.config.filesize.unit"#,
+        "kB",
     )
 }
 
@@ -166,5 +166,13 @@ fn mutate_nu_config_plugin_gc_plugins() -> TestResult {
             $env.config.plugin_gc.plugins.inc.stop_after
         "#,
         "0sec",
+    )
+}
+
+#[test]
+fn mutate_nu_config_history_warning() -> TestResult {
+    fail_test(
+        r#"$env.config.history.file_format = "plaintext"; $env.config.history.isolation = true"#,
+        "history isolation only compatible with SQLite format",
     )
 }

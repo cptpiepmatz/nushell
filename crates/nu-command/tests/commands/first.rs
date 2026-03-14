@@ -1,6 +1,4 @@
-use nu_test_support::fs::Stub::EmptyFile;
-use nu_test_support::nu;
-use nu_test_support::playground::Playground;
+use nu_test_support::{fs::Stub::EmptyFile, prelude::*};
 
 #[test]
 fn gets_first_rows_by_amount() {
@@ -98,8 +96,36 @@ fn errors_on_negative_rows() {
 }
 
 #[test]
-fn errors_on_empty_list_when_no_rows_given() {
-    let actual = nu!("[] | first");
+fn does_not_error_on_empty_list_when_no_rows_given() {
+    let actual = nu!("[] | first | describe");
+
+    assert!(actual.out.contains("nothing"));
+}
+
+#[test]
+fn error_on_empty_list_when_no_rows_given_in_strict_mode() {
+    let actual = nu!("[] | first --strict | describe");
 
     assert!(actual.err.contains("index too large"));
+}
+
+#[test]
+fn gets_first_bytes_and_drops_content_type() {
+    let actual = nu!(format!(
+        "open {} | first 3 | metadata | get content_type? | describe",
+        file!(),
+    ));
+    assert_eq!(actual.out, "nothing");
+}
+
+#[test]
+fn wrapping_first_with_optional_null_rows() -> Result {
+    let code = "def wraps-first [rows?: int] { [1, 2, 3] | first $rows }; wraps-first";
+    test().run(code).expect_value_eq(1)
+}
+
+#[test]
+fn wrapping_first_with_optional_explicit_rows() -> Result {
+    let code = "def wraps-first [rows?: int] { [1, 2, 3] | first $rows }; wraps-first 2 | length";
+    test().run(code).expect_value_eq(2)
 }

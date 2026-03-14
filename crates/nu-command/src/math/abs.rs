@@ -1,9 +1,10 @@
+use crate::math::utils::ensure_bounded;
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathAbs;
 
-impl Command for SubCommand {
+impl Command for MathAbs {
     fn name(&self) -> &str {
         "math abs"
     }
@@ -21,6 +22,7 @@ impl Command for SubCommand {
                     Type::List(Box::new(Type::Duration)),
                     Type::List(Box::new(Type::Duration)),
                 ),
+                (Type::Range, Type::List(Box::new(Type::Number))),
             ])
             .allow_variants_without_examples(true)
             .category(Category::Math)
@@ -46,6 +48,10 @@ impl Command for SubCommand {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
+        if let PipelineData::Value(ref v @ Value::Range { ref val, .. }, ..) = input {
+            let span = v.span();
+            ensure_bounded(val, span, head)?;
+        }
         input.map(move |value| abs_helper(value, head), engine_state.signals())
     }
 
@@ -56,15 +62,19 @@ impl Command for SubCommand {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
+        if let PipelineData::Value(ref v @ Value::Range { ref val, .. }, ..) = input {
+            let span = v.span();
+            ensure_bounded(val, span, head)?;
+        }
         input.map(
             move |value| abs_helper(value, head),
             working_set.permanent().signals(),
         )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Compute absolute value of each number in a list of numbers",
+            description: "Compute absolute value of each number in a list of numbers.",
             example: "[-50 -100.0 25] | math abs",
             result: Some(Value::list(
                 vec![
@@ -102,9 +112,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathAbs)
     }
 }

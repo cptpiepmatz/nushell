@@ -1,14 +1,14 @@
 use crate::{
-    dataframe::values::{str_to_dtype, NuExpression, NuLazyFrame},
-    values::{cant_convert_err, CustomValueSupport, PolarsPluginObject, PolarsPluginType},
     PolarsPlugin,
+    dataframe::values::{NuExpression, NuLazyFrame, str_to_dtype},
+    values::{CustomValueSupport, PolarsPluginObject, PolarsPluginType, cant_convert_err},
 };
 
 use crate::values::NuDataFrame;
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    record, Category, Example, LabeledError, PipelineData, ShellError, Signature, Span,
-    SyntaxShape, Type, Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
+    record,
 };
 use polars::prelude::*;
 
@@ -30,18 +30,22 @@ impl PluginCommand for CastDF {
         Signature::build(self.name())
             .input_output_types(vec![
                 (
-                    Type::Custom("expression".into()),
-                    Type::Custom("expression".into()),
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
                 ),
                 (
-                    Type::Custom("dataframe".into()),
-                    Type::Custom("dataframe".into()),
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
                 ),
             ])
             .required(
                 "dtype",
                 SyntaxShape::String,
-                "The dtype to cast the column to",
+                "The dtype to cast the column to.",
             )
             .optional(
                 "column",
@@ -51,7 +55,7 @@ impl PluginCommand for CastDF {
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Cast a column in a dataframe to a different dtype",
@@ -66,8 +70,7 @@ impl PluginCommand for CastDF {
             },
             Example {
                 description: "Cast a column in a lazy dataframe to a different dtype",
-                example:
-                    "[[a b]; [1 2] [3 4]] | polars into-df | polars into-lazy | polars cast u8 a | polars schema",
+                example: "[[a b]; [1 2] [3 4]] | polars into-df | polars into-lazy | polars cast u8 a | polars schema",
                 result: Some(Value::record(
                     record! {
                         "a" => Value::string("u8", Span::test_data()),
@@ -91,6 +94,7 @@ impl PluginCommand for CastDF {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         match PolarsPluginObject::try_from_value(plugin, &value)? {
             PolarsPluginObject::NuLazyFrame(lazy) => {
@@ -117,6 +121,7 @@ impl PluginCommand for CastDF {
             )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

@@ -1,8 +1,8 @@
 //! [`Span`] to point to sections of source code and the [`Spanned`] wrapper type
-use crate::SpanId;
+use crate::{FromValue, IntoValue, ShellError, SpanId, Value, record};
 use miette::SourceSpan;
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
+use std::{fmt, ops::Deref};
 
 pub trait GetSpan {
     fn get_span(&self, span_id: SpanId) -> Span;
@@ -54,6 +54,32 @@ impl<T> Spanned<T> {
     }
 }
 
+impl<T> Spanned<&T>
+where
+    T: ToOwned + ?Sized,
+{
+    /// Map the spanned to hold an owned value.
+    pub fn to_owned(&self) -> Spanned<T::Owned> {
+        Spanned {
+            item: self.item.to_owned(),
+            span: self.span,
+        }
+    }
+}
+
+impl<T> Spanned<T>
+where
+    T: AsRef<str>,
+{
+    /// Span the value as a string slice.
+    pub fn as_str(&self) -> Spanned<&str> {
+        Spanned {
+            item: self.item.as_ref(),
+            span: self.span,
+        }
+    }
+}
+
 impl<T, E> Spanned<Result<T, E>> {
     /// Move the `Result` to the outside, resulting in a spanned `Ok` or unspanned `Err`.
     pub fn transpose(self) -> Result<Spanned<T>, E> {
@@ -67,6 +93,21 @@ impl<T, E> Spanned<Result<T, E>> {
                 span: _,
             } => Err(err),
         }
+    }
+}
+
+// With both Display and Into<SourceSpan> implemented on Spanned, we can use Spanned<String> in an
+// error in one field instead of splitting it into two fields
+
+impl<T: fmt::Display> fmt::Display for Spanned<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.item, f)
+    }
+}
+
+impl<T> From<Spanned<T>> for SourceSpan {
+    fn from(value: Spanned<T>) -> Self {
+        value.span.into()
     }
 }
 
@@ -95,10 +136,23 @@ impl<T> IntoSpanned for T {
 /// Spans are a global offset across all seen files, which are cached in the engine's state. The start and
 /// end offset together make the inclusive start/exclusive end pair for where to underline to highlight
 /// a given point of interest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
+}
+
+impl fmt::Debug for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const TEST_DATA: Span = Span::test_data();
+        const UNKNOWN: Span = Span::unknown();
+
+        match *self {
+            TEST_DATA => write!(f, "Span(TEST)"),
+            UNKNOWN => write!(f, "Span(UNKNOWN)"),
+            Span { start, end } => write!(f, "Span[{start}..{end}]"),
+        }
+    }
 }
 
 impl Span {
@@ -115,14 +169,60 @@ impl Span {
         Self { start: 0, end: 0 }
     }
 
+    /// Span for testing purposes.
+    ///
+    /// The provided span does not point into any known source but is unequal to [`Span::unknown()`].
+    ///
     /// Note: Only use this for test data, *not* live data, as it will point into unknown source
-    /// when used in errors.
+    /// when used in errors
     pub const fn test_data() -> Self {
-        Self::unknown()
+        Self {
+            start: usize::MAX / 2,
+            end: usize::MAX / 2,
+        }
     }
 
     pub fn offset(&self, offset: usize) -> Self {
         Self::new(self.start - offset, self.end - offset)
+    }
+
+    /// Return length of the slice.
+    pub fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    /// Indicate if slice has length 0.
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    /// Return another span fully inside the [`Span`].
+    ///
+    /// `start` and `end` are relative to `self.start`, and must lie within the `Span`.
+    /// In other words, both `start` and `end` must be `<= self.len()`.
+    pub fn subspan(&self, offset_start: usize, offset_end: usize) -> Option<Self> {
+        let len = self.len();
+
+        if offset_start > len || offset_end > len || offset_start > offset_end {
+            None
+        } else {
+            Some(Self::new(
+                self.start + offset_start,
+                self.start + offset_end,
+            ))
+        }
+    }
+
+    /// Return two spans that split the ['Span'] at the given position.
+    pub fn split_at(&self, offset: usize) -> Option<(Self, Self)> {
+        if offset < self.len() {
+            Some((
+                Self::new(self.start, self.start + offset),
+                Self::new(self.start + offset, self.end),
+            ))
+        } else {
+            None
+        }
     }
 
     pub fn contains(&self, pos: usize) -> bool {
@@ -138,6 +238,28 @@ impl Span {
         Self {
             start: self.end,
             end: self.end,
+        }
+    }
+
+    /// Converts row and column in a String to a Span, assuming bytes (1-based rows)
+    pub fn from_row_column(row: usize, col: usize, contents: &str) -> Span {
+        let mut cur_row = 1;
+        let mut cur_col = 1;
+
+        for (offset, curr_byte) in contents.bytes().enumerate() {
+            if curr_byte == b'\n' {
+                cur_row += 1;
+                cur_col = 1;
+            } else if cur_row >= row && cur_col >= col {
+                return Span::new(offset, offset);
+            } else {
+                cur_col += 1;
+            }
+        }
+
+        Self {
+            start: contents.len(),
+            end: contents.len(),
         }
     }
 
@@ -209,32 +331,76 @@ impl Span {
     }
 }
 
+impl IntoValue for Span {
+    fn into_value(self, span: Span) -> Value {
+        let record = record! {
+            "start" => Value::int(self.start as i64, self),
+            "end" => Value::int(self.end as i64, self),
+        };
+        record.into_value(span)
+    }
+}
+
+impl FromValue for Span {
+    fn from_value(value: Value) -> Result<Self, ShellError> {
+        let rec = value.as_record();
+        match rec {
+            Ok(val) => {
+                let Some(pre_start) = val.get("start") else {
+                    return Err(ShellError::GenericError {
+                        error: "Unable to parse Span.".into(),
+                        msg: "`start` must be an `int`".into(),
+                        span: Some(value.span()),
+                        help: None,
+                        inner: vec![],
+                    });
+                };
+                let Some(pre_end) = val.get("end") else {
+                    return Err(ShellError::GenericError {
+                        error: "Unable to parse Span.".into(),
+                        msg: "`end` must be an `int`".into(),
+                        span: Some(value.span()),
+                        help: None,
+                        inner: vec![],
+                    });
+                };
+                let start = pre_start.as_int()? as usize;
+                let end = pre_end.as_int()? as usize;
+                if start <= end {
+                    Ok(Self::new(start, end))
+                } else {
+                    Err(ShellError::GenericError {
+                        error: "Unable to parse Span.".into(),
+                        msg: "`end` must not be less than `start`".into(),
+                        span: Some(value.span()),
+                        help: None,
+                        inner: vec![],
+                    })
+                }
+            }
+            _ => Err(ShellError::TypeMismatch {
+                err_message: "Must be a record".into(),
+                span: value.span(),
+            }),
+        }
+    }
+}
+
 impl From<Span> for SourceSpan {
     fn from(s: Span) -> Self {
         Self::new(s.start.into(), s.end - s.start)
     }
 }
 
-/// An extension trait for `Result`, which adds a span to the error type.
+/// An extension trait for [`Result`], which adds a span to the error type.
+///
+/// This trait might be removed later, since the old [`Spanned<std::io::Error>`] to
+/// [`ShellError`](crate::ShellError) conversion was replaced by
+/// [`IoError`](crate::shell_error::io::IoError).
 pub trait ErrSpan {
     type Result;
 
-    /// Add the given span to the error type `E`, turning it into a `Spanned<E>`.
-    ///
-    /// Some auto-conversion methods to `ShellError` from other error types are available on spanned
-    /// errors, to give users better information about where an error came from. For example, it is
-    /// preferred when working with `std::io::Error`:
-    ///
-    /// ```no_run
-    /// use nu_protocol::{ErrSpan, ShellError, Span};
-    /// use std::io::Read;
-    ///
-    /// fn read_from(mut reader: impl Read, span: Span) -> Result<Vec<u8>, ShellError> {
-    ///     let mut vec = vec![];
-    ///     reader.read_to_end(&mut vec).err_span(span)?;
-    ///     Ok(vec)
-    /// }
-    /// ```
+    /// Adds the given span to the error type, turning it into a [`Spanned<E>`].
     fn err_span(self, span: Span) -> Self::Result;
 }
 

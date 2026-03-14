@@ -1,8 +1,7 @@
 use crate::{DirBuilder, DirInfo, FileInfo};
-#[allow(deprecated)]
-use nu_engine::{command_prelude::*, current_dir};
-use nu_glob::Pattern;
-use nu_protocol::{NuGlob, Signals};
+use nu_engine::command_prelude::*;
+use nu_glob::{MatchOptions, Pattern};
+use nu_protocol::{NuGlob, PipelineMetadata, Signals};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -14,6 +13,7 @@ pub struct DuArgs {
     path: Option<Spanned<NuGlob>>,
     deref: bool,
     long: bool,
+    all: bool,
     exclude: Option<Spanned<NuGlob>>,
     #[serde(rename = "max-depth")]
     max_depth: Option<Spanned<i64>>,
@@ -41,32 +41,33 @@ impl Command for Du {
             )
             .switch(
                 "deref",
-                "Dereference symlinks to their targets for size",
+                "Dereference symlinks to their targets for size.",
                 Some('r'),
             )
             .switch(
                 "long",
-                "Get underlying directories and files for each entry",
+                "Get underlying directories and files for each entry.",
                 Some('l'),
             )
             .named(
                 "exclude",
                 SyntaxShape::GlobPattern,
-                "Exclude these file names",
+                "Exclude these file names.",
                 Some('x'),
             )
             .named(
                 "max-depth",
                 SyntaxShape::Int,
-                "Directory recursion limit",
+                "Directory recursion limit.",
                 Some('d'),
             )
             .named(
                 "min-size",
                 SyntaxShape::Int,
-                "Exclude files below this size",
+                "Exclude files below this size.",
                 Some('m'),
             )
+            .switch("all", "Include hidden files if '*' is provided.", Some('a'))
             .category(Category::FileSystem)
     }
 
@@ -80,25 +81,25 @@ impl Command for Du {
         let tag = call.head;
         let min_size: Option<Spanned<i64>> = call.get_flag(engine_state, stack, "min-size")?;
         let max_depth: Option<Spanned<i64>> = call.get_flag(engine_state, stack, "max-depth")?;
-        if let Some(ref max_depth) = max_depth {
-            if max_depth.item < 0 {
-                return Err(ShellError::NeedsPositiveValue {
-                    span: max_depth.span,
-                });
-            }
+        if let Some(ref max_depth) = max_depth
+            && max_depth.item < 0
+        {
+            return Err(ShellError::NeedsPositiveValue {
+                span: max_depth.span,
+            });
         }
-        if let Some(ref min_size) = min_size {
-            if min_size.item < 0 {
-                return Err(ShellError::NeedsPositiveValue {
-                    span: min_size.span,
-                });
-            }
+        if let Some(ref min_size) = min_size
+            && min_size.item < 0
+        {
+            return Err(ShellError::NeedsPositiveValue {
+                span: min_size.span,
+            });
         }
         let deref = call.has_flag(engine_state, stack, "deref")?;
         let long = call.has_flag(engine_state, stack, "long")?;
         let exclude = call.get_flag(engine_state, stack, "exclude")?;
-        #[allow(deprecated)]
-        let current_dir = current_dir(engine_state, stack)?;
+        let current_dir = engine_state.cwd(Some(stack))?.into_std_path_buf();
+        let all = call.has_flag(engine_state, stack, "all")?;
 
         let paths = call.rest::<Spanned<NuGlob>>(engine_state, stack, 0)?;
         let paths = if !call.has_positional_args(stack, 0) {
@@ -113,13 +114,21 @@ impl Command for Du {
                     path: None,
                     deref,
                     long,
+                    all,
                     exclude,
                     max_depth,
                     min_size,
                 };
                 Ok(
-                    du_for_one_pattern(args, &current_dir, tag, engine_state.signals())?
-                        .into_pipeline_data(tag, engine_state.signals().clone()),
+                    du_for_one_pattern(args, &current_dir, tag, engine_state.signals().clone())?
+                        .into_pipeline_data_with_metadata(
+                            tag,
+                            engine_state.signals().clone(),
+                            PipelineMetadata {
+                                path_columns: vec![String::from("path")],
+                                ..Default::default()
+                            },
+                        ),
                 )
             }
             Some(paths) => {
@@ -129,6 +138,7 @@ impl Command for Du {
                         path: Some(p),
                         deref,
                         long,
+                        all,
                         exclude: exclude.clone(),
                         max_depth,
                         min_size,
@@ -137,7 +147,7 @@ impl Command for Du {
                         args,
                         &current_dir,
                         tag,
-                        engine_state.signals(),
+                        engine_state.signals().clone(),
                     )?)
                 }
 
@@ -145,14 +155,21 @@ impl Command for Du {
                 Ok(result_iters
                     .into_iter()
                     .flatten()
-                    .into_pipeline_data(tag, engine_state.signals().clone()))
+                    .into_pipeline_data_with_metadata(
+                        tag,
+                        engine_state.signals().clone(),
+                        PipelineMetadata {
+                            path_columns: vec![String::from("path")],
+                            ..Default::default()
+                        },
+                    ))
             }
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Disk usage of the current directory",
+            description: "Disk usage of the current directory.",
             example: "du",
             result: None,
         }]
@@ -163,9 +180,8 @@ fn du_for_one_pattern(
     args: DuArgs,
     current_dir: &Path,
     span: Span,
-    signals: &Signals,
-) -> Result<impl Iterator<Item = Value> + Send, ShellError> {
-    let signals_clone = signals.clone();
+    signals: Signals,
+) -> Result<impl Iterator<Item = Value> + Send + use<>, ShellError> {
     let exclude = args.exclude.map_or(Ok(None), move |x| {
         Pattern::new(x.item.as_ref())
             .map(Some)
@@ -174,9 +190,18 @@ fn du_for_one_pattern(
                 span: x.span,
             })
     })?;
-
+    let glob_options = if args.all {
+        None
+    } else {
+        let glob_options = MatchOptions {
+            require_literal_leading_dot: true,
+            ..Default::default()
+        };
+        Some(glob_options)
+    };
     let paths = match args.path {
-        Some(p) => nu_engine::glob_from(&p, current_dir, span, None),
+        Some(p) => nu_engine::glob_from(&p, current_dir, span, glob_options, signals.clone()),
+
         // The * pattern should never fail.
         None => nu_engine::glob_from(
             &Spanned {
@@ -186,6 +211,7 @@ fn du_for_one_pattern(
             current_dir,
             span,
             None,
+            signals.clone(),
         ),
     }
     .map(|f| f.1)?;
@@ -206,7 +232,7 @@ fn du_for_one_pattern(
     Ok(paths.filter_map(move |p| match p {
         Ok(a) => {
             if a.is_dir() {
-                match DirInfo::new(a, &params, max_depth, span, &signals_clone) {
+                match DirInfo::new(a, &params, max_depth, span, &signals) {
                     Ok(v) => Some(Value::from(v)),
                     Err(_) => None,
                 }
@@ -226,8 +252,7 @@ mod tests {
     use super::Du;
 
     #[test]
-    fn examples_work_as_expected() {
-        use crate::test_examples;
-        test_examples(Du {})
+    fn examples_work_as_expected() -> nu_test_support::Result {
+        nu_test_support::test().examples(Du)
     }
 }

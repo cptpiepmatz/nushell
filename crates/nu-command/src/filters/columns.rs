@@ -25,7 +25,7 @@ impl Command for Columns {
         "This is a counterpart to `values`, which produces a list of columns' values."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "{ acronym:PWD, meaning:'Print Working Directory' } | columns",
@@ -62,11 +62,12 @@ impl Command for Columns {
 
     fn run(
         &self,
-        _engine_state: &EngineState,
+        engine_state: &EngineState,
         _stack: &mut Stack,
         call: &Call,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
+        let input = input.into_stream_or_original(engine_state);
         getcol(call.head, input)
     }
 }
@@ -74,7 +75,7 @@ impl Command for Columns {
 fn getcol(head: Span, input: PipelineData) -> Result<PipelineData, ShellError> {
     let metadata = input.metadata();
     match input {
-        PipelineData::Empty => Ok(PipelineData::Empty),
+        PipelineData::Empty => Ok(PipelineData::empty()),
         PipelineData::Value(v, ..) => {
             let span = v.span();
             let cols = match v {
@@ -106,7 +107,7 @@ fn getcol(head: Span, input: PipelineData) -> Result<PipelineData, ShellError> {
                         wrong_type: other.get_type().to_string(),
                         dst_span: head,
                         src_span: other.span(),
-                    })
+                    });
                 }
             };
 
@@ -139,9 +140,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Columns {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Columns)
     }
 }

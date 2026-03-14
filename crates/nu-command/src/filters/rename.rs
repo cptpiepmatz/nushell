@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use nu_engine::{command_prelude::*, ClosureEval};
+use nu_engine::{ClosureEval, command_prelude::*};
 use nu_protocol::engine::Closure;
 
 #[derive(Clone)]
@@ -19,13 +19,13 @@ impl Command for Rename {
             .named(
                 "column",
                 SyntaxShape::Record(vec![]),
-                "column name to be changed",
+                "Column name to be changed.",
                 Some('c'),
             )
             .named(
                 "block",
                 SyntaxShape::Closure(Some(vec![SyntaxShape::Any])),
-                "A closure to apply changes on each column",
+                "A closure to apply changes on each column.",
                 Some('b'),
             )
             .rest(
@@ -50,10 +50,10 @@ impl Command for Rename {
         rename(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Rename a column",
+                description: "Rename a column.",
                 example: "[[a, b]; [1, 2]] | rename my_column",
                 result: Some(Value::test_list(vec![Value::test_record(record! {
                     "my_column" => Value::test_int(1),
@@ -61,7 +61,7 @@ impl Command for Rename {
                 })])),
             },
             Example {
-                description: "Rename many columns",
+                description: "Rename many columns.",
                 example: "[[a, b, c]; [1, 2, 3]] | rename eggs ham bacon",
                 result: Some(Value::test_list(vec![Value::test_record(record! {
                     "eggs" =>  Value::test_int(1),
@@ -70,7 +70,7 @@ impl Command for Rename {
                 })])),
             },
             Example {
-                description: "Rename a specific column",
+                description: "Rename a specific column.",
                 example: "[[a, b, c]; [1, 2, 3]] | rename --column { a: ham }",
                 result: Some(Value::test_list(vec![Value::test_record(record! {
                     "ham" => Value::test_int(1),
@@ -79,7 +79,7 @@ impl Command for Rename {
                 })])),
             },
             Example {
-                description: "Rename the fields of a record",
+                description: "Rename the fields of a record.",
                 example: "{a: 1 b: 2} | rename x y",
                 result: Some(Value::test_record(record! {
                     "x" => Value::test_int(1),
@@ -87,7 +87,7 @@ impl Command for Rename {
                 })),
             },
             Example {
-                description: "Rename fields based on a given closure",
+                description: "Rename fields based on a given closure.",
                 example: "{abc: 1, bbc: 2} | rename --block {str replace --all 'b' 'z'}",
                 result: Some(Value::test_record(record! {
                     "azc" => Value::test_int(1),
@@ -146,24 +146,27 @@ fn rename(
                 let span = item.span();
                 match item {
                     Value::Record { val: record, .. } => {
-                        let record =
-                            if let Some(closure) = &mut closure {
-                                record
-                                    .into_owned().into_iter()
-                                    .map(|(col, val)| {
-                                        let col = Value::string(col, span);
-                                        let data = closure.run_with_value(col)?;
-                                        let col = data.collect_string_strict(span)?.0;
-                                        Ok((col, val))
-                                    })
-                                    .collect::<Result<Record, _>>()
-                            } else {
-                                match &specified_column {
-                                    Some(columns) => {
-                                        // record columns are unique so we can track the number
-                                        // of renamed columns to check if any were missed
-                                        let mut renamed = 0;
-                                        let record = record.into_owned().into_iter().map(|(col, val)| {
+                        let record = if let Some(closure) = &mut closure {
+                            record
+                                .into_owned()
+                                .into_iter()
+                                .map(|(col, val)| {
+                                    let col = Value::string(col, span);
+                                    let data = closure.run_with_value(col)?;
+                                    let col = data.collect_string_strict(span)?.0;
+                                    Ok((col, val))
+                                })
+                                .collect::<Result<Record, _>>()
+                        } else {
+                            match &specified_column {
+                                Some(columns) => {
+                                    // record columns are unique so we can track the number
+                                    // of renamed columns to check if any were missed
+                                    let mut renamed = 0;
+                                    let record = record
+                                        .into_owned()
+                                        .into_iter()
+                                        .map(|(col, val)| {
                                             let col = if let Some(col) = columns.get(&col) {
                                                 renamed += 1;
                                                 col.clone()
@@ -172,36 +175,40 @@ fn rename(
                                             };
 
                                             (col, val)
-                                        }).collect::<Record>();
-
-                                        let missing_column = if renamed < columns.len() {
-                                            columns.iter().find_map(|(col, new_col)| {
-                                                (!record.contains(new_col)).then_some(col)
-                                            })
-                                        } else {
-                                            None
-                                        };
-
-                                        if let Some(missing) = missing_column {
-                                            Err(ShellError::UnsupportedInput {
-                                                msg: format!("The column '{missing}' does not exist in the input"),
-                                                input: "value originated from here".into(),
-                                                msg_span: head,
-                                                input_span: span,
-                                            })
-                                        } else {
-                                            Ok(record)
-                                        }
-                                    }
-                                    None => Ok(record
-                                        .into_owned().into_iter()
-                                        .enumerate()
-                                        .map(|(i, (col, val))| {
-                                            (columns.get(i).cloned().unwrap_or(col), val)
                                         })
-                                        .collect()),
+                                        .collect::<Record>();
+
+                                    let missing_column = if renamed < columns.len() {
+                                        columns.iter().find_map(|(col, new_col)| {
+                                            (!record.contains(new_col)).then_some(col)
+                                        })
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(missing) = missing_column {
+                                        Err(ShellError::UnsupportedInput {
+                                            msg: format!(
+                                                "The column '{missing}' does not exist in the input"
+                                            ),
+                                            input: "value originated from here".into(),
+                                            msg_span: head,
+                                            input_span: span,
+                                        })
+                                    } else {
+                                        Ok(record)
+                                    }
                                 }
-                            };
+                                None => Ok(record
+                                    .into_owned()
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, (col, val))| {
+                                        (columns.get(i).cloned().unwrap_or(col), val)
+                                    })
+                                    .collect()),
+                            }
+                        };
 
                         match record {
                             Ok(record) => Value::record(record, span),
@@ -231,9 +238,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Rename {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Rename)
     }
 }

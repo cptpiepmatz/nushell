@@ -5,7 +5,7 @@ use std::io;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use nu_engine::command_prelude::*;
-use nu_protocol::{ast::PathMember, Signals, Spanned};
+use nu_protocol::{Signals, Spanned, ast::PathMember, shell_error::io::IoError};
 use rmp::encode as mp;
 
 /// Max recursion depth
@@ -22,6 +22,11 @@ impl Command for ToMsgpack {
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .input_output_type(Type::Any, Type::Binary)
+            .switch(
+                "serialize",
+                "Serialize nushell types that cannot be deserialized.",
+                Some('s'),
+            )
             .category(Category::Formats)
     }
 
@@ -43,20 +48,20 @@ MessagePack: https://msgpack.org/
         .trim()
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Convert a list of values to MessagePack",
+                description: "Convert a list of values to MessagePack.",
                 example: "[foo, 42, false] | to msgpack",
                 result: Some(Value::test_binary(b"\x93\xA3\x66\x6F\x6F\x2A\xC2")),
             },
             Example {
-                description: "Convert a range to a MessagePack array",
+                description: "Convert a range to a MessagePack array.",
                 example: "1..10 | to msgpack",
                 result: Some(Value::test_binary(b"\x9A\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A"))
             },
             Example {
-                description: "Convert a table to MessagePack",
+                description: "Convert a table to MessagePack.",
                 example: "[
         [event_name time];
         ['Apollo 11 Landing' 1969-07-24T16:50:35]
@@ -69,8 +74,8 @@ MessagePack: https://msgpack.org/
 
     fn run(
         &self,
-        _engine_state: &EngineState,
-        _stack: &mut Stack,
+        engine_state: &EngineState,
+        stack: &mut Stack,
         call: &Call,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
@@ -83,7 +88,16 @@ MessagePack: https://msgpack.org/
         let value = input.into_value(value_span)?;
         let mut out = vec![];
 
-        write_value(&mut out, &value, 0)?;
+        let serialize_types = call.has_flag(engine_state, stack, "serialize")?;
+
+        write_value(
+            &mut out,
+            &value,
+            0,
+            engine_state,
+            call.head,
+            serialize_types,
+        )?;
 
         Ok(Value::binary(out, call.head).into_pipeline_data_with_metadata(Some(metadata)))
     }
@@ -138,7 +152,7 @@ impl From<WriteError> for ShellError {
                 help: None,
                 inner: vec![],
             },
-            WriteError::Io(err, span) => err.into_spanned(span).into(),
+            WriteError::Io(err, span) => ShellError::Io(IoError::new(err, span, None)),
             WriteError::Shell(err) => *err,
         }
     }
@@ -148,6 +162,9 @@ pub(crate) fn write_value(
     out: &mut impl io::Write,
     value: &Value,
     depth: usize,
+    engine_state: &EngineState,
+    call_span: Span,
+    serialize_types: bool,
 ) -> Result<(), WriteError> {
     use mp::ValueWriteError::InvalidMarkerWrite;
     let span = value.span();
@@ -196,6 +213,9 @@ pub(crate) fn write_value(
                 out,
                 &Value::list(val.into_range_iter(span, Signals::empty()).collect(), span),
                 depth,
+                engine_state,
+                call_span,
+                serialize_types,
             )?;
         }
         Value::String { val, .. } => {
@@ -208,13 +228,20 @@ pub(crate) fn write_value(
             mp::write_map_len(out, convert(val.len(), span)?).err_span(span)?;
             for (k, v) in val.iter() {
                 mp::write_str(out, k).err_span(span)?;
-                write_value(out, v, depth + 1)?;
+                write_value(out, v, depth + 1, engine_state, call_span, serialize_types)?;
             }
         }
         Value::List { vals, .. } => {
             mp::write_array_len(out, convert(vals.len(), span)?).err_span(span)?;
             for val in vals {
-                write_value(out, val, depth + 1)?;
+                write_value(
+                    out,
+                    val,
+                    depth + 1,
+                    engine_state,
+                    call_span,
+                    serialize_types,
+                )?;
             }
         }
         Value::Nothing { .. } => {
@@ -222,11 +249,20 @@ pub(crate) fn write_value(
                 .map_err(InvalidMarkerWrite)
                 .err_span(span)?;
         }
-        Value::Closure { .. } => {
-            // Closures can't be converted
-            mp::write_nil(out)
-                .map_err(InvalidMarkerWrite)
-                .err_span(span)?;
+        Value::Closure { val, .. } => {
+            if serialize_types {
+                let closure_string = val
+                    .coerce_into_string(engine_state, span)
+                    .map_err(|err| WriteError::Shell(Box::new(err)))?;
+                mp::write_str(out, &closure_string).err_span(span)?;
+            } else {
+                return Err(WriteError::Shell(Box::new(ShellError::UnsupportedInput {
+                    msg: "closures are currently not deserializable (use --serialize to serialize as a string)".into(),
+                    input: "value originates from here".into(),
+                    msg_span: call_span,
+                    input_span: span,
+                })));
+            }
         }
         Value::Error { error, .. } => {
             return Err(WriteError::Shell(error.clone()));
@@ -249,7 +285,14 @@ pub(crate) fn write_value(
             mp::write_bin(out, val).err_span(span)?;
         }
         Value::Custom { val, .. } => {
-            write_value(out, &val.to_base_value(span)?, depth)?;
+            write_value(
+                out,
+                &val.to_base_value(span)?,
+                depth,
+                engine_state,
+                call_span,
+                serialize_types,
+            )?;
         }
     }
     Ok(())
@@ -280,10 +323,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ToMsgpack {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ToMsgpack)
     }
 
     #[test]
@@ -305,16 +346,14 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = "{a: 1 b: 2} | to msgpack | metadata | get content_type";
+        let cmd = "{a: 1 b: 2} | to msgpack | metadata | get content_type | $in";
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(
-                record!("content_type" => Value::test_string("application/x-msgpack"))
-            ),
+            Value::test_string("application/x-msgpack"),
             result.expect("There should be a result")
         );
     }

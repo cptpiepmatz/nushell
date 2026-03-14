@@ -1,11 +1,12 @@
 use std::fs::File;
-use std::path::Path;
+use std::path::PathBuf;
 
 use nu_plugin::EvaluatedCall;
-use nu_protocol::{ShellError, Span};
-use polars_io::avro::{AvroCompression, AvroWriter};
+use nu_protocol::ShellError;
 use polars_io::SerWriter;
+use polars_io::avro::{AvroCompression, AvroWriter};
 
+use crate::command::core::resource::Resource;
 use crate::values::NuDataFrame;
 
 fn get_compression(call: &EvaluatedCall) -> Result<Option<AvroCompression>, ShellError> {
@@ -31,12 +32,12 @@ fn get_compression(call: &EvaluatedCall) -> Result<Option<AvroCompression>, Shel
 pub(crate) fn command_eager(
     call: &EvaluatedCall,
     df: &NuDataFrame,
-    file_path: &Path,
-    file_span: Span,
+    resource: Resource,
 ) -> Result<(), ShellError> {
+    let file_span = resource.span;
     let compression = get_compression(call)?;
-
-    let file = File::create(file_path).map_err(|e| ShellError::GenericError {
+    let path: PathBuf = resource.as_path_buf();
+    let file = File::create(&path).map_err(|e| ShellError::GenericError {
         error: format!("Error with file name: {e}"),
         msg: "".into(),
         span: Some(file_span),

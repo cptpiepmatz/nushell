@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use nu_engine::command_prelude::*;
-use nu_utils::filesystem::{have_permission, PermissionResult};
+use nu_protocol::shell_error::{self, io::IoError};
+use nu_utils::filesystem::{PermissionResult, have_permission};
 
 #[derive(Clone)]
 pub struct Cd;
@@ -10,7 +13,7 @@ impl Command for Cd {
     }
 
     fn description(&self) -> &str {
-        "Change directory."
+        "Change the current working directory."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -20,12 +23,8 @@ impl Command for Cd {
     fn signature(&self) -> nu_protocol::Signature {
         Signature::build("cd")
             .input_output_types(vec![(Type::Nothing, Type::Nothing)])
-            .switch("physical", "use the physical directory structure; resolve symbolic links before processing instances of ..", Some('P'))
+            .switch("physical", "Use the physical directory structure; resolve symbolic links before processing instances of ..", Some('P'))
             .optional("path", SyntaxShape::Directory, "The path to change to.")
-            .input_output_types(vec![
-                (Type::Nothing, Type::Nothing),
-                (Type::String, Type::Nothing),
-            ])
             .allow_variants_without_examples(true)
             .category(Category::FileSystem)
     }
@@ -77,25 +76,43 @@ impl Command for Cd {
                     if physical {
                         if let Ok(path) = nu_path::canonicalize_with(path_no_whitespace, &cwd) {
                             if !path.is_dir() {
-                                return Err(ShellError::NotADirectory { span: v.span });
+                                return Err(shell_error::io::IoError::new(
+                                    shell_error::io::ErrorKind::from_std(
+                                        std::io::ErrorKind::NotADirectory,
+                                    ),
+                                    v.span,
+                                    None,
+                                )
+                                .into());
                             };
                             path
                         } else {
-                            return Err(ShellError::DirectoryNotFound {
-                                dir: path_no_whitespace.to_string(),
-                                span: v.span,
-                            });
+                            return Err(shell_error::io::IoError::new(
+                                ErrorKind::DirectoryNotFound,
+                                v.span,
+                                PathBuf::from(path_no_whitespace),
+                            )
+                            .into());
                         }
                     } else {
                         let path = nu_path::expand_path_with(path_no_whitespace, &cwd, true);
                         if !path.exists() {
-                            return Err(ShellError::DirectoryNotFound {
-                                dir: path_no_whitespace.to_string(),
-                                span: v.span,
-                            });
+                            return Err(shell_error::io::IoError::new(
+                                ErrorKind::DirectoryNotFound,
+                                v.span,
+                                PathBuf::from(path_no_whitespace),
+                            )
+                            .into());
                         };
                         if !path.is_dir() {
-                            return Err(ShellError::NotADirectory { span: v.span });
+                            return Err(shell_error::io::IoError::new(
+                                shell_error::io::ErrorKind::from_std(
+                                    std::io::ErrorKind::NotADirectory,
+                                ),
+                                v.span,
+                                path,
+                            )
+                            .into());
                         };
                         path
                     }
@@ -117,30 +134,29 @@ impl Command for Cd {
                 stack.set_cwd(path)?;
                 Ok(PipelineData::empty())
             }
-            PermissionResult::PermissionDenied(reason) => Err(ShellError::IOError {
-                msg: format!(
-                    "Cannot change directory to {}: {}",
-                    path.to_string_lossy(),
-                    reason
-                ),
-            }),
+            PermissionResult::PermissionDenied => Err(IoError::new(
+                shell_error::io::ErrorKind::from_std(std::io::ErrorKind::PermissionDenied),
+                call.head,
+                path,
+            )
+            .into()),
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Change to your home directory",
+                description: "Change to your home directory.",
                 example: r#"cd ~"#,
                 result: None,
             },
             Example {
-                description: r#"Change to the previous working directory (same as "cd $env.OLDPWD")"#,
+                description: r#"Change to the previous working directory (same as "cd $env.OLDPWD")."#,
                 example: r#"cd -"#,
                 result: None,
             },
             Example {
-                description: "Changing directory with a custom command requires 'def --env'",
+                description: "Changing directory with a custom command requires 'def --env'.",
                 example: r#"def --env gohome [] { cd ~ }"#,
                 result: None,
             },

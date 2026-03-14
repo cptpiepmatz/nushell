@@ -6,12 +6,12 @@ use crate::prompt_update::{
     VSCODE_PRE_EXECUTION_MARKER,
 };
 use crate::{
+    NuHighlighter, NuValidator, NushellPrompt,
     completions::NuCompleter,
     nu_highlight::NoOpHighlighter,
     prompt_update,
-    reedline_config::{add_menus, create_keybindings, KeybindingsMode},
+    reedline_config::{KeybindingsMode, add_menus, create_keybindings},
     util::eval_source,
-    NuHighlighter, NuValidator, NushellPrompt,
 };
 use crossterm::cursor::SetCursorStyle;
 use log::{error, trace, warn};
@@ -19,32 +19,52 @@ use miette::{ErrReport, IntoDiagnostic, Result};
 use nu_cmd_base::util::get_editor;
 use nu_color_config::StyleComputer;
 #[allow(deprecated)]
-use nu_engine::{current_dir_str, env_to_strings};
+use nu_engine::env_to_strings;
+use nu_engine::exit::cleanup_exit;
 use nu_parser::{lex, parse, trim_quotes_str};
+use nu_protocol::shell_error::io::IoError;
+use nu_protocol::{BannerKind, shell_error};
 use nu_protocol::{
+    Config, HistoryConfig, HistoryFileFormat, PipelineData, ShellError, Span, Spanned, Value,
     config::NuCursorShape,
     engine::{EngineState, Stack, StateWorkingSet},
-    report_shell_error, HistoryConfig, HistoryFileFormat, PipelineData, ShellError, Span, Spanned,
-    Value,
+    report_shell_error,
 };
 use nu_utils::{
-    filesystem::{have_permission, PermissionResult},
+    filesystem::{PermissionResult, have_permission},
     perf,
 };
+#[cfg(feature = "sqlite")]
+use reedline::SqliteBackedHistory;
 use reedline::{
     CursorConfig, CwdAwareHinter, DefaultCompleter, EditCommand, Emacs, FileBackedHistory,
-    HistorySessionId, Reedline, SqliteBackedHistory, Vi,
+    HistorySessionId, MouseClickMode, Osc133ClickEventsMarkers, Osc633Markers, Reedline,
+    SemanticPromptMarkers, Vi,
 };
+use std::sync::atomic::Ordering;
 use std::{
     collections::HashMap,
     env::temp_dir,
     io::{self, IsTerminal, Write},
-    panic::{catch_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 use sysinfo::System;
+
+fn semantic_markers_from_config(
+    config: &Config,
+    term_program_is_vscode: bool,
+) -> Option<Box<dyn SemanticPromptMarkers>> {
+    if config.shell_integration.osc633 && term_program_is_vscode {
+        Some(Osc633Markers::boxed())
+    } else if config.shell_integration.osc133 {
+        Some(Osc133ClickEventsMarkers::boxed())
+    } else {
+        None
+    }
+}
 
 /// The main REPL loop, including spinning up the prompt itself.
 pub fn evaluate_repl(
@@ -63,23 +83,15 @@ pub fn evaluate_repl(
     let config = engine_state.get_config();
     let use_color = config.use_ansi_coloring.get(engine_state);
 
-    confirm_stdin_is_terminal()?;
-
     let mut entry_num = 0;
 
     // Let's grab the shell_integration configs
     let shell_integration_osc2 = config.shell_integration.osc2;
     let shell_integration_osc7 = config.shell_integration.osc7;
     let shell_integration_osc9_9 = config.shell_integration.osc9_9;
-    let shell_integration_osc133 = config.shell_integration.osc133;
     let shell_integration_osc633 = config.shell_integration.osc633;
 
-    let nu_prompt = NushellPrompt::new(
-        shell_integration_osc133,
-        shell_integration_osc633,
-        engine_state.clone(),
-        stack.clone(),
-    );
+    let nu_prompt = NushellPrompt::new();
 
     // seed env vars
     unique_stack.add_env_var(
@@ -97,12 +109,14 @@ pub fn evaluate_repl(
             engine_state,
             &mut unique_stack,
             s.item.as_bytes(),
-            &format!("entry #{entry_num}"),
+            &format!("repl_entry #{entry_num}"),
             PipelineData::empty(),
             false,
         );
         engine_state.merge_env(&mut unique_stack)?;
     }
+
+    confirm_stdin_is_terminal()?;
 
     let hostname = System::host_name();
     if shell_integration_osc2 {
@@ -141,8 +155,8 @@ pub fn evaluate_repl(
 
     if load_std_lib.is_none() {
         match engine_state.get_config().show_banner {
-            Value::Bool { val: false, .. } => {}
-            Value::String { ref val, .. } if val == "short" => {
+            BannerKind::None => {}
+            BannerKind::Short => {
                 eval_source(
                     engine_state,
                     &mut unique_stack,
@@ -152,7 +166,7 @@ pub fn evaluate_repl(
                     false,
                 );
             }
-            _ => {
+            BannerKind::Full => {
                 eval_source(
                     engine_state,
                     &mut unique_stack,
@@ -202,12 +216,23 @@ pub fn evaluate_repl(
             )
         }));
         match iteration_panic_state {
-            Ok((continue_loop, es, s, le)) => {
+            Ok((continue_loop, mut es, s, le)) => {
+                // We apply the changes from the updated stack back onto our previous stack
+                let mut merged_stack = Stack::with_changes_from_child(previous_stack_arc, s);
+
+                // Check if new variables were created (indicating potential variable shadowing)
+                let prev_total_vars = previous_engine_state.num_vars();
+                let curr_total_vars = es.num_vars();
+                let new_variables_created = curr_total_vars > prev_total_vars;
+
+                if new_variables_created {
+                    // New variables created, clean up stack to prevent memory leaks
+                    es.cleanup_stack_variables(&mut merged_stack);
+                }
+
+                previous_stack_arc = Arc::new(merged_stack);
                 // setup state for the next iteration of the repl loop
                 previous_engine_state = es;
-                // we apply the changes from the updated stack back onto our previous stack
-                previous_stack_arc =
-                    Arc::new(Stack::with_changes_from_child(previous_stack_arc, s));
                 line_editor = le;
                 if !continue_loop {
                     break;
@@ -235,7 +260,7 @@ fn escape_special_vscode_bytes(input: &str) -> Result<String, ShellError> {
 
                 match byte {
                     // Escape bytes below 0x20
-                    b if b < 0x20 => format!("\\x{:02X}", byte).into_bytes(),
+                    b if b < 0x20 => format!("\\x{byte:02X}").into_bytes(),
                     // Escape semicolon as \x3B
                     b';' => "\\x3B".to_string().into_bytes(),
                     // Escape backslash as \\
@@ -312,7 +337,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
     // Before doing anything, merge the environment from the previous REPL iteration into the
     // permanent state.
     if let Err(err) = engine_state.merge_env(&mut stack) {
-        report_shell_error(engine_state, &err);
+        report_shell_error(None, engine_state, &err);
     }
     perf!("merge env", start_time, use_color);
 
@@ -321,7 +346,19 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
     perf!("reset signals", start_time, use_color);
 
     start_time = std::time::Instant::now();
-    // Right before we start our prompt and take input from the user, fire the "pre_prompt" hook
+    // Check all the environment variables they ask for
+    // fire the "env_change" hook
+    if let Err(error) = hook::eval_env_change_hook(
+        &engine_state.get_config().hooks.env_change.clone(),
+        engine_state,
+        &mut stack,
+    ) {
+        report_shell_error(None, engine_state, &error)
+    }
+    perf!("env-change hook", start_time, use_color);
+
+    start_time = std::time::Instant::now();
+    // Next, right before we start our prompt and take input from the user, fire the "pre_prompt" hook
     if let Err(err) = hook::eval_hooks(
         engine_state,
         &mut stack,
@@ -329,21 +366,9 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
         &engine_state.get_config().hooks.pre_prompt.clone(),
         "pre_prompt",
     ) {
-        report_shell_error(engine_state, &err);
+        report_shell_error(None, engine_state, &err);
     }
     perf!("pre-prompt hook", start_time, use_color);
-
-    start_time = std::time::Instant::now();
-    // Next, check all the environment variables they ask for
-    // fire the "env_change" hook
-    if let Err(error) = hook::eval_env_change_hook(
-        &engine_state.get_config().hooks.env_change.clone(),
-        engine_state,
-        &mut stack,
-    ) {
-        report_shell_error(engine_state, &error)
-    }
-    perf!("env-change hook", start_time, use_color);
 
     let engine_reference = Arc::new(engine_state.clone());
     let config = stack.get_config(engine_state);
@@ -362,7 +387,10 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
     // until we drop those, we cannot use the stack in the REPL loop itself
     // See STACK-REFERENCE to see where we have taken a reference
     let stack_arc = Arc::new(stack);
-
+    let term_program_is_vscode = engine_state
+        .get_env_var("TERM_PROGRAM")
+        .and_then(|v| v.as_str().ok())
+        == Some("vscode");
     let mut line_editor = line_editor
         .use_kitty_keyboard_enhancement(config.use_kitty_protocol)
         // try to enable bracketed paste
@@ -396,6 +424,15 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
         .with_visual_selection_style(nu_ansi_term::Style {
             is_reverse: true,
             ..Default::default()
+        })
+        .with_semantic_markers(semantic_markers_from_config(
+            &config,
+            term_program_is_vscode,
+        ))
+        .with_mouse_click(if config.shell_integration.osc133 {
+            MouseClickMode::Enabled
+        } else {
+            MouseClickMode::Disabled
         });
 
     perf!("reedline builder", start_time, use_color);
@@ -403,7 +440,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
     let style_computer = StyleComputer::from_config(engine_state, &stack_arc);
 
     start_time = std::time::Instant::now();
-    line_editor = if config.use_ansi_coloring.get(engine_state) {
+    line_editor = if config.use_ansi_coloring.get(engine_state) && config.show_hints {
         line_editor.with_hinter(Box::new({
             // As of Nov 2022, "hints" color_config closures only get `null` passed in.
             let style = style_computer.compute("hints", &Value::nothing(Span::unknown()));
@@ -419,7 +456,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
     trace!("adding menus");
     line_editor =
         add_menus(line_editor, engine_reference, &stack_arc, config).unwrap_or_else(|e| {
-            report_shell_error(engine_state, &e);
+            report_shell_error(None, engine_state, &e);
             Reedline::create()
         });
 
@@ -444,10 +481,10 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
 
     if let Some(history) = engine_state.history_config() {
         start_time = std::time::Instant::now();
-        if history.sync_on_enter {
-            if let Err(e) = line_editor.sync_history() {
-                warn!("Failed to sync history: {}", e);
-            }
+        if history.sync_on_enter
+            && let Err(e) = line_editor.sync_history()
+        {
+            warn!("Failed to sync history: {e}");
         }
 
         perf!("sync_history", start_time, use_color);
@@ -487,7 +524,9 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
         // CLEAR STACK-REFERENCE 1
         .with_highlighter(Box::<NoOpHighlighter>::default())
         // CLEAR STACK-REFERENCE 2
-        .with_completer(Box::<DefaultCompleter>::default());
+        .with_completer(Box::<DefaultCompleter>::default())
+        // Ensure immediately accept is always cleared
+        .with_immediately_accept(false);
 
     // Let's grab the shell_integration configs
     let shell_integration_osc2 = config.shell_integration.osc2;
@@ -506,10 +545,11 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
     let line_editor_input_time = std::time::Instant::now();
     match input {
         Ok(Signal::Success(repl_cmd_line_text)) => {
-            let history_supports_meta = matches!(
-                engine_state.history_config().map(|h| h.file_format),
-                Some(HistoryFileFormat::Sqlite)
-            );
+            let history_supports_meta = match engine_state.history_config().map(|h| h.file_format) {
+                #[cfg(feature = "sqlite")]
+                Some(HistoryFileFormat::Sqlite) => true,
+                _ => false,
+            };
 
             if history_supports_meta {
                 prepare_history_metadata(
@@ -538,7 +578,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
                     &engine_state.get_config().hooks.pre_execution.clone(),
                     "pre_execution",
                 ) {
-                    report_shell_error(engine_state, &err);
+                    report_shell_error(None, engine_state, &err);
                 }
             }
 
@@ -634,16 +674,16 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
                 Value::string(format!("{}", cmd_duration.as_millis()), Span::unknown()),
             );
 
-            if history_supports_meta {
-                if let Err(e) = fill_in_result_related_history_metadata(
+            if history_supports_meta
+                && let Err(e) = fill_in_result_related_history_metadata(
                     &repl_cmd_line_text,
                     engine_state,
                     cmd_duration,
                     &mut stack,
                     &mut line_editor,
-                ) {
-                    warn!("Could not fill in result related history metadata: {e}");
-                }
+                )
+            {
+                warn!("Could not fill in result related history metadata: {e}");
             }
 
             if shell_integration_osc2 {
@@ -667,7 +707,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
                 run_shell_integration_reset_application_mode();
             }
 
-            flush_engine_state_repl_buffer(engine_state, &mut line_editor);
+            line_editor = flush_engine_state_repl_buffer(engine_state, line_editor);
         }
         Ok(Signal::CtrlC) => {
             // `Reedline` clears the line content. New prompt is shown
@@ -691,8 +731,14 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
             );
 
             println!();
-            return (false, stack, line_editor);
+
+            cleanup_exit((), engine_state, 0);
+
+            // if cleanup_exit didn't exit, we should keep running
+            return (true, stack, line_editor);
         }
+        // TODO: handle other signals like Signal::ExternalBreak
+        Ok(_) => {}
         Err(err) => {
             let message = err.to_string();
             if !message.contains("duration") {
@@ -809,8 +855,10 @@ fn parse_operation(
 ) -> Result<ReplOperation, ErrReport> {
     let tokens = lex(s.as_bytes(), 0, &[], &[], false);
     // Check if this is a single call to a directory, if so auto-cd
-    #[allow(deprecated)]
-    let cwd = nu_engine::env::current_dir_str(engine_state, stack).unwrap_or_default();
+    let cwd = engine_state
+        .cwd(Some(stack))
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
     let mut orig = s.clone();
     if orig.starts_with('`') {
         orig = trim_quotes_str(&orig).to_string()
@@ -843,22 +891,29 @@ fn do_auto_cd(
     let path = {
         if !path.exists() {
             report_shell_error(
+                Some(stack),
                 engine_state,
-                &ShellError::DirectoryNotFound {
-                    dir: path.to_string_lossy().to_string(),
+                &ShellError::Io(IoError::new_with_additional_context(
+                    shell_error::io::ErrorKind::DirectoryNotFound,
                     span,
-                },
+                    PathBuf::from(&path),
+                    "Cannot change directory",
+                )),
             );
         }
         path.to_string_lossy().to_string()
     };
 
-    if let PermissionResult::PermissionDenied(reason) = have_permission(path.clone()) {
+    if let PermissionResult::PermissionDenied = have_permission(path.clone()) {
         report_shell_error(
+            Some(stack),
             engine_state,
-            &ShellError::IOError {
-                msg: format!("Cannot change directory to {path}: {reason}"),
-            },
+            &ShellError::Io(IoError::new_with_additional_context(
+                shell_error::io::ErrorKind::from_std(std::io::ErrorKind::PermissionDenied),
+                span,
+                PathBuf::from(path),
+                "Cannot change directory",
+            )),
         );
         return;
     }
@@ -868,7 +923,7 @@ fn do_auto_cd(
     //FIXME: this only changes the current scope, but instead this environment variable
     //should probably be a block that loads the information from the state in the overlay
     if let Err(err) = stack.set_cwd(&path) {
-        report_shell_error(engine_state, &err);
+        report_shell_error(Some(stack), engine_state, &err);
         return;
     };
     let cwd = Value::string(cwd, span);
@@ -919,9 +974,12 @@ fn do_run_cmd(
     entry_num: usize,
     use_color: bool,
 ) -> Reedline {
-    trace!("eval source: {}", s);
+    trace!("eval source: {s}");
 
     let mut cmds = s.split_whitespace();
+
+    let had_warning_before = engine_state.exit_warning_given.load(Ordering::SeqCst);
+
     if let Some("exit") = cmds.next() {
         let mut working_set = StateWorkingSet::new(engine_state);
         let _ = parse(&mut working_set, None, s.as_bytes(), false);
@@ -930,13 +988,11 @@ fn do_run_cmd(
             match cmds.next() {
                 Some(s) => {
                     if let Ok(n) = s.parse::<i32>() {
-                        drop(line_editor);
-                        std::process::exit(n);
+                        return cleanup_exit(line_editor, engine_state, n);
                     }
                 }
                 None => {
-                    drop(line_editor);
-                    std::process::exit(0);
+                    return cleanup_exit(line_editor, engine_state, 0);
                 }
             }
         }
@@ -950,10 +1006,18 @@ fn do_run_cmd(
         engine_state,
         stack,
         s.as_bytes(),
-        &format!("entry #{entry_num}"),
+        &format!("repl_entry #{entry_num}"),
         PipelineData::empty(),
         false,
     );
+
+    // if there was a warning before, and we got to this point, it means
+    // the possible call to cleanup_exit did not occur.
+    if had_warning_before && engine_state.is_interactive {
+        engine_state
+            .exit_warning_given
+            .store(false, Ordering::SeqCst);
+    }
 
     line_editor
 }
@@ -969,8 +1033,7 @@ fn run_shell_integration_osc2(
     stack: &mut Stack,
     use_color: bool,
 ) {
-    #[allow(deprecated)]
-    if let Ok(path) = current_dir_str(engine_state, stack) {
+    if let Ok(path) = engine_state.cwd_as_string(Some(stack)) {
         let start_time = Instant::now();
 
         // Try to abbreviate string for windows title
@@ -1014,9 +1077,14 @@ fn run_shell_integration_osc7(
     stack: &mut Stack,
     use_color: bool,
 ) {
-    #[allow(deprecated)]
-    if let Ok(path) = current_dir_str(engine_state, stack) {
+    if let Ok(path) = engine_state.cwd_as_string(Some(stack)) {
         let start_time = Instant::now();
+
+        let path = if cfg!(windows) {
+            path.replace('\\', "/")
+        } else {
+            path
+        };
 
         // Otherwise, communicate the path as OSC 7 (often used for spawning new tabs in the same dir)
         run_ansi_sequence(&format!(
@@ -1038,16 +1106,12 @@ fn run_shell_integration_osc7(
 }
 
 fn run_shell_integration_osc9_9(engine_state: &EngineState, stack: &mut Stack, use_color: bool) {
-    #[allow(deprecated)]
-    if let Ok(path) = current_dir_str(engine_state, stack) {
+    if let Ok(path) = engine_state.cwd_as_string(Some(stack)) {
         let start_time = Instant::now();
 
         // Otherwise, communicate the path as OSC 9;9 from ConEmu (often used for spawning new tabs in the same dir)
         // This is helpful in Windows Terminal with Duplicate Tab
-        run_ansi_sequence(&format!(
-            "\x1b]9;9;{}\x1b\\",
-            percent_encoding::utf8_percent_encode(&path, percent_encoding::CONTROLS)
-        ));
+        run_ansi_sequence(&format!("\x1b]9;9;{}\x1b\\", path));
 
         perf!(
             "communicate path to terminal with osc9;9",
@@ -1063,8 +1127,7 @@ fn run_shell_integration_osc633(
     use_color: bool,
     repl_cmd_line_text: String,
 ) {
-    #[allow(deprecated)]
-    if let Ok(path) = current_dir_str(engine_state, stack) {
+    if let Ok(path) = engine_state.cwd_as_string(Some(stack)) {
         // Supported escape sequences of Microsoft's Visual Studio Code (vscode)
         // https://code.visualstudio.com/docs/terminal/shell-integration#_supported-escape-sequences
         if stack
@@ -1077,8 +1140,7 @@ fn run_shell_integration_osc633(
             // If we're in vscode, run their specific ansi escape sequence.
             // This is helpful for ctrl+g to change directories in the terminal.
             run_ansi_sequence(&format!(
-                "{}{}{}",
-                VSCODE_CWD_PROPERTY_MARKER_PREFIX, path, VSCODE_CWD_PROPERTY_MARKER_SUFFIX
+                "{VSCODE_CWD_PROPERTY_MARKER_PREFIX}{path}{VSCODE_CWD_PROPERTY_MARKER_SUFFIX}"
             ));
 
             perf!(
@@ -1094,10 +1156,7 @@ fn run_shell_integration_osc633(
 
             //OSC 633 ; E ; <commandline> [; <nonce] ST - Explicitly set the command line with an optional nonce.
             run_ansi_sequence(&format!(
-                "{}{}{}",
-                VSCODE_COMMANDLINE_MARKER_PREFIX,
-                replaced_cmd_text,
-                VSCODE_COMMANDLINE_MARKER_SUFFIX
+                "{VSCODE_COMMANDLINE_MARKER_PREFIX}{replaced_cmd_text}{VSCODE_COMMANDLINE_MARKER_SUFFIX}"
             ));
         }
     }
@@ -1110,7 +1169,10 @@ fn run_shell_integration_reset_application_mode() {
 ///
 /// Clear the screen and output anything remaining in the EngineState buffer.
 ///
-fn flush_engine_state_repl_buffer(engine_state: &mut EngineState, line_editor: &mut Reedline) {
+fn flush_engine_state_repl_buffer(
+    engine_state: &mut EngineState,
+    mut line_editor: Reedline,
+) -> Reedline {
     let mut repl = engine_state.repl_state.lock().expect("repl state mutex");
     line_editor.run_edit_commands(&[
         EditCommand::Clear,
@@ -1120,8 +1182,13 @@ fn flush_engine_state_repl_buffer(engine_state: &mut EngineState, line_editor: &
             select: false,
         },
     ]);
+    if repl.accept {
+        line_editor = line_editor.with_immediately_accept(true)
+    }
+    repl.accept = false;
     repl.buffer = "".to_string();
     repl.cursor_pos = 0;
+    line_editor
 }
 
 ///
@@ -1155,7 +1222,7 @@ fn setup_history(
 /// Setup Reedline keybindingds based on the provided config
 ///
 fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedline {
-    return match create_keybindings(engine_state.get_config()) {
+    match create_keybindings(engine_state.get_config()) {
         Ok(keybindings) => match keybindings {
             KeybindingsMode::Emacs(keybindings) => {
                 let edit_mode = Box::new(Emacs::new(keybindings));
@@ -1170,10 +1237,10 @@ fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedl
             }
         },
         Err(e) => {
-            report_shell_error(engine_state, &e);
+            report_shell_error(None, engine_state, &e);
             line_editor
         }
-    };
+    }
 }
 
 ///
@@ -1206,6 +1273,15 @@ fn update_line_editor_history(
             FileBackedHistory::with_file(history.max_size as usize, history_path)
                 .into_diagnostic()?,
         ),
+        // this path should not happen as the config setting is captured by `nu-protocol` already
+        #[cfg(not(feature = "sqlite"))]
+        HistoryFileFormat::Sqlite => {
+            return Err(miette::miette!(
+                help = "compile Nushell with the `sqlite` feature to use this",
+                "Unsupported history file format",
+            ));
+        }
+        #[cfg(feature = "sqlite")]
         HistoryFileFormat::Sqlite => Box::new(
             SqliteBackedHistory::with_file(
                 history_path.to_path_buf(),
@@ -1388,6 +1464,50 @@ fn looks_like_path(orig: &str) -> bool {
         || orig.ends_with(std::path::MAIN_SEPARATOR)
 }
 
+#[cfg(test)]
+mod semantic_marker_tests {
+    use super::semantic_markers_from_config;
+    use nu_protocol::Config;
+    use reedline::PromptKind;
+
+    #[test]
+    fn semantic_markers_use_osc633_in_vscode() {
+        let mut config = Config::default();
+        config.shell_integration.osc633 = true;
+        config.shell_integration.osc133 = true;
+
+        let markers =
+            semantic_markers_from_config(&config, true).expect("expected semantic markers");
+
+        assert_eq!(
+            markers.prompt_start(PromptKind::Primary).as_ref(),
+            "\x1b]633;A;k=i\x1b\\"
+        );
+    }
+
+    #[test]
+    fn semantic_markers_use_osc133_click_events() {
+        let mut config = Config::default();
+        config.shell_integration.osc133 = true;
+
+        let markers =
+            semantic_markers_from_config(&config, false).expect("expected semantic markers");
+
+        assert_eq!(
+            markers.prompt_start(PromptKind::Primary).as_ref(),
+            "\x1b]133;A;k=i;click_events=1\x1b\\"
+        );
+    }
+
+    #[test]
+    fn semantic_markers_none_when_disabled() {
+        let mut config = Config::default();
+        config.shell_integration.osc133 = false;
+        config.shell_integration.osc633 = false;
+        assert!(semantic_markers_from_config(&config, false).is_none());
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn looks_like_path_windows_drive_path_works() {
@@ -1432,7 +1552,7 @@ fn are_session_ids_in_sync() {
 
 #[cfg(test)]
 mod test_auto_cd {
-    use super::{do_auto_cd, escape_special_vscode_bytes, parse_operation, ReplOperation};
+    use super::{ReplOperation, do_auto_cd, escape_special_vscode_bytes, parse_operation};
     use nu_path::AbsolutePath;
     use nu_protocol::engine::{EngineState, Stack};
     use tempfile::tempdir;
@@ -1473,7 +1593,7 @@ mod test_auto_cd {
         // Parse the input. It must be an auto-cd operation.
         let op = parse_operation(input.to_string(), &engine_state, &stack).unwrap();
         let ReplOperation::AutoCd { cwd, target, span } = op else {
-            panic!("'{}' was not parsed into an auto-cd operation", input)
+            panic!("'{input}' was not parsed into an auto-cd operation")
         };
 
         // Perform the auto-cd operation.
@@ -1570,6 +1690,13 @@ mod test_auto_cd {
         symlink(&dir, &link).unwrap();
         let input = if cfg!(windows) { r".\link" } else { "./link" };
         check(tempdir, input, link);
+
+        let dir = tempdir.join("foo").join("bar");
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = tempdir.join("link2");
+        symlink(&dir, &link).unwrap();
+        let input = "..";
+        check(link, input, tempdir);
     }
 
     #[test]

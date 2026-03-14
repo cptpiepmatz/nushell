@@ -1,4 +1,4 @@
-use crate::repl::tests::{fail_test, run_test, TestResult};
+use crate::repl::tests::{TestResult, fail_test, run_test};
 
 #[test]
 fn illegal_column_duplication() -> TestResult {
@@ -58,7 +58,7 @@ fn flatten_table_column_get_last() -> TestResult {
 fn flatten_should_just_flatten_one_level() -> TestResult {
     run_test(
         "[[origin, crate, versions]; [World, ([[name]; ['nu-cli']]), ['0.21', '0.22']]] | flatten crate | get crate.name.0",
-        "nu-cli"
+        "nu-cli",
     )
 }
 
@@ -66,7 +66,7 @@ fn flatten_should_just_flatten_one_level() -> TestResult {
 fn flatten_nest_table_when_all_provided() -> TestResult {
     run_test(
         "[[origin, crate, versions]; [World, ([[name]; ['nu-cli']]), ['0.21', '0.22']]] | flatten crate --all | get name.0",
-        "nu-cli"
+        "nu-cli",
     )
 }
 
@@ -227,7 +227,7 @@ fn split_row() -> TestResult {
 #[test]
 fn split_column() -> TestResult {
     run_test(
-        r#""hello world" | split column " " | get "column1".0"#,
+        r#""hello world" | split column " " | get "column0".0"#,
         "hello",
     )
 }
@@ -305,9 +305,38 @@ fn nullify_holes() -> TestResult {
 }
 
 #[test]
-fn get_insensitive() -> TestResult {
+fn get_with_insensitive_cellpath() -> TestResult {
     run_test(
-        r#"[[name, age]; [a, 1] [b, 2]] | get NAmE | select 0 | get 0"#,
+        r#"[[name, age]; [a, 1] [b, 2]] | get NAmE! | select 0 | get 0"#,
         "a",
+    )
+}
+
+#[test]
+fn ignore_case_flag() -> TestResult {
+    run_test(
+        r#"
+            [
+                [Origin, Crate, Versions];
+                [World, {Name: "nu-cli"}, ['0.21', '0.22']]
+            ]
+            | get --ignore-case crate.name.0
+        "#,
+        "nu-cli",
+    )?;
+    run_test(
+        r#"
+            [
+                [Origin, Crate, Versions];
+                [World, {Name: "nu-cli"}, ['0.21', '0.22']]
+            ]
+            | select --ignore-case origin
+            | to nuon --raw
+        "#,
+        r#"[[origin];[World]]"#,
+    )?;
+    run_test(
+        r#"{A: {B: 3, C: 5}} | reject --ignore-case a.b | to nuon --raw"#,
+        "{A:{C:5}}",
     )
 }

@@ -1,4 +1,4 @@
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
 use print_positions::print_positions;
@@ -33,7 +33,7 @@ impl Command for Fill {
     }
 
     fn description(&self) -> &str {
-        "Fill and Align."
+        "Fill and align text in columns."
     }
 
     fn signature(&self) -> nu_protocol::Signature {
@@ -43,30 +43,53 @@ impl Command for Fill {
                 (Type::Float, Type::String),
                 (Type::String, Type::String),
                 (Type::Filesize, Type::String),
-                (Type::List(Box::new(Type::Int)), Type::List(Box::new(Type::String))),
-                (Type::List(Box::new(Type::Float)), Type::List(Box::new(Type::String))),
-                (Type::List(Box::new(Type::String)), Type::List(Box::new(Type::String))),
-                (Type::List(Box::new(Type::Filesize)), Type::List(Box::new(Type::String))),
+                (
+                    Type::List(Box::new(Type::Int)),
+                    Type::List(Box::new(Type::String)),
+                ),
+                (
+                    Type::List(Box::new(Type::Float)),
+                    Type::List(Box::new(Type::String)),
+                ),
+                (
+                    Type::List(Box::new(Type::String)),
+                    Type::List(Box::new(Type::String)),
+                ),
+                (
+                    Type::List(Box::new(Type::Filesize)),
+                    Type::List(Box::new(Type::String)),
+                ),
                 // General case for heterogeneous lists
-                (Type::List(Box::new(Type::Any)), Type::List(Box::new(Type::String))),
-                ])
+                (
+                    Type::List(Box::new(Type::Any)),
+                    Type::List(Box::new(Type::String)),
+                ),
+            ])
             .allow_variants_without_examples(true)
             .named(
                 "width",
                 SyntaxShape::Int,
-                "The width of the output. Defaults to 1",
+                "The width of the output. Defaults to 1.",
                 Some('w'),
             )
-            .named(
-                "alignment",
-                SyntaxShape::String,
-                "The alignment of the output. Defaults to Left (Left(l), Right(r), Center(c/m), MiddleRight(cr/mr))",
-                Some('a'),
+            .param(
+                Flag::new("alignment")
+                    .short('a')
+                    .arg(SyntaxShape::String)
+                    .desc(
+                        "The alignment of the output. Defaults to Left (Left(l), Right(r), Center(c/m), MiddleRight(cr/mr)).",
+                    )
+                    .completion(Completion::new_list(&[
+                        "left",
+                        "right",
+                        "middle",
+                        "middleright",
+                    ])),
             )
             .named(
                 "character",
                 SyntaxShape::String,
-                "The character to fill with. Defaults to ' ' (space)",
+                "The character to fill with. Defaults to ' ' (space).",
                 Some('c'),
             )
             .category(Category::Conversions)
@@ -76,39 +99,35 @@ impl Command for Fill {
         vec!["display", "render", "format", "pad", "align", "repeat"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description:
-                    "Fill a string on the left side to a width of 15 with the character '─'",
+                description: "Fill a string on the left side to a width of 15 with the character '─'.",
                 example: "'nushell' | fill --alignment l --character '─' --width 15",
                 result: Some(Value::string("nushell────────", Span::test_data())),
             },
             Example {
-                description:
-                    "Fill a string on the right side to a width of 15 with the character '─'",
+                description: "Fill a string on the right side to a width of 15 with the character '─'.",
                 example: "'nushell' | fill --alignment r --character '─' --width 15",
                 result: Some(Value::string("────────nushell", Span::test_data())),
             },
             Example {
-                description: "Fill an empty string with 10 '─' characters",
+                description: "Fill an empty string with 10 '─' characters.",
                 example: "'' | fill --character '─' --width 10",
                 result: Some(Value::string("──────────", Span::test_data())),
             },
             Example {
-                description:
-                    "Fill a number on the left side to a width of 5 with the character '0'",
+                description: "Fill a number on the left side to a width of 5 with the character '0'.",
                 example: "1 | fill --alignment right --character '0' --width 5",
                 result: Some(Value::string("00001", Span::test_data())),
             },
             Example {
-                description: "Fill a number on both sides to a width of 5 with the character '0'",
+                description: "Fill a number on both sides to a width of 5 with the character '0'.",
                 example: "1.1 | fill --alignment center --character '0' --width 5",
                 result: Some(Value::string("01.10", Span::test_data())),
             },
             Example {
-                description:
-                    "Fill a filesize on both sides to a width of 10 with the character '0'",
+                description: "Fill a filesize on both sides to a width of 10 with the character '0'.",
                 example: "1kib | fill --alignment middle --character '0' --width 10",
                 result: Some(Value::string("0001024000", Span::test_data())),
             },
@@ -241,9 +260,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Fill {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Fill)
     }
 }

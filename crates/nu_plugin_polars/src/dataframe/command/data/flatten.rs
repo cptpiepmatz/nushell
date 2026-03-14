@@ -1,12 +1,12 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, Signature, Span, SyntaxShape, Type, Value,
+    Category, Example, LabeledError, PipelineData, Signature, Span, SyntaxShape, Value,
 };
 
 use crate::{
-    dataframe::values::{Column, NuDataFrame},
-    values::CustomValueSupport,
     PolarsPlugin,
+    dataframe::values::{Column, NuDataFrame},
+    values::{CustomValueSupport, PolarsPluginType},
 };
 
 use super::explode::explode;
@@ -30,71 +30,79 @@ impl PluginCommand for LazyFlatten {
             .rest(
                 "columns",
                 SyntaxShape::String,
-                "columns to flatten, only applicable for dataframes",
+                "Columns to flatten, only applicable for dataframes.",
             )
             .input_output_types(vec![
                 (
-                    Type::Custom("expression".into()),
-                    Type::Custom("expression".into()),
+                    PolarsPluginType::NuExpression.into(),
+                    PolarsPluginType::NuExpression.into(),
                 ),
                 (
-                    Type::Custom("dataframe".into()),
-                    Type::Custom("dataframe".into()),
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
                 ),
             ])
             .category(Category::Custom("lazyframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
-Example {
+            Example {
                 description: "Flatten the specified dataframe",
                 example: "[[id name hobbies]; [1 Mercy [Cycling Knitting]] [2 Bob [Skiing Football]]] | polars into-df | polars flatten hobbies | polars collect",
                 result: Some(
-                    NuDataFrame::try_from_columns(vec![
-                        Column::new(
-                            "id".to_string(), 
-                            vec![
-                                Value::test_int(1),
-                                Value::test_int(1),
-                                Value::test_int(2),
-                                Value::test_int(2),
-                            ]),
-                        Column::new(
-                            "name".to_string(), 
-                            vec![
-                                Value::test_string("Mercy"),
-                                Value::test_string("Mercy"),
-                                Value::test_string("Bob"),
-                                Value::test_string("Bob"),
-                            ]),
-                        Column::new(
-                            "hobbies".to_string(), 
-                            vec![
-                                Value::test_string("Cycling"),
-                                Value::test_string("Knitting"),
-                                Value::test_string("Skiing"),
-                                Value::test_string("Football"),
-                            ]),
-                    ], None)
+                    NuDataFrame::try_from_columns(
+                        vec![
+                            Column::new(
+                                "id".to_string(),
+                                vec![
+                                    Value::test_int(1),
+                                    Value::test_int(1),
+                                    Value::test_int(2),
+                                    Value::test_int(2),
+                                ],
+                            ),
+                            Column::new(
+                                "name".to_string(),
+                                vec![
+                                    Value::test_string("Mercy"),
+                                    Value::test_string("Mercy"),
+                                    Value::test_string("Bob"),
+                                    Value::test_string("Bob"),
+                                ],
+                            ),
+                            Column::new(
+                                "hobbies".to_string(),
+                                vec![
+                                    Value::test_string("Cycling"),
+                                    Value::test_string("Knitting"),
+                                    Value::test_string("Skiing"),
+                                    Value::test_string("Football"),
+                                ],
+                            ),
+                        ],
+                        None,
+                    )
                     .expect("simple df for test should not fail")
                     .into_value(Span::test_data()),
-                )
+                ),
             },
-        Example {
+            Example {
                 description: "Select a column and flatten the values",
                 example: "[[id name hobbies]; [1 Mercy [Cycling Knitting]] [2 Bob [Skiing Football]]] | polars into-df | polars select (polars col hobbies | polars flatten)",
                 result: Some(
-                    NuDataFrame::try_from_columns(vec![
-                        Column::new(
-                            "hobbies".to_string(), 
+                    NuDataFrame::try_from_columns(
+                        vec![Column::new(
+                            "hobbies".to_string(),
                             vec![
                                 Value::test_string("Cycling"),
                                 Value::test_string("Knitting"),
                                 Value::test_string("Skiing"),
                                 Value::test_string("Football"),
-                            ]),
-                    ], None)
+                            ],
+                        )],
+                        None,
+                    )
                     .expect("simple df for test should not fail")
                     .into_value(Span::test_data()),
                 ),
@@ -109,7 +117,10 @@ Example {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        explode(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        explode(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

@@ -2,9 +2,9 @@ use chrono_tz::TZ_VARIANTS;
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct DateListTimezones;
 
-impl Command for SubCommand {
+impl Command for DateListTimezones {
     fn name(&self) -> &str {
         "date list-timezone"
     }
@@ -43,10 +43,10 @@ impl Command for SubCommand {
             .into_pipeline_data(head, engine_state.signals().clone()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             example: "date list-timezone | where timezone =~ Shanghai",
-            description: "Show time zone(s) that contains 'Shanghai'",
+            description: "Show time zone(s) that contains 'Shanghai'.",
             result: Some(Value::test_list(vec![Value::test_record(record! {
                 "timezone" => Value::test_string("Asia/Shanghai"),
             })])),

@@ -3,6 +3,8 @@ use std::io::{Stdin, Stdout};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use nu_protocol::ShellError;
+#[cfg(feature = "local-socket")] // unused without that feature
+use nu_protocol::shell_error::io::IoError;
 
 #[cfg(feature = "local-socket")]
 mod local_socket;
@@ -84,8 +86,14 @@ impl CommunicationMode {
 
                 let listener = interpret_local_socket_name(name)
                     .and_then(|name| ListenerOptions::new().name(name).create_sync())
-                    .map_err(|err| ShellError::IOError {
-                        msg: format!("failed to open socket for plugin: {err}"),
+                    .map_err(|err| {
+                        IoError::new_internal(
+                            err,
+                            format!(
+                                "Could not interpret local socket name {:?}",
+                                name.to_string_lossy()
+                            ),
+                        )
                     })?;
                 Ok(PreparedServerCommunication::LocalSocket { listener })
             }
@@ -107,8 +115,14 @@ impl CommunicationMode {
 
                     interpret_local_socket_name(name)
                         .and_then(|name| ls::Stream::connect(name))
-                        .map_err(|err| ShellError::IOError {
-                            msg: format!("failed to connect to socket: {err}"),
+                        .map_err(|err| {
+                            ShellError::Io(IoError::new_internal(
+                                err,
+                                format!(
+                                    "Could not interpret local socket name {:?}",
+                                    name.to_string_lossy()
+                                ),
+                            ))
                         })
                 };
                 // Reverse order from the server: read in, write out
@@ -157,9 +171,8 @@ impl PreparedServerCommunication {
             }
             #[cfg(feature = "local-socket")]
             PreparedServerCommunication::LocalSocket { listener, .. } => {
-                use interprocess::local_socket::traits::{
-                    Listener, ListenerNonblockingMode, Stream,
-                };
+                use interprocess::local_socket::ListenerNonblockingMode;
+                use interprocess::local_socket::traits::{Listener, Stream};
                 use std::time::{Duration, Instant};
 
                 const RETRY_PERIOD: Duration = Duration::from_millis(1);
@@ -171,7 +184,14 @@ impl PreparedServerCommunication {
                 // output) and one for write (the plugin input)
                 //
                 // Be non-blocking on Accept only, so we can timeout.
-                listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
+                listener
+                    .set_nonblocking(ListenerNonblockingMode::Accept)
+                    .map_err(|err| {
+                        IoError::new_internal(
+                            err,
+                            "Could not set non-blocking mode accept for listener",
+                        )
+                    })?;
                 let mut get_socket = || {
                     let mut result = None;
                     while let Ok(None) = child.try_wait() {
@@ -179,7 +199,12 @@ impl PreparedServerCommunication {
                             Ok(stream) => {
                                 // Success! Ensure the stream is in nonblocking mode though, for
                                 // good measure. Had an issue without this on macOS.
-                                stream.set_nonblocking(false)?;
+                                stream.set_nonblocking(false).map_err(|err| {
+                                    IoError::new_internal(
+                                        err,
+                                        "Could not disable non-blocking mode for listener",
+                                    )
+                                })?;
                                 result = Some(stream);
                                 break;
                             }
@@ -187,7 +212,10 @@ impl PreparedServerCommunication {
                                 if !is_would_block_err(&err) {
                                     // `WouldBlock` is ok, just means it's not ready yet, but some other
                                     // kind of error should be reported
-                                    return Err(err.into());
+                                    return Err(ShellError::Io(IoError::new_internal(
+                                        err,
+                                        "Accepting new data from listener failed",
+                                    )));
                                 }
                             }
                         }

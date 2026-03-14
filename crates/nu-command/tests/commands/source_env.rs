@@ -1,6 +1,5 @@
-use nu_test_support::fs::Stub::{FileWithContent, FileWithContentToBeTrimmed};
+use nu_test_support::fs::Stub::{EmptyFile, FileWithContent, FileWithContentToBeTrimmed};
 use nu_test_support::nu;
-use nu_test_support::pipeline;
 use nu_test_support::playground::Playground;
 
 #[should_panic]
@@ -35,14 +34,11 @@ fn sources_also_files_under_custom_lib_dirs_path() {
             "#,
         )]);
 
-        let actual = nu!(
-            cwd: ".", pipeline(
-            "
-                source-env my_library.nu ;
-
-                hello
-            "
-        ));
+        let actual = nu!("
+            source-env my_library.nu ;
+        
+            hello
+        ");
 
         assert_eq!(actual.out, "hello nu");
     })
@@ -283,17 +279,21 @@ fn source_env_is_scoped() {
 
         let actual = nu!(cwd: dirs.test(), &inp.join("; "));
 
-        assert!(actual
-            .err
-            .contains("Command `no-name-similar-to-this` not found"));
+        assert!(
+            actual
+                .err
+                .contains("Command `no-name-similar-to-this` not found")
+        );
 
         let inp = &[r#"source-env spam.nu"#, r#"nor-similar-to-this"#];
 
         let actual = nu!(cwd: dirs.test(), &inp.join("; "));
 
-        assert!(actual
-            .err
-            .contains("Command `nor-similar-to-this` not found"));
+        assert!(
+            actual
+                .err
+                .contains("Command `nor-similar-to-this` not found")
+        );
     })
 }
 
@@ -321,12 +321,31 @@ fn source_env_const_file() {
 
 #[test]
 fn source_respects_early_return() {
-    let actual = nu!(
-        cwd: "tests/fixtures/formats", pipeline(
-        "
-            source early_return.nu
-        "
-    ));
+    let actual = nu!(cwd: "tests/fixtures/formats", "
+        source early_return.nu
+    ");
 
     assert!(actual.err.is_empty());
+}
+
+#[test]
+fn source_after_use_should_not_error() {
+    Playground::setup("source_after_use", |dirs, sandbox| {
+        sandbox.with_files(&[EmptyFile("spam.nu")]);
+
+        let inp = &[r#"use spam.nu"#, r#"source spam.nu"#];
+        let actual = nu!(cwd: dirs.test(), &inp.join("; "));
+        assert!(actual.err.is_empty());
+    })
+}
+
+#[test]
+fn use_after_source_should_not_error() {
+    Playground::setup("use_after_source", |dirs, sandbox| {
+        sandbox.with_files(&[EmptyFile("spam.nu")]);
+
+        let inp = &[r#"source spam.nu"#, r#"use spam.nu"#];
+        let actual = nu!(cwd: dirs.test(), &inp.join("; "));
+        assert!(actual.err.is_empty());
+    })
 }

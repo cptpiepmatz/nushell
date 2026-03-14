@@ -2,7 +2,7 @@
 export def dark-theme [] {
     {
         # color for nushell primitives
-        separator: white
+        separator: default
         leading_trailing_space_bg: { attr: n } # no fg, no bg, attr none effectively turns this off
         header: green_bold
         empty: blue
@@ -10,20 +10,20 @@ export def dark-theme [] {
         # The value (in this case, a bool) is piped into the closure.
         # eg) {|| if $in { 'light_cyan' } else { 'light_gray' } }
         bool: light_cyan
-        int: white
+        int: default
         filesize: cyan
-        duration: white
-        date: purple
-        range: white
-        float: white
-        string: white
-        nothing: white
-        binary: white
-        cell-path: white
+        duration: default
+        datetime: purple
+        range: default
+        float: default
+        string: default
+        nothing: default
+        binary: default
+        cell-path: default
         row_index: green_bold
-        record: white
-        list: white
-        block: white
+        record: default
+        list: default
+        block: default
         hints: dark_gray
         search_result: { bg: red fg: white }
         shape_binary: purple_bold
@@ -76,12 +76,12 @@ export def light-theme [] {
         empty: blue
         # Closures can be used to choose colors for specific values.
         # The value (in this case, a bool) is piped into the closure.
-        # eg) {|| if $in { 'dark_cyan' } else { 'dark_gray' } }
-        bool: dark_cyan
+        # eg) {|| if $in { 'darkcyan' } else { 'dark_gray' } }
+        bool: darkcyan
         int: dark_gray
         filesize: cyan_bold
         duration: dark_gray
-        date: purple
+        datetime: purple
         range: dark_gray
         float: dark_gray
         string: dark_gray
@@ -131,5 +131,15 @@ export def light-theme [] {
         shape_variable: purple
         shape_vardecl: purple
         shape_raw_string: light_purple
+    }
+}
+
+# Returns helper closures that can be used for ENV_CONVERSIONS and other purposes
+export def env-conversions [] {
+    {
+        "path": {
+            from_string: {|s| $s | split row (char esep) | path expand --no-symlink }
+            to_string: {|v| $v | path expand --no-symlink | str join (char esep) }
+        }
     }
 }

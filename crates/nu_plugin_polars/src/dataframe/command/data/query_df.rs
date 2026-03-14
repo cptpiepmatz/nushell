@@ -1,13 +1,13 @@
 use super::sql_context::SQLContext;
+use crate::PolarsPlugin;
 use crate::dataframe::values::Column;
 use crate::dataframe::values::NuLazyFrame;
 use crate::values::CustomValueSupport;
 use crate::values::NuDataFrame;
-use crate::PolarsPlugin;
+use crate::values::PolarsPluginType;
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 
 // attribution:
@@ -31,11 +31,17 @@ impl PluginCommand for QueryDf {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .required("sql", SyntaxShape::String, "sql query")
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .required("sql", SyntaxShape::String, "Sql query.")
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
@@ -43,7 +49,7 @@ impl PluginCommand for QueryDf {
         vec!["dataframe", "sql", "search"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Query dataframe using SQL",
             example: "[[a b]; [1 2] [3 4]] | polars into-df | polars query 'select a from df'",
@@ -63,12 +69,15 @@ impl PluginCommand for QueryDf {
 
     fn run(
         &self,
-        plugin: &PolarsPlugin,
+        plugin: &Self::Plugin,
         engine: &EngineInterface,
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

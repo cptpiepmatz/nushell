@@ -1,5 +1,6 @@
 use nu_engine::command_prelude::*;
 use nu_protocol::{
+    CustomExample,
     ast::{self, Expr, Expression},
     engine::{self, CallImpl, CommandType, UNKNOWN_SPAN_ID},
     ir::{self, DataSlice},
@@ -7,15 +8,16 @@ use nu_protocol::{
 
 #[derive(Clone)]
 pub struct KnownExternal {
-    pub name: String,
     pub signature: Box<Signature>,
-    pub description: String,
-    pub extra_description: String,
+    pub attributes: Vec<(String, Value)>,
+    pub examples: Vec<CustomExample>,
+    /// The span of the `extern` declaration, used to look up its source file.
+    pub span: Span,
 }
 
 impl Command for KnownExternal {
     fn name(&self) -> &str {
-        &self.name
+        &self.signature.name
     }
 
     fn signature(&self) -> Signature {
@@ -23,11 +25,27 @@ impl Command for KnownExternal {
     }
 
     fn description(&self) -> &str {
-        &self.description
+        &self.signature.description
+    }
+
+    fn extra_description(&self) -> &str {
+        &self.signature.extra_description
+    }
+
+    fn search_terms(&self) -> Vec<&str> {
+        self.signature
+            .search_terms
+            .iter()
+            .map(String::as_str)
+            .collect()
     }
 
     fn command_type(&self) -> CommandType {
         CommandType::External
+    }
+
+    fn decl_span(&self) -> Option<Span> {
+        Some(self.span)
     }
 
     fn run(
@@ -74,6 +92,17 @@ impl Command for KnownExternal {
                 command.run(engine_state, stack, &(&extern_call).into(), input)
             }
         }
+    }
+
+    fn attributes(&self) -> Vec<(String, Value)> {
+        self.attributes.clone()
+    }
+
+    fn examples(&self) -> Vec<Example<'_>> {
+        self.examples
+            .iter()
+            .map(CustomExample::to_example)
+            .collect()
     }
 }
 

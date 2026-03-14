@@ -1,7 +1,7 @@
 use crate::{
-    dataframe::values::{Column, NuDataFrame, NuExpression},
-    values::CustomValueSupport,
     PolarsPlugin,
+    dataframe::values::{Column, NuDataFrame, NuExpression},
+    values::{CustomValueSupport, PolarsPluginType},
 };
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
@@ -28,18 +28,18 @@ impl PluginCommand for ExprConcatStr {
             .required(
                 "separator",
                 SyntaxShape::String,
-                "Separator used during the concatenation",
+                "Separator used during the concatenation.",
             )
             .required(
                 "concat expressions",
                 SyntaxShape::List(Box::new(SyntaxShape::Any)),
-                "Expression(s) that define the string concatenation",
+                "Expression(s) that define the string concatenation.",
             )
-            .input_output_type(Type::Any, Type::Custom("expression".into()))
+            .input_output_type(Type::Any, PolarsPluginType::NuExpression.into())
             .category(Category::Custom("expression".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Creates a concat string expression",
             example: r#"let df = ([[a b c]; [one two 1] [three four 2]] | polars into-df);
@@ -84,8 +84,9 @@ impl PluginCommand for ExprConcatStr {
         plugin: &Self::Plugin,
         engine: &EngineInterface,
         call: &EvaluatedCall,
-        _input: PipelineData,
+        input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let separator: String = call.req(0)?;
         let value: Value = call.req(1)?;
 
@@ -94,6 +95,7 @@ impl PluginCommand for ExprConcatStr {
 
         expr.to_pipeline_data(plugin, engine, call.head)
             .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

@@ -1,30 +1,34 @@
 use std::{borrow::Cow, fs::File, sync::Arc};
 
-use nu_path::{expand_path_with, AbsolutePathBuf};
+use nu_path::{expand_path, expand_path_with};
+#[cfg(feature = "os")]
+use nu_protocol::process::check_exit_status_future;
 use nu_protocol::{
+    DeclId, ENV_VARIABLE_ID, Flag, IntoPipelineData, IntoSpanned, ListStream, OutDest,
+    PipelineData, PipelineExecutionData, PositionalArg, Range, Record, RegId, ShellError, Signals,
+    Signature, Span, Spanned, Type, Value, VarId,
     ast::{Bits, Block, Boolean, CellPath, Comparison, Math, Operator},
+    combined_type_string,
     debugger::DebugContext,
     engine::{
-        Argument, Closure, EngineState, ErrorHandler, Matcher, Redirection, Stack, StateWorkingSet,
+        Argument, Closure, EngineState, EnvName, ErrorHandler, Matcher, Redirection, Stack,
+        StateWorkingSet,
     },
     ir::{Call, DataSlice, Instruction, IrAstRef, IrBlock, Literal, RedirectMode},
-    DataSource, DeclId, ErrSpan, Flag, IntoPipelineData, IntoSpanned, ListStream, OutDest,
-    PipelineData, PipelineMetadata, PositionalArg, Range, Record, RegId, ShellError, Signals,
-    Signature, Span, Spanned, Type, Value, VarId, ENV_VARIABLE_ID,
+    shell_error::io::IoError,
 };
 use nu_utils::IgnoreCaseExt;
 
 use crate::{
-    convert_env_vars, eval::is_automatic_env_var, eval_block_with_early_return, ENV_CONVERSIONS,
+    ENV_CONVERSIONS, convert_env_vars, eval::is_automatic_env_var, eval_block_with_early_return,
 };
 
-/// Evaluate the compiled representation of a [`Block`].
 pub fn eval_ir_block<D: DebugContext>(
     engine_state: &EngineState,
     stack: &mut Stack,
     block: &Block,
     input: PipelineData,
-) -> Result<PipelineData, ShellError> {
+) -> Result<PipelineExecutionData, ShellError> {
     // Rust does not check recursion limits outside of const evaluation.
     // But nu programs run in the same process as the shell.
     // To prevent a stack overflow in user code from crashing the shell,
@@ -42,12 +46,13 @@ pub fn eval_ir_block<D: DebugContext>(
 
         let args_base = stack.arguments.get_base();
         let error_handler_base = stack.error_handlers.get_base();
+        let finally_handler_base = stack.finally_run_handlers.get_base();
 
         // Allocate and initialize registers. I've found that it's not really worth trying to avoid
         // the heap allocation here by reusing buffers - our allocator is fast enough
         let mut registers = Vec::with_capacity(ir_block.register_count as usize);
         for _ in 0..ir_block.register_count {
-            registers.push(PipelineData::Empty);
+            registers.push(PipelineExecutionData::empty());
         }
 
         // Initialize file storage.
@@ -61,6 +66,7 @@ pub fn eval_ir_block<D: DebugContext>(
                 block_span: &block.span,
                 args_base,
                 error_handler_base,
+                finally_handler_base,
                 redirect_out: None,
                 redirect_err: None,
                 matches: vec![],
@@ -72,6 +78,7 @@ pub fn eval_ir_block<D: DebugContext>(
         );
 
         stack.error_handlers.leave_frame(error_handler_base);
+        stack.finally_run_handlers.leave_frame(finally_handler_base);
         stack.arguments.leave_frame(args_base);
 
         D::leave_block(engine_state, block);
@@ -100,6 +107,8 @@ struct EvalContext<'a> {
     args_base: usize,
     /// Base index on the error handler stack to reset to after a call
     error_handler_base: usize,
+    /// Base index on the finally handler stack to reset to after a call
+    finally_handler_base: usize,
     /// State set by redirect-out
     redirect_out: Option<Redirection>,
     /// State set by redirect-err
@@ -107,7 +116,7 @@ struct EvalContext<'a> {
     /// Scratch space to use for `match`
     matches: Vec<(VarId, Value)>,
     /// Intermediate pipeline data storage used by instructions, indexed by RegId
-    registers: &'a mut [PipelineData],
+    registers: &'a mut [PipelineExecutionData],
     /// Holds open files used by redirections
     files: &'a mut [Option<Arc<File>>],
 }
@@ -115,7 +124,7 @@ struct EvalContext<'a> {
 impl<'a> EvalContext<'a> {
     /// Replace the contents of a register with a new value
     #[inline]
-    fn put_reg(&mut self, reg_id: RegId, new_value: PipelineData) {
+    fn put_reg(&mut self, reg_id: RegId, new_value: PipelineExecutionData) {
         // log::trace!("{reg_id} <- {new_value:?}");
         self.registers[reg_id.get() as usize] = new_value;
     }
@@ -128,19 +137,21 @@ impl<'a> EvalContext<'a> {
 
     /// Replace the contents of a register with `Empty` and then return the value that it contained
     #[inline]
-    fn take_reg(&mut self, reg_id: RegId) -> PipelineData {
+    fn take_reg(&mut self, reg_id: RegId) -> PipelineExecutionData {
         // log::trace!("<- {reg_id}");
         std::mem::replace(
             &mut self.registers[reg_id.get() as usize],
-            PipelineData::Empty,
+            PipelineExecutionData::empty(),
         )
     }
 
     /// Clone data from a register. Must be collected first.
     fn clone_reg(&mut self, reg_id: RegId, error_span: Span) -> Result<PipelineData, ShellError> {
-        match &self.registers[reg_id.get() as usize] {
-            PipelineData::Empty => Ok(PipelineData::Empty),
-            PipelineData::Value(val, meta) => Ok(PipelineData::Value(val.clone(), meta.clone())),
+        // NOTE: here just clone the inner PipelineData
+        // it's suitable for current usage.
+        match &self.registers[reg_id.get() as usize].body {
+            PipelineData::Empty => Ok(PipelineData::empty()),
+            PipelineData::Value(val, meta) => Ok(PipelineData::value(val.clone(), meta.clone())),
             _ => Err(ShellError::IrEvalError {
                 msg: "Must collect to value before using instruction that clones from a register"
                     .into(),
@@ -159,10 +170,21 @@ impl<'a> EvalContext<'a> {
     }
 
     /// Take and implicitly collect a register to a value
+    ///
+    /// It doesn't check exit status when collecting.
     fn collect_reg(&mut self, reg_id: RegId, fallback_span: Span) -> Result<Value, ShellError> {
-        let data = self.take_reg(reg_id);
-        let span = data.span().unwrap_or(fallback_span);
-        data.into_value(span)
+        // NOTE: collect_reg is used to collect the reg to a variable.
+        // So it's good to pick the inner PipelineData directly, and drop the ExitStatus queue.
+        #[cfg(feature = "os")]
+        let body = {
+            let mut data = self.take_reg(reg_id);
+            data.exit.clear();
+            data.body
+        };
+        #[cfg(not(feature = "os"))]
+        let body = self.take_reg(reg_id).body;
+        let span = body.span().unwrap_or(fallback_span);
+        body.into_value(span)
     }
 
     /// Get a string from data or produce evaluation error if it's invalid UTF-8
@@ -179,13 +201,15 @@ fn eval_ir_block_impl<D: DebugContext>(
     ctx: &mut EvalContext<'_>,
     ir_block: &IrBlock,
     input: PipelineData,
-) -> Result<PipelineData, ShellError> {
+) -> Result<PipelineExecutionData, ShellError> {
     if !ctx.registers.is_empty() {
-        ctx.registers[0] = input;
+        ctx.registers[0] = PipelineExecutionData::from(input);
     }
 
     // Program counter, starts at zero.
     let mut pc = 0;
+    let need_backtrace = ctx.engine_state.get_env_var("NU_BACKTRACE").is_some();
+    let mut ret_val = None;
 
     while pc < ir_block.instructions.len() {
         let instruction = &ir_block.instructions[pc];
@@ -194,7 +218,7 @@ fn eval_ir_block_impl<D: DebugContext>(
 
         D::enter_instruction(ctx.engine_state, ir_block, pc, ctx.registers);
 
-        let result = eval_instruction::<D>(ctx, instruction, span, ast);
+        let result = eval_instruction::<D>(ctx, instruction, span, ast, need_backtrace);
 
         D::leave_instruction(
             ctx.engine_state,
@@ -212,23 +236,44 @@ fn eval_ir_block_impl<D: DebugContext>(
                 pc = next_pc;
             }
             Ok(InstructionResult::Return(reg_id)) => {
-                return Ok(ctx.take_reg(reg_id));
+                // need to check if the return value is set by
+                // `Shell::Return` first. If so, we need to respect that value.
+                match ret_val {
+                    Some(err) => return Err(err),
+                    None => return Ok(ctx.take_reg(reg_id)),
+                }
             }
-            Err(
-                err @ (ShellError::Return { .. }
-                | ShellError::Continue { .. }
-                | ShellError::Break { .. }),
-            ) => {
-                // These block control related errors should be passed through
+            Err(err @ (ShellError::Continue { .. } | ShellError::Break { .. })) => {
                 return Err(err);
+            }
+            Err(err @ (ShellError::Return { .. } | ShellError::Exit { .. })) => {
+                if let Some(always_run_handler) =
+                    ctx.stack.finally_run_handlers.pop(ctx.finally_handler_base)
+                {
+                    // need to run finally block before return.
+                    // and record the return value firstly.
+                    prepare_error_handler(ctx, always_run_handler, None);
+                    pc = always_run_handler.handler_index;
+                    ret_val = Some(err);
+                } else {
+                    // These block control related errors should be passed through
+                    return Err(err);
+                }
             }
             Err(err) => {
                 if let Some(error_handler) = ctx.stack.error_handlers.pop(ctx.error_handler_base) {
                     // If an error handler is set, branch there
                     prepare_error_handler(ctx, error_handler, Some(err.into_spanned(*span)));
                     pc = error_handler.handler_index;
+                } else if let Some(always_run_handler) =
+                    ctx.stack.finally_run_handlers.pop(ctx.finally_handler_base)
+                {
+                    prepare_error_handler(ctx, always_run_handler, Some(err.into_spanned(*span)));
+                    pc = always_run_handler.handler_index;
+                } else if need_backtrace {
+                    let err = ShellError::into_chained(err, *span);
+                    return Err(err);
                 } else {
-                    // If not, exit the block with the error
                     return Err(err);
                 }
             }
@@ -258,14 +303,20 @@ fn prepare_error_handler(
             // Create the error value and put it in the register
             ctx.put_reg(
                 reg_id,
-                error
-                    .item
-                    .into_value(&StateWorkingSet::new(ctx.engine_state), error.span)
-                    .into_pipeline_data(),
+                PipelineExecutionData::from(
+                    error
+                        .item
+                        .into_full_value(
+                            &StateWorkingSet::new(ctx.engine_state),
+                            ctx.stack,
+                            error.span,
+                        )
+                        .into_pipeline_data(),
+                ),
             );
         } else {
             // Set the register to empty
-            ctx.put_reg(reg_id, PipelineData::Empty);
+            ctx.put_reg(reg_id, PipelineExecutionData::empty());
         }
     }
 }
@@ -284,8 +335,12 @@ fn eval_instruction<D: DebugContext>(
     instruction: &Instruction,
     span: &Span,
     ast: &Option<IrAstRef>,
+    need_backtrace: bool,
 ) -> Result<InstructionResult, ShellError> {
     use self::InstructionResult::*;
+
+    // Check for interrupt if necessary
+    instruction.check_interrupt(ctx.engine_state, span)?;
 
     // See the docs for `Instruction` for more information on what these instructions are supposed
     // to do.
@@ -296,7 +351,10 @@ fn eval_instruction<D: DebugContext>(
         }),
         Instruction::LoadLiteral { dst, lit } => load_literal(ctx, *dst, lit, *span),
         Instruction::LoadValue { dst, val } => {
-            ctx.put_reg(*dst, Value::clone(val).into_pipeline_data());
+            ctx.put_reg(
+                *dst,
+                PipelineExecutionData::from(Value::clone(val).into_pipeline_data()),
+            );
             Ok(Continue)
         }
         Instruction::Move { dst, src } => {
@@ -306,19 +364,31 @@ fn eval_instruction<D: DebugContext>(
         }
         Instruction::Clone { dst, src } => {
             let data = ctx.clone_reg(*src, *span)?;
-            ctx.put_reg(*dst, data);
+            ctx.put_reg(*dst, PipelineExecutionData::from(data));
             Ok(Continue)
         }
         Instruction::Collect { src_dst } => {
             let data = ctx.take_reg(*src_dst);
+            #[cfg(feature = "os")]
+            let value = collect(data, *span, true)?;
+            #[cfg(not(feature = "os"))]
             let value = collect(data, *span)?;
-            ctx.put_reg(*src_dst, value);
+            ctx.put_reg(*src_dst, PipelineExecutionData::from(value));
+            Ok(Continue)
+        }
+        Instruction::TryCollect { src_dst } => {
+            let data = ctx.take_reg(*src_dst);
+            #[cfg(feature = "os")]
+            let value = collect(data, *span, false)?;
+            #[cfg(not(feature = "os"))]
+            let value = collect(data, *span)?;
+            ctx.put_reg(*src_dst, PipelineExecutionData::from(value));
             Ok(Continue)
         }
         Instruction::Span { src_dst } => {
-            let data = ctx.take_reg(*src_dst);
-            let spanned = data.with_span(*span);
-            ctx.put_reg(*src_dst, spanned);
+            let mut data = ctx.take_reg(*src_dst);
+            data.body = data.body.with_span(*span);
+            ctx.put_reg(*src_dst, data);
             Ok(Continue)
         }
         Instruction::Drop { src } => {
@@ -331,23 +401,28 @@ fn eval_instruction<D: DebugContext>(
         }
         Instruction::DrainIfEnd { src } => {
             let data = ctx.take_reg(*src);
-            let res = {
-                let stack = &mut ctx
-                    .stack
-                    .push_redirection(ctx.redirect_out.clone(), ctx.redirect_err.clone());
-                data.drain_to_out_dests(ctx.engine_state, stack)?
-            };
-            ctx.put_reg(*src, res);
+            let res = drain_if_end(ctx, data)?;
+            ctx.put_reg(*src, PipelineExecutionData::from(res));
             Ok(Continue)
         }
         Instruction::LoadVariable { dst, var_id } => {
             let value = get_var(ctx, *var_id, *span)?;
-            ctx.put_reg(*dst, value.into_pipeline_data());
+            ctx.put_reg(
+                *dst,
+                PipelineExecutionData::from(value.into_pipeline_data()),
+            );
             Ok(Continue)
         }
         Instruction::StoreVariable { var_id, src } => {
             let value = ctx.collect_reg(*src, *span)?;
-            ctx.stack.add_var(*var_id, value);
+            // Perform runtime type checking and conversion for variable assignment
+            if nu_experimental::ENFORCE_RUNTIME_ANNOTATIONS.get() {
+                let variable = ctx.engine_state.get_var(*var_id);
+                let converted_value = check_assignment_type(value, &variable.ty)?;
+                ctx.stack.add_var(*var_id, converted_value);
+            } else {
+                ctx.stack.add_var(*var_id, value);
+            }
             Ok(Continue)
         }
         Instruction::DropVariable { var_id } => {
@@ -356,9 +431,9 @@ fn eval_instruction<D: DebugContext>(
         }
         Instruction::LoadEnv { dst, key } => {
             let key = ctx.get_str(*key, *span)?;
-            if let Some(value) = get_env_var_case_insensitive(ctx, key) {
+            if let Some(value) = get_env_var(ctx, key) {
                 let new_value = value.clone().into_pipeline_data();
-                ctx.put_reg(*dst, new_value);
+                ctx.put_reg(*dst, PipelineExecutionData::from(new_value));
                 Ok(Continue)
             } else {
                 // FIXME: using the same span twice, shouldn't this really be
@@ -372,17 +447,20 @@ fn eval_instruction<D: DebugContext>(
         }
         Instruction::LoadEnvOpt { dst, key } => {
             let key = ctx.get_str(*key, *span)?;
-            let value = get_env_var_case_insensitive(ctx, key)
+            let value = get_env_var(ctx, key)
                 .cloned()
                 .unwrap_or(Value::nothing(*span));
-            ctx.put_reg(*dst, value.into_pipeline_data());
+            ctx.put_reg(
+                *dst,
+                PipelineExecutionData::from(value.into_pipeline_data()),
+            );
             Ok(Continue)
         }
         Instruction::StoreEnv { key, src } => {
             let key = ctx.get_str(*key, *span)?;
             let value = ctx.collect_reg(*src, *span)?;
 
-            let key = get_env_var_name_case_insensitive(ctx, key);
+            let key = get_env_var_name(ctx, key);
 
             if !is_automatic_env_var(&key) {
                 let is_config = key == "config";
@@ -521,12 +599,12 @@ fn eval_instruction<D: DebugContext>(
                     msg: format!("Tried to write to file #{file_num}, but it is not open"),
                     span: Some(*span),
                 })?;
-            let is_external = if let PipelineData::ByteStream(stream, ..) = &src {
+            let is_external = if let PipelineData::ByteStream(stream, ..) = &src.body {
                 stream.source().is_external()
             } else {
                 false
             };
-            if let Err(err) = src.write_to(file.as_ref()) {
+            if let Err(err) = src.body.write_to(file.as_ref()) {
                 if is_external {
                     ctx.stack.set_last_error(&err);
                 }
@@ -547,8 +625,42 @@ fn eval_instruction<D: DebugContext>(
         }
         Instruction::Call { decl_id, src_dst } => {
             let input = ctx.take_reg(*src_dst);
-            let result = eval_call::<D>(ctx, *decl_id, *span, input)?;
-            ctx.put_reg(*src_dst, result);
+            // take out exit status future first.
+            let input_data = input.body;
+            let mut result = eval_call::<D>(ctx, *decl_id, *span, input_data)?;
+            if need_backtrace {
+                match &mut result {
+                    PipelineData::ByteStream(s, ..) => s.push_caller_span(*span),
+                    PipelineData::ListStream(s, ..) => s.push_caller_span(*span),
+                    _ => (),
+                };
+            }
+            // After eval_call, attach result's exit_status_future
+            // to `original_exit`, so all exit_status_future are tracked
+            // in the new PipelineData, and wrap it into `PipelineExecutionData`
+            #[cfg(feature = "os")]
+            {
+                let mut original_exit = input.exit;
+                // `complete` converts external process status into data (`exit_code`).
+                // Drop inherited exit futures so downstream collect/print/assignment
+                // does not re-raise the same non-zero status via `pipefail`.
+                if ctx.engine_state.get_decl(*decl_id).name() == "complete" {
+                    original_exit.clear();
+                }
+                let result_exit_status_future = result
+                    .clone_exit_status_future()
+                    .map(|f| f.with_span(*span));
+                original_exit.push(result_exit_status_future);
+                ctx.put_reg(
+                    *src_dst,
+                    PipelineExecutionData {
+                        body: result,
+                        exit: original_exit,
+                    },
+                );
+            }
+            #[cfg(not(feature = "os"))]
+            ctx.put_reg(*src_dst, PipelineExecutionData { body: result });
             Ok(Continue)
         }
         Instruction::StringAppend { src_dst, val } => {
@@ -561,17 +673,20 @@ fn eval_instruction<D: DebugContext>(
                 // Small optimization, so we don't have to copy the string *again*
                 val
             } else {
-                operand_value.to_expanded_string(", ", ctx.engine_state.get_config())
+                operand_value.to_expanded_string(", ", &ctx.stack.get_config(ctx.engine_state))
             };
             string.push_str(&operand);
 
             let new_string_value = Value::string(string, string_span);
-            ctx.put_reg(*src_dst, new_string_value.into_pipeline_data());
+            ctx.put_reg(
+                *src_dst,
+                PipelineExecutionData::from(new_string_value.into_pipeline_data()),
+            );
             Ok(Continue)
         }
         Instruction::GlobFrom { src_dst, no_expand } => {
             let string_value = ctx.collect_reg(*src_dst, *span)?;
-            let glob_value = if matches!(string_value, Value::Glob { .. }) {
+            let glob_value = if let Value::Glob { .. } = string_value {
                 // It already is a glob, so don't touch it.
                 string_value
             } else {
@@ -579,7 +694,10 @@ fn eval_instruction<D: DebugContext>(
                 let string = string_value.into_string()?;
                 Value::glob(string, *no_expand, *span)
             };
-            ctx.put_reg(*src_dst, glob_value.into_pipeline_data());
+            ctx.put_reg(
+                *src_dst,
+                PipelineExecutionData::from(glob_value.into_pipeline_data()),
+            );
             Ok(Continue)
         }
         Instruction::ListPush { src_dst, item } => {
@@ -588,7 +706,10 @@ fn eval_instruction<D: DebugContext>(
             let list_span = list_value.span();
             let mut list = list_value.into_list()?;
             list.push(item);
-            ctx.put_reg(*src_dst, Value::list(list, list_span).into_pipeline_data());
+            ctx.put_reg(
+                *src_dst,
+                PipelineExecutionData::from(Value::list(list, list_span).into_pipeline_data()),
+            );
             Ok(Continue)
         }
         Instruction::ListSpread { src_dst, items } => {
@@ -596,13 +717,17 @@ fn eval_instruction<D: DebugContext>(
             let items = ctx.collect_reg(*items, *span)?;
             let list_span = list_value.span();
             let items_span = items.span();
+            let items = match items {
+                Value::List { vals, .. } => vals,
+                Value::Nothing { .. } => Vec::new(),
+                _ => return Err(ShellError::CannotSpreadAsList { span: items_span }),
+            };
             let mut list = list_value.into_list()?;
-            list.extend(
-                items
-                    .into_list()
-                    .map_err(|_| ShellError::CannotSpreadAsList { span: items_span })?,
+            list.extend(items);
+            ctx.put_reg(
+                *src_dst,
+                PipelineExecutionData::from(Value::list(list, list_span).into_pipeline_data()),
             );
-            ctx.put_reg(*src_dst, Value::list(list, list_span).into_pipeline_data());
             Ok(Continue)
         }
         Instruction::RecordInsert { src_dst, key, val } => {
@@ -623,7 +748,9 @@ fn eval_instruction<D: DebugContext>(
 
             ctx.put_reg(
                 *src_dst,
-                Value::record(record, record_span).into_pipeline_data(),
+                PipelineExecutionData::from(
+                    Value::record(record, record_span).into_pipeline_data(),
+                ),
             );
             Ok(Continue)
         }
@@ -633,11 +760,13 @@ fn eval_instruction<D: DebugContext>(
             let record_span = record_value.span();
             let items_span = items.span();
             let mut record = record_value.into_record()?;
+            let items = match items {
+                Value::Record { val, .. } => val.into_owned(),
+                Value::Nothing { .. } => Record::new(),
+                _ => return Err(ShellError::CannotSpreadAsRecord { span: items_span }),
+            };
             // Not using .extend() here because it doesn't handle duplicates
-            for (key, val) in items
-                .into_record()
-                .map_err(|_| ShellError::CannotSpreadAsRecord { span: items_span })?
-            {
+            for (key, val) in items {
                 if let Some(first_value) = record.insert(&key, val) {
                     return Err(ShellError::ColumnDefinedTwice {
                         col_name: key,
@@ -648,7 +777,9 @@ fn eval_instruction<D: DebugContext>(
             }
             ctx.put_reg(
                 *src_dst,
-                Value::record(record, record_span).into_pipeline_data(),
+                PipelineExecutionData::from(
+                    Value::record(record, record_span).into_pipeline_data(),
+                ),
             );
             Ok(Continue)
         }
@@ -657,7 +788,7 @@ fn eval_instruction<D: DebugContext>(
             let negated = !bool.as_bool()?;
             ctx.put_reg(
                 *src_dst,
-                Value::bool(negated, bool.span()).into_pipeline_data(),
+                PipelineExecutionData::from(Value::bool(negated, bool.span()).into_pipeline_data()),
             );
             Ok(Continue)
         }
@@ -665,11 +796,14 @@ fn eval_instruction<D: DebugContext>(
         Instruction::FollowCellPath { src_dst, path } => {
             let data = ctx.take_reg(*src_dst);
             let path = ctx.take_reg(*path);
-            if let PipelineData::Value(Value::CellPath { val: path, .. }, _) = path {
-                let value = data.follow_cell_path(&path.members, *span, true)?;
-                ctx.put_reg(*src_dst, value.into_pipeline_data());
+            if let PipelineData::Value(Value::CellPath { val: path, .. }, _) = path.body {
+                let value = data.body.follow_cell_path(&path.members, *span)?;
+                ctx.put_reg(
+                    *src_dst,
+                    PipelineExecutionData::from(value.into_pipeline_data()),
+                );
                 Ok(Continue)
-            } else if let PipelineData::Value(Value::Error { error, .. }, _) = path {
+            } else if let PipelineData::Value(Value::Error { error, .. }, _) = path.body {
                 Err(*error)
             } else {
                 Err(ShellError::TypeMismatch {
@@ -681,12 +815,14 @@ fn eval_instruction<D: DebugContext>(
         Instruction::CloneCellPath { dst, src, path } => {
             let value = ctx.clone_reg_value(*src, *span)?;
             let path = ctx.take_reg(*path);
-            if let PipelineData::Value(Value::CellPath { val: path, .. }, _) = path {
-                // TODO: make follow_cell_path() not have to take ownership, probably using Cow
-                let value = value.follow_cell_path(&path.members, true)?;
-                ctx.put_reg(*dst, value.into_pipeline_data());
+            if let PipelineData::Value(Value::CellPath { val: path, .. }, _) = path.body {
+                let value = value.follow_cell_path(&path.members)?;
+                ctx.put_reg(
+                    *dst,
+                    PipelineExecutionData::from(value.into_owned().into_pipeline_data()),
+                );
                 Ok(Continue)
-            } else if let PipelineData::Value(Value::Error { error, .. }, _) = path {
+            } else if let PipelineData::Value(Value::Error { error, .. }, _) = path.body {
                 Err(*error)
             } else {
                 Err(ShellError::TypeMismatch {
@@ -703,14 +839,17 @@ fn eval_instruction<D: DebugContext>(
             let data = ctx.take_reg(*src_dst);
             let metadata = data.metadata();
             // Change the span because we're modifying it
-            let mut value = data.into_value(*span)?;
+            let mut value = data.body.into_value(*span)?;
             let path = ctx.take_reg(*path);
             let new_value = ctx.collect_reg(*new_value, *span)?;
-            if let PipelineData::Value(Value::CellPath { val: path, .. }, _) = path {
+            if let PipelineData::Value(Value::CellPath { val: path, .. }, _) = path.body {
                 value.upsert_data_at_cell_path(&path.members, new_value)?;
-                ctx.put_reg(*src_dst, value.into_pipeline_data_with_metadata(metadata));
+                ctx.put_reg(
+                    *src_dst,
+                    PipelineExecutionData::from(value.into_pipeline_data_with_metadata(metadata)),
+                );
                 Ok(Continue)
-            } else if let PipelineData::Value(Value::Error { error, .. }, _) = path {
+            } else if let PipelineData::Value(Value::Error { error, .. }, _) = path.body {
                 Err(*error)
             } else {
                 Err(ShellError::TypeMismatch {
@@ -723,7 +862,7 @@ fn eval_instruction<D: DebugContext>(
         Instruction::BranchIf { cond, index } => {
             let data = ctx.take_reg(*cond);
             let data_span = data.span();
-            let val = match data {
+            let val = match data.body {
                 PipelineData::Value(Value::Bool { val, .. }, _) => val,
                 PipelineData::Value(Value::Error { error, .. }, _) => {
                     return Err(*error);
@@ -801,8 +940,26 @@ fn eval_instruction<D: DebugContext>(
             });
             Ok(Continue)
         }
+        Instruction::Finally { index } => {
+            ctx.stack.finally_run_handlers.push(ErrorHandler {
+                handler_index: *index,
+                error_register: None,
+            });
+            Ok(Continue)
+        }
+        Instruction::FinallyInto { index, dst } => {
+            ctx.stack.finally_run_handlers.push(ErrorHandler {
+                handler_index: *index,
+                error_register: Some(*dst),
+            });
+            Ok(Continue)
+        }
         Instruction::PopErrorHandler => {
             ctx.stack.error_handlers.pop(ctx.error_handler_base);
+            Ok(Continue)
+        }
+        Instruction::PopFinallyRun => {
+            ctx.stack.finally_run_handlers.pop(ctx.finally_handler_base);
             Ok(Continue)
         }
         Instruction::ReturnEarly { src } => {
@@ -823,8 +980,20 @@ fn load_literal(
     lit: &Literal,
     span: Span,
 ) -> Result<InstructionResult, ShellError> {
-    let value = literal_value(ctx, lit, span)?;
-    ctx.put_reg(dst, PipelineData::Value(value, None));
+    // `Literal::Empty` represents "no pipeline input" and should produce
+    // `PipelineData::Empty`. This is distinct from `Literal::Nothing` which
+    // represents the `null` value and should produce `PipelineData::Value(Value::Nothing)`.
+    // Some commands (like `metadata`) distinguish between these when deciding
+    // whether positional args are allowed.
+    if matches!(lit, Literal::Empty) {
+        ctx.put_reg(dst, PipelineExecutionData::empty());
+    } else {
+        let value = literal_value(ctx, lit, span)?;
+        ctx.put_reg(
+            dst,
+            PipelineExecutionData::from(PipelineData::value(value, None)),
+        );
+    }
     Ok(InstructionResult::Continue)
 }
 
@@ -845,7 +1014,7 @@ fn literal_value(
             let captures = block
                 .captures
                 .iter()
-                .map(|var_id| get_var(ctx, *var_id, span).map(|val| (*var_id, val)))
+                .map(|(var_id, span)| get_var(ctx, *var_id, *span).map(|val| (*var_id, val)))
                 .collect::<Result<Vec<_>, ShellError>>()?;
             Value::closure(
                 Closure {
@@ -877,9 +1046,7 @@ fn literal_value(
             if *no_expand {
                 Value::string(path, span)
             } else {
-                let cwd = ctx.engine_state.cwd(Some(ctx.stack))?;
-                let path = expand_path_with(path, cwd, true);
-
+                let path = expand_path(path, true);
                 Value::string(path.to_string_lossy(), span)
             }
         }
@@ -893,13 +1060,7 @@ fn literal_value(
             } else if *no_expand {
                 Value::string(path, span)
             } else {
-                let cwd = ctx
-                    .engine_state
-                    .cwd(Some(ctx.stack))
-                    .map(AbsolutePathBuf::into_std_path_buf)
-                    .unwrap_or_default();
-                let path = expand_path_with(path, cwd, true);
-
+                let path = expand_path(path, true);
                 Value::string(path.to_string_lossy(), span)
             }
         }
@@ -911,6 +1072,8 @@ fn literal_value(
         Literal::CellPath(path) => Value::cell_path(CellPath::clone(path), span),
         Literal::Date(dt) => Value::date(**dt, span),
         Literal::Nothing => Value::nothing(span),
+        // Empty is handled specially in load_literal and should never reach here
+        Literal::Empty => Value::nothing(span),
     })
 }
 
@@ -952,23 +1115,27 @@ fn binary_op(
             }
             Comparison::In => lhs_val.r#in(op_span, &rhs_val, span)?,
             Comparison::NotIn => lhs_val.not_in(op_span, &rhs_val, span)?,
+            Comparison::Has => lhs_val.has(op_span, &rhs_val, span)?,
+            Comparison::NotHas => lhs_val.not_has(op_span, &rhs_val, span)?,
             Comparison::StartsWith => lhs_val.starts_with(op_span, &rhs_val, span)?,
+            Comparison::NotStartsWith => lhs_val.not_starts_with(op_span, &rhs_val, span)?,
             Comparison::EndsWith => lhs_val.ends_with(op_span, &rhs_val, span)?,
+            Comparison::NotEndsWith => lhs_val.not_ends_with(op_span, &rhs_val, span)?,
         },
         Operator::Math(mat) => match mat {
-            Math::Plus => lhs_val.add(op_span, &rhs_val, span)?,
-            Math::Concat => lhs_val.concat(op_span, &rhs_val, span)?,
-            Math::Minus => lhs_val.sub(op_span, &rhs_val, span)?,
+            Math::Add => lhs_val.add(op_span, &rhs_val, span)?,
+            Math::Subtract => lhs_val.sub(op_span, &rhs_val, span)?,
             Math::Multiply => lhs_val.mul(op_span, &rhs_val, span)?,
             Math::Divide => lhs_val.div(op_span, &rhs_val, span)?,
+            Math::FloorDivide => lhs_val.floor_div(op_span, &rhs_val, span)?,
             Math::Modulo => lhs_val.modulo(op_span, &rhs_val, span)?,
-            Math::FloorDivision => lhs_val.floor_div(op_span, &rhs_val, span)?,
             Math::Pow => lhs_val.pow(op_span, &rhs_val, span)?,
+            Math::Concatenate => lhs_val.concat(op_span, &rhs_val, span)?,
         },
         Operator::Boolean(bl) => match bl {
-            Boolean::And => lhs_val.and(op_span, &rhs_val, span)?,
             Boolean::Or => lhs_val.or(op_span, &rhs_val, span)?,
             Boolean::Xor => lhs_val.xor(op_span, &rhs_val, span)?,
+            Boolean::And => lhs_val.and(op_span, &rhs_val, span)?,
         },
         Operator::Bits(bit) => match bit {
             Bits::BitOr => lhs_val.bit_or(op_span, &rhs_val, span)?,
@@ -981,11 +1148,14 @@ fn binary_op(
             return Err(ShellError::IrEvalError {
                 msg: "can't eval assignment with the `binary-op` instruction".into(),
                 span: Some(span),
-            })
+            });
         }
     };
 
-    ctx.put_reg(lhs_dst, PipelineData::Value(result, None));
+    ctx.put_reg(
+        lhs_dst,
+        PipelineExecutionData::from(PipelineData::value(result, None)),
+    );
 
     Ok(InstructionResult::Continue)
 }
@@ -995,7 +1165,7 @@ fn eval_call<D: DebugContext>(
     ctx: &mut EvalContext<'_>,
     decl_id: DeclId,
     head: Span,
-    input: PipelineData,
+    mut input: PipelineData,
 ) -> Result<PipelineData, ShellError> {
     let EvalContext {
         engine_state,
@@ -1012,58 +1182,71 @@ fn eval_call<D: DebugContext>(
     // Set up redirect modes
     let mut caller_stack = caller_stack.push_redirection(redirect_out.take(), redirect_err.take());
 
-    let result;
+    let result = (|| {
+        if let Some(block_id) = decl.block_id() {
+            // If the decl is a custom command
+            let block = engine_state.get_block(block_id);
 
-    if let Some(block_id) = decl.block_id() {
-        // If the decl is a custom command
-        let block = engine_state.get_block(block_id);
+            // check types after acquiring block to avoid unnecessarily cloning Signature
+            check_input_types(&input, &block.signature, head)?;
 
-        // Set up a callee stack with the captures and move arguments from the stack into variables
-        let mut callee_stack = caller_stack.gather_captures(engine_state, &block.captures);
+            // Set up a callee stack with the captures and move arguments from the stack into variables
+            let mut callee_stack = caller_stack.gather_captures(engine_state, &block.captures);
 
-        gather_arguments(
-            engine_state,
-            block,
-            &mut caller_stack,
-            &mut callee_stack,
-            *args_base,
-            args_len,
-            head,
-        )?;
+            gather_arguments(
+                engine_state,
+                block,
+                &mut caller_stack,
+                &mut callee_stack,
+                *args_base,
+                args_len,
+                head,
+            )?;
 
-        // Add one to the recursion count, so we don't recurse too deep. Stack overflows are not
-        // recoverable in Rust.
-        callee_stack.recursion_count += 1;
+            // Add one to the recursion count, so we don't recurse too deep. Stack overflows are not
+            // recoverable in Rust.
+            callee_stack.recursion_count += 1;
 
-        result = eval_block_with_early_return::<D>(engine_state, &mut callee_stack, block, input);
+            let result =
+                eval_block_with_early_return::<D>(engine_state, &mut callee_stack, block, input)
+                    .map(|p| p.body);
 
-        // Move environment variables back into the caller stack scope if requested to do so
-        if block.redirect_env {
-            redirect_env(engine_state, &mut caller_stack, &callee_stack);
+            // Move environment variables back into the caller stack scope if requested to do so
+            if block.redirect_env {
+                redirect_env(engine_state, &mut caller_stack, &callee_stack);
+            }
+
+            result
+        } else {
+            check_input_types(&input, &decl.signature(), head)?;
+            // FIXME: precalculate this and save it somewhere
+            let span = Span::merge_many(
+                std::iter::once(head).chain(
+                    caller_stack
+                        .arguments
+                        .get_args(*args_base, args_len)
+                        .iter()
+                        .flat_map(|arg| arg.span()),
+                ),
+            );
+
+            let call = Call {
+                decl_id,
+                head,
+                span,
+                args_base: *args_base,
+                args_len,
+            };
+
+            // Make sure that iterating value itself can be interrupted.
+            // e.g: 0..inf | to md
+            if let PipelineData::Value(v, ..) = &mut input {
+                v.inject_signals(engine_state);
+            }
+            // Run the call
+            decl.run(engine_state, &mut caller_stack, &(&call).into(), input)
         }
-    } else {
-        // FIXME: precalculate this and save it somewhere
-        let span = Span::merge_many(
-            std::iter::once(head).chain(
-                caller_stack
-                    .arguments
-                    .get_args(*args_base, args_len)
-                    .iter()
-                    .flat_map(|arg| arg.span()),
-            ),
-        );
-
-        let call = Call {
-            decl_id,
-            head,
-            span,
-            args_base: *args_base,
-            args_len,
-        };
-
-        // Run the call
-        result = decl.run(engine_state, &mut caller_stack, &(&call).into(), input);
-    };
+    })();
 
     drop(caller_stack);
 
@@ -1147,6 +1330,7 @@ fn gather_arguments(
 
     // Arguments that didn't get consumed by required/optional
     let mut rest = vec![];
+    let mut rest_span: Option<Span> = None;
 
     // If we encounter a spread, all further positionals should go to rest
     let mut always_spread = false;
@@ -1166,20 +1350,27 @@ fn gather_arguments(
                     }
                     callee_stack.add_var(var_id, val);
                 } else {
+                    rest_span = Some(rest_span.map_or(val.span(), |s| s.append(val.span())));
                     rest.push(val);
                 }
             }
-            Argument::Spread { vals, .. } => {
-                if let Value::List { vals, .. } = vals {
+            Argument::Spread {
+                vals,
+                span: spread_span,
+                ..
+            } => match vals {
+                Value::List { vals, .. } => {
                     rest.extend(vals);
-                    // All further positional args should go to spread
+                    rest_span = Some(rest_span.map_or(spread_span, |s| s.append(spread_span)));
                     always_spread = true;
-                } else if let Value::Error { error, .. } = vals {
-                    return Err(*error);
-                } else {
-                    return Err(ShellError::CannotSpreadAsList { span: vals.span() });
                 }
-            }
+                Value::Nothing { .. } => {
+                    rest_span = Some(rest_span.map_or(spread_span, |s| s.append(spread_span)));
+                    always_spread = true;
+                }
+                Value::Error { error, .. } => return Err(*error),
+                _ => return Err(ShellError::CannotSpreadAsList { span: vals.span() }),
+            },
             Argument::Flag {
                 data,
                 name,
@@ -1206,7 +1397,7 @@ fn gather_arguments(
 
     // Add the collected rest of the arguments if a spread argument exists
     if let Some(rest_arg) = &block.signature.rest_positional {
-        let rest_span = rest.first().map(|v| v.span()).unwrap_or(call_head);
+        let rest_span = rest_span.unwrap_or(call_head);
         let var_id = expect_positional_var_id(rest_arg, rest_span)?;
         callee_stack.add_var(var_id, Value::list(rest, rest_span));
     }
@@ -1246,23 +1437,81 @@ fn gather_arguments(
 
 /// Type check helper. Produces `CantConvert` error if `val` is not compatible with `ty`.
 fn check_type(val: &Value, ty: &Type) -> Result<(), ShellError> {
-    if match val {
-        // An empty list is compatible with any list or table type
-        Value::List { vals, .. } if vals.is_empty() => {
-            matches!(ty, Type::Any | Type::List(_) | Type::Table(_))
-        }
-        // FIXME: the allocation that might be required here is not great, it would be nice to be
-        // able to just directly check whether a value is compatible with a type
-        _ => val.get_type().is_subtype(ty),
-    } {
-        Ok(())
-    } else {
-        Err(ShellError::CantConvert {
+    match val {
+        Value::Error { error, .. } => Err(*error.clone()),
+        _ if val.is_subtype_of(ty) => Ok(()),
+        _ => Err(ShellError::CantConvert {
             to_type: ty.to_string(),
             from_type: val.get_type().to_string(),
             span: val.span(),
             help: None,
-        })
+        }),
+    }
+}
+
+/// Type check and convert value for assignment.
+fn check_assignment_type(val: Value, target_ty: &Type) -> Result<Value, ShellError> {
+    match val {
+        Value::Error { error, .. } => Err(*error),
+        _ if val.is_subtype_of(target_ty) => Ok(val), // No conversion needed, but compatible
+        _ => Err(ShellError::CantConvert {
+            to_type: target_ty.to_string(),
+            from_type: val.get_type().to_string(),
+            span: val.span(),
+            help: None,
+        }),
+    }
+}
+
+/// Type check pipeline input against command's input types
+fn check_input_types(
+    input: &PipelineData,
+    signature: &Signature,
+    head: Span,
+) -> Result<(), ShellError> {
+    let io_types = &signature.input_output_types;
+
+    // If a command doesn't have any input/output types, then treat command input type as any
+    if io_types.is_empty() {
+        return Ok(());
+    }
+
+    // If a command only has a nothing input type, then allow any input data
+    if io_types.iter().all(|(intype, _)| intype == &Type::Nothing) {
+        return Ok(());
+    }
+
+    match input {
+        // early return error directly if detected
+        PipelineData::Value(Value::Error { error, .. }, ..) => return Err(*error.clone()),
+        // bypass run-time typechecking for custom types
+        PipelineData::Value(Value::Custom { .. }, ..) => return Ok(()),
+        _ => (),
+    }
+
+    // Check if the input type is compatible with *any* of the command's possible input types
+    if io_types
+        .iter()
+        .any(|(command_type, _)| input.is_subtype_of(command_type))
+    {
+        return Ok(());
+    }
+
+    let input_types: Vec<Type> = io_types.iter().map(|(input, _)| input.clone()).collect();
+    let expected_string = combined_type_string(&input_types, "and");
+
+    match (input, expected_string) {
+        (PipelineData::Empty, _) => Err(ShellError::PipelineEmpty { dst_span: head }),
+        (_, Some(expected_string)) => Err(ShellError::OnlySupportsThisInputType {
+            exp_input_type: expected_string,
+            wrong_type: input.get_type().to_string(),
+            dst_span: head,
+            src_span: input.span().unwrap_or(Span::unknown()),
+        }),
+        // expected_string didn't generate properly, so we can't show the proper error
+        (_, None) => Err(ShellError::NushellFailed {
+            msg: "Command input type strings is empty, despite being non-zero earlier".to_string(),
+        }),
     }
 }
 
@@ -1295,8 +1544,8 @@ fn get_var(ctx: &EvalContext<'_>, var_id: VarId, span: Span) -> Result<Value, Sh
     }
 }
 
-/// Get an environment variable, case-insensitively
-fn get_env_var_case_insensitive<'a>(ctx: &'a mut EvalContext<'_>, key: &str) -> Option<&'a Value> {
+/// Get an environment variable (case-insensitive lookup is handled by EnvName)
+fn get_env_var<'a>(ctx: &'a mut EvalContext<'_>, key: &str) -> Option<&'a Value> {
     // Read scopes in order
     for overlays in ctx
         .stack
@@ -1312,20 +1561,13 @@ fn get_env_var_case_insensitive<'a>(ctx: &'a mut EvalContext<'_>, key: &str) -> 
                 continue;
             };
             let hidden = ctx.stack.env_hidden.get(overlay_name);
-            let is_hidden = |key: &str| hidden.is_some_and(|hidden| hidden.contains(key));
+            let is_hidden = |key: &EnvName| hidden.is_some_and(|hidden| hidden.contains(key));
 
             if let Some(val) = map
-                // Check for exact match
-                .get(key)
+                // Check for exact match (now case-insensitive due to EnvName)
+                .get(&EnvName::from(key))
                 // Skip when encountering an overlay where the key is hidden
-                .filter(|_| !is_hidden(key))
-                .or_else(|| {
-                    // Check to see if it exists at all in the map, with a different case
-                    map.iter().find_map(|(k, v)| {
-                        // Again, skip something that's hidden
-                        (k.eq_ignore_case(key) && !is_hidden(k)).then_some(v)
-                    })
-                })
+                .filter(|_| !is_hidden(&EnvName::from(key)))
             {
                 return Some(val);
             }
@@ -1335,10 +1577,10 @@ fn get_env_var_case_insensitive<'a>(ctx: &'a mut EvalContext<'_>, key: &str) -> 
     None
 }
 
-/// Get the existing name of an environment variable, case-insensitively. This is used to implement
-/// case preservation of environment variables, so that changing an environment variable that
-/// already exists always uses the same case.
-fn get_env_var_name_case_insensitive<'a>(ctx: &mut EvalContext<'_>, key: &'a str) -> Cow<'a, str> {
+/// Get the existing name of an environment variable (case-insensitive lookup is handled by EnvName).
+/// This is used to implement case preservation of environment variables, so that changing an
+/// environment variable that already exists always uses the same case.
+fn get_env_var_name<'a>(ctx: &mut EvalContext<'_>, key: &'a str) -> Cow<'a, str> {
     // Read scopes in order
     ctx.stack
         .env_vars
@@ -1354,55 +1596,120 @@ fn get_env_var_name_case_insensitive<'a>(ctx: &mut EvalContext<'_>, key: &'a str
                 .filter_map(|name| overlays.get(name))
         })
         .find_map(|map| {
-            // Use the hashmap first to try to be faster?
-            if map.contains_key(key) {
-                Some(Cow::Borrowed(key))
+            // Check if it exists (case-insensitive due to EnvName)
+            if map.contains_key(&EnvName::from(key)) {
+                // Find the existing key to preserve its case
+                map.keys()
+                    .find(|k| k.as_str().eq_ignore_case(key))
+                    .map(|k| Cow::Owned(k.as_str().to_owned()))
             } else {
-                map.keys().find(|k| k.eq_ignore_case(key)).map(|k| {
-                    // it exists, but with a different case
-                    Cow::Owned(k.to_owned())
-                })
+                None
             }
         })
-        // didn't exist.
+        // didn't exist, use the provided key
         .unwrap_or(Cow::Borrowed(key))
 }
 
 /// Helper to collect values into [`PipelineData`], preserving original span and metadata
 ///
 /// The metadata is removed if it is the file data source, as that's just meant to mark streams.
-fn collect(data: PipelineData, fallback_span: Span) -> Result<PipelineData, ShellError> {
+///
+/// It doesn't check pipefail if `ignore_error` is true.
+fn collect(
+    pipe: PipelineExecutionData,
+    fallback_span: Span,
+    #[cfg(feature = "os")] ignore_error: bool,
+) -> Result<PipelineData, ShellError> {
+    let data = pipe.body;
     let span = data.span().unwrap_or(fallback_span);
-    let metadata = match data.metadata() {
-        // Remove the `FilePath` metadata, because after `collect` it's no longer necessary to
-        // check where some input came from.
-        Some(PipelineMetadata {
-            data_source: DataSource::FilePath(_),
-            content_type: None,
-        }) => None,
-        other => other,
-    };
+    let metadata = data.metadata().and_then(|m| m.for_collect());
+    #[cfg(feature = "os")]
+    if nu_experimental::PIPE_FAIL.get() && !ignore_error {
+        check_exit_status_future(pipe.exit)?;
+    }
     let value = data.into_value(span)?;
-    Ok(PipelineData::Value(value, metadata))
+    Ok(PipelineData::value(value, metadata))
 }
 
 /// Helper for drain behavior.
-fn drain(ctx: &mut EvalContext<'_>, data: PipelineData) -> Result<InstructionResult, ShellError> {
+fn drain(
+    ctx: &mut EvalContext<'_>,
+    data: PipelineExecutionData,
+) -> Result<InstructionResult, ShellError> {
     use self::InstructionResult::*;
-    match data {
+
+    match data.body {
         PipelineData::ByteStream(stream, ..) => {
             let span = stream.span();
-            if let Err(err) = stream.drain() {
+            let callback_spans = stream.get_caller_spans().clone();
+            if let Err(mut err) = stream.drain() {
                 ctx.stack.set_last_error(&err);
-                return Err(err);
+                if callback_spans.is_empty() {
+                    return Err(err);
+                } else {
+                    for s in callback_spans {
+                        err = ShellError::EvalBlockWithInput {
+                            span: s,
+                            sources: vec![err],
+                        }
+                    }
+                    return Err(err);
+                }
             } else {
                 ctx.stack.set_last_exit_code(0, span);
             }
         }
-        PipelineData::ListStream(stream, ..) => stream.drain()?,
+        PipelineData::ListStream(stream, ..) => {
+            let callback_spans = stream.get_caller_spans().clone();
+            if let Err(mut err) = stream.drain() {
+                if callback_spans.is_empty() {
+                    return Err(err);
+                } else {
+                    for s in callback_spans {
+                        err = ShellError::EvalBlockWithInput {
+                            span: s,
+                            sources: vec![err],
+                        }
+                    }
+                    return Err(err);
+                }
+            }
+        }
         PipelineData::Value(..) | PipelineData::Empty => {}
     }
+
+    let pipefail = nu_experimental::PIPE_FAIL.get();
+    if !pipefail {
+        return Ok(Continue);
+    }
+    #[cfg(feature = "os")]
+    {
+        check_exit_status_future(data.exit).map(|_| Continue)
+    }
+    #[cfg(not(feature = "os"))]
     Ok(Continue)
+}
+
+/// Helper for drainIfEnd behavior
+fn drain_if_end(
+    ctx: &mut EvalContext<'_>,
+    data: PipelineExecutionData,
+) -> Result<PipelineData, ShellError> {
+    let stack = &mut ctx
+        .stack
+        .push_redirection(ctx.redirect_out.clone(), ctx.redirect_err.clone());
+    let result = data.body.drain_to_out_dests(ctx.engine_state, stack)?;
+
+    let pipefail = nu_experimental::PIPE_FAIL.get();
+    if !pipefail {
+        return Ok(result);
+    }
+    #[cfg(feature = "os")]
+    {
+        check_exit_status_future(data.exit).map(|_| result)
+    }
+    #[cfg(not(feature = "os"))]
+    Ok(result)
 }
 
 enum RedirectionStream {
@@ -1422,8 +1729,8 @@ fn open_file(ctx: &EvalContext<'_>, path: &Value, append: bool) -> Result<Arc<Fi
     }
     let file = options
         .create(true)
-        .open(path_expanded)
-        .err_span(path.span())?;
+        .open(&path_expanded)
+        .map_err(|err| IoError::new(err, path.span(), path_expanded))?;
     Ok(Arc::new(file))
 }
 
@@ -1468,14 +1775,14 @@ fn eval_iterate(
     end_index: usize,
 ) -> Result<InstructionResult, ShellError> {
     let mut data = ctx.take_reg(stream);
-    if let PipelineData::ListStream(list_stream, _) = &mut data {
+    if let PipelineData::ListStream(list_stream, _) = &mut data.body {
         // Modify the stream, taking one value off, and branching if it's empty
         if let Some(val) = list_stream.next_value() {
-            ctx.put_reg(dst, val.into_pipeline_data());
+            ctx.put_reg(dst, PipelineExecutionData::from(val.into_pipeline_data()));
             ctx.put_reg(stream, data); // put the stream back so it can be iterated on again
             Ok(InstructionResult::Continue)
         } else {
-            ctx.put_reg(dst, PipelineData::Empty);
+            ctx.put_reg(dst, PipelineExecutionData::empty());
             Ok(InstructionResult::Branch(end_index))
         }
     } else {
@@ -1485,10 +1792,10 @@ fn eval_iterate(
         let span = data.span().unwrap_or(Span::unknown());
         ctx.put_reg(
             stream,
-            PipelineData::ListStream(
-                ListStream::new(data.into_iter(), span, Signals::EMPTY),
+            PipelineExecutionData::from(PipelineData::list_stream(
+                ListStream::new(data.body.into_iter(), span, Signals::EMPTY),
                 metadata,
-            ),
+            )),
         );
         eval_iterate(ctx, dst, stream, end_index)
     }

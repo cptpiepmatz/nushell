@@ -1,10 +1,10 @@
-use fancy_regex::{escape, Regex};
+use fancy_regex::{Regex, escape};
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct SplitRow;
 
-impl Command for SubCommand {
+impl Command for SplitRow {
     fn name(&self) -> &str {
         "split row"
     }
@@ -27,10 +27,10 @@ impl Command for SubCommand {
             .named(
                 "number",
                 SyntaxShape::Int,
-                "Split into maximum number of items",
+                "Split into maximum number of items.",
                 Some('n'),
             )
-            .switch("regex", "use regex syntax for separator", Some('r'))
+            .switch("regex", "Use regex syntax for separator.", Some('r'))
             .category(Category::Strings)
     }
 
@@ -42,10 +42,10 @@ impl Command for SubCommand {
         vec!["separate", "divide", "regex"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Split a string into rows of char",
+                description: "Split a string into rows of char.",
                 example: "'abc' | split row ''",
                 result: Some(Value::list(
                     vec![
@@ -59,7 +59,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split a string into rows by the specified separator",
+                description: "Split a string into rows by the specified separator.",
                 example: "'a--b--c' | split row '--'",
                 result: Some(Value::list(
                     vec![
@@ -71,7 +71,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split a string by '-'",
+                description: "Split a string by '-'.",
                 example: "'-a-b-c-' | split row '-'",
                 result: Some(Value::list(
                     vec![
@@ -85,7 +85,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split a string by regex",
+                description: "Split a string by regex.",
                 example: r"'a   b       c' | split row -r '\s+'",
                 result: Some(Value::list(
                     vec![
@@ -219,8 +219,9 @@ fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, name: Sp
                 }
             } else {
                 vec![Value::error(
-                    ShellError::PipelineMismatch {
+                    ShellError::OnlySupportsThisInputType {
                         exp_input_type: "string".into(),
+                        wrong_type: v.get_type().to_string(),
                         dst_span: name,
                         src_span: v_span,
                     },
@@ -236,9 +237,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(SplitRow)
     }
 }

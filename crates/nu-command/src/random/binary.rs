@@ -1,11 +1,10 @@
+use super::byte_stream::{RandomDistribution, random_byte_stream};
 use nu_engine::command_prelude::*;
-use nu_protocol::format_filesize_from_conf;
-use rand::{thread_rng, RngCore};
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct RandomBinary;
 
-impl Command for SubCommand {
+impl Command for RandomBinary {
     fn name(&self) -> &str {
         "random binary"
     }
@@ -47,7 +46,11 @@ impl Command for SubCommand {
             Value::Filesize { val, .. } => {
                 usize::try_from(val).map_err(|_| ShellError::InvalidValue {
                     valid: "a non-negative int or filesize".into(),
-                    actual: format_filesize_from_conf(val, engine_state.get_config()),
+                    actual: stack
+                        .get_config(engine_state)
+                        .filesize
+                        .format(val)
+                        .to_string(),
                     span: length_val.span(),
                 })
             }
@@ -58,23 +61,23 @@ impl Command for SubCommand {
             }),
         }?;
 
-        let mut rng = thread_rng();
-
-        let mut out = vec![0u8; length];
-        rng.fill_bytes(&mut out);
-
-        Ok(Value::binary(out, call.head).into_pipeline_data())
+        Ok(random_byte_stream(
+            RandomDistribution::Binary,
+            length,
+            call.head,
+            engine_state.signals().clone(),
+        ))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Generate 16 random bytes",
+                description: "Generate 16 random bytes.",
                 example: "random binary 16",
                 result: None,
             },
             Example {
-                description: "Generate 1 random kilobyte",
+                description: "Generate 1 random kilobyte.",
                 example: "random binary 1kb",
                 result: None,
             },
@@ -87,9 +90,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(RandomBinary)
     }
 }

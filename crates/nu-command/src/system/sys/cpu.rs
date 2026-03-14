@@ -1,6 +1,6 @@
 use super::trim_cstyle_null;
 use nu_engine::command_prelude::*;
-use sysinfo::{CpuRefreshKind, System, MINIMUM_CPU_UPDATE_INTERVAL};
+use sysinfo::{CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, System};
 
 #[derive(Clone)]
 pub struct SysCpu;
@@ -15,7 +15,7 @@ impl Command for SysCpu {
             .filter()
             .switch(
                 "long",
-                "Get all available columns (slower, needs to sample CPU over time)",
+                "Get all available columns (slower, needs to sample CPU over time).",
                 Some('l'),
             )
             .category(Category::System)
@@ -37,7 +37,7 @@ impl Command for SysCpu {
         Ok(cpu(long, call.head).into_pipeline_data())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Show info about the system CPUs",
             example: "sys cpu",
@@ -54,9 +54,9 @@ fn cpu(long: bool, span: Span) -> Value {
         // In theory we could just sleep MINIMUM_CPU_UPDATE_INTERVAL, but I've noticed that
         // that gives poor results (error of ~5%). Decided to wait 2x that long, somewhat arbitrarily
         std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL * 2);
-        sys.refresh_cpu_specifics(CpuRefreshKind::new().with_cpu_usage());
+        sys.refresh_cpu_specifics(CpuRefreshKind::nothing().with_cpu_usage());
     } else {
-        sys.refresh_cpu_specifics(CpuRefreshKind::new().with_frequency());
+        sys.refresh_cpu_specifics(CpuRefreshKind::nothing().with_frequency());
     }
 
     let cpus = sys

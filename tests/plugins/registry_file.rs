@@ -140,6 +140,38 @@ fn plugin_add_to_custom_path() {
 }
 
 #[test]
+fn plugin_add_creates_missing_parent_directories() {
+    let example_plugin_path = example_plugin_path();
+    Playground::setup("plugin add creates parent dirs", |dirs, _playground| {
+        // Use a nested path where parent directories don't exist
+        let nested_path = "nested/dirs/test-plugin-file.msgpackz";
+
+        let result = nu!(
+            cwd: dirs.test(),
+            &format!("
+                plugin add --plugin-config {} '{}'
+            ", nested_path, example_plugin_path.display())
+        );
+
+        // Should succeed instead of failing
+        assert!(result.status.success());
+
+        // Verify the parent directories were actually created
+        assert!(dirs.test().join("nested/dirs").exists());
+
+        // Verify the plugin file was created with correct contents
+        let contents = PluginRegistryFile::read_from(
+            File::open(dirs.test().join(nested_path)).expect("failed to open plugin file"),
+            None,
+        )
+        .expect("failed to read plugin file");
+
+        assert_eq!(1, contents.plugins.len());
+        assert_eq!("example", contents.plugins[0].name);
+    })
+}
+
+#[test]
 fn plugin_rm_then_restart_nu() {
     let example_plugin_path = example_plugin_path();
     Playground::setup("plugin rm from custom path", |dirs, playground| {
@@ -378,9 +410,12 @@ fn warning_on_invalid_plugin_item() {
         assert!(result.status.success());
         // The "example" plugin should be unaffected
         assert_eq!(r#"["example"]"#, out);
-        // The warning should be in there
-        assert!(err.contains("registered plugin data"));
-        assert!(err.contains("badtest"));
+        // The warning should be in there. In some terminals stderr may be unavailable,
+        // in which case diagnostics can be emitted via stdout.
+        let combined_output = format!("{out}\n{err}");
+        assert!(combined_output.contains("registered plugin data"));
+        assert!(combined_output.contains("badtest"));
+        assert!(combined_output.contains("Failed to load 1 plugin entry"));
     })
 }
 

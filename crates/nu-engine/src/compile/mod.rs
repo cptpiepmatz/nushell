@@ -1,8 +1,8 @@
 use nu_protocol::{
-    ast::{Block, Pipeline, PipelineRedirection, RedirectionSource, RedirectionTarget},
+    CompileError, IntoSpanned, RegId, Span,
+    ast::{Block, Expr, Pipeline, PipelineRedirection, RedirectionSource, RedirectionTarget},
     engine::StateWorkingSet,
     ir::{Instruction, IrBlock, RedirectMode},
-    CompileError, IntoSpanned, RegId, Span,
 };
 
 mod builder;
@@ -194,11 +194,39 @@ fn compile_pipeline(
             out_reg,
         )?;
 
-        // Clean up the redirection
-        finish_redirection(builder, redirect_modes, out_reg)?;
+        // Only clean up the redirection if current element is NOT
+        // a nested eval expression, since this already cleans it.
+        if !has_nested_eval_expr(&element.expr.expr) {
+            // Clean up the redirection
+            finish_redirection(builder, redirect_modes, out_reg)?;
+        }
 
         // The next pipeline element takes input from this output
         in_reg = Some(out_reg);
     }
     Ok(())
+}
+
+fn has_nested_eval_expr(expr: &Expr) -> bool {
+    is_subexpression(expr) || is_block_call(expr)
+}
+
+fn is_block_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call(inner) => inner
+            .arguments
+            .iter()
+            .any(|arg| matches!(arg.expr().map(|e| &e.expr), Some(Expr::Block(..)))),
+        _ => false,
+    }
+}
+
+fn is_subexpression(expr: &Expr) -> bool {
+    match expr {
+        Expr::FullCellPath(inner) => {
+            matches!(&inner.head.expr, &Expr::Subexpression(..))
+        }
+        Expr::Subexpression(..) => true,
+        _ => false,
+    }
 }

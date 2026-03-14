@@ -1,15 +1,15 @@
-use std::sync::Arc;
-
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
-use nu_protocol::{into_code, Config};
+use nu_protocol::Config;
 use nu_utils::get_system_locale;
 use num_format::ToFormattedString;
+use std::sync::Arc;
 
 struct Arguments {
     decimals_value: Option<i64>,
     cell_paths: Option<Vec<CellPath>>,
     config: Arc<Config>,
+    group_digits: bool,
 }
 
 impl CmdArgument for Arguments {
@@ -19,9 +19,9 @@ impl CmdArgument for Arguments {
 }
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct IntoString;
 
-impl Command for SubCommand {
+impl Command for IntoString {
     fn name(&self) -> &str {
         "into string"
     }
@@ -38,6 +38,8 @@ impl Command for SubCommand {
                 (Type::Filesize, Type::String),
                 (Type::Date, Type::String),
                 (Type::Duration, Type::String),
+                (Type::CellPath, Type::String),
+                (Type::Range, Type::String),
                 (
                     Type::List(Box::new(Type::Any)),
                     Type::List(Box::new(Type::String)),
@@ -51,17 +53,22 @@ impl Command for SubCommand {
                 SyntaxShape::CellPath,
                 "For a data structure input, convert data at the given cell paths.",
             )
+            .switch(
+                "group-digits",
+                "Group digits together by the locale specific thousands separator.",
+                Some('g'),
+            )
             .named(
                 "decimals",
                 SyntaxShape::Int,
-                "decimal digits to which to round",
+                "Decimal digits to which to round.",
                 Some('d'),
             )
             .category(Category::Conversions)
     }
 
     fn description(&self) -> &str {
-        "Convert value to string."
+        "Convert value to a string."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -78,62 +85,67 @@ impl Command for SubCommand {
         string_helper(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "convert int to string and append three decimal places",
+                description: "convert int to string and append three decimal places.",
                 example: "5 | into string --decimals 3",
                 result: Some(Value::test_string("5.000")),
             },
             Example {
-                description: "convert float to string and round to nearest integer",
+                description: "convert float to string and round to nearest integer.",
                 example: "1.7 | into string --decimals 0",
                 result: Some(Value::test_string("2")),
             },
             Example {
-                description: "convert float to string",
+                description: "convert float to string.",
                 example: "1.7 | into string --decimals 1",
                 result: Some(Value::test_string("1.7")),
             },
             Example {
-                description: "convert float to string and limit to 2 decimals",
+                description: "convert float to string and limit to 2 decimals.",
                 example: "1.734 | into string --decimals 2",
                 result: Some(Value::test_string("1.73")),
             },
             Example {
-                description: "convert float to string",
+                description: "convert float to string.",
                 example: "4.3 | into string",
                 result: Some(Value::test_string("4.3")),
             },
             Example {
-                description: "convert string to string",
+                description: "convert string to string.",
                 example: "'1234' | into string",
                 result: Some(Value::test_string("1234")),
             },
             Example {
-                description: "convert boolean to string",
+                description: "convert boolean to string.",
                 example: "true | into string",
                 result: Some(Value::test_string("true")),
             },
             Example {
-                description: "convert date to string",
+                description: "convert date to string.",
                 example: "'2020-10-10 10:00:00 +02:00' | into datetime | into string",
                 result: Some(Value::test_string("Sat Oct 10 10:00:00 2020")),
             },
             Example {
-                description: "convert filepath to string",
+                description: "convert filepath to string.",
                 example: "ls Cargo.toml | get name | into string",
                 result: None,
             },
             Example {
-                description: "convert filesize to string",
-                example: "1KiB | into string",
-                result: Some(Value::test_string("1.0 KiB")),
+                description: "convert filesize to string.",
+                example: "1kB | into string",
+                result: Some(Value::test_string("1.0 kB")),
             },
             Example {
-                description: "convert duration to string",
+                description: "convert duration to string.",
                 example: "9day | into string",
                 result: Some(Value::test_string("1wk 2day")),
+            },
+            Example {
+                description: "convert cell-path to string.",
+                example: "$.name | into string",
+                result: Some(Value::test_string("$.name")),
             },
         ]
     }
@@ -147,13 +159,14 @@ fn string_helper(
 ) -> Result<PipelineData, ShellError> {
     let head = call.head;
     let decimals_value: Option<i64> = call.get_flag(engine_state, stack, "decimals")?;
-    if let Some(decimal_val) = decimals_value {
-        if decimal_val.is_negative() {
-            return Err(ShellError::TypeMismatch {
-                err_message: "Cannot accept negative integers for decimals arguments".to_string(),
-                span: head,
-            });
-        }
+    let group_digits = call.has_flag(engine_state, stack, "group-digits")?;
+    if let Some(decimal_val) = decimals_value
+        && decimal_val.is_negative()
+    {
+        return Err(ShellError::TypeMismatch {
+            err_message: "Cannot accept negative integers for decimals arguments".to_string(),
+            span: head,
+        });
     }
     let cell_paths = call.rest(engine_state, stack, 0)?;
     let cell_paths = (!cell_paths.is_empty()).then_some(cell_paths);
@@ -163,7 +176,7 @@ fn string_helper(
         // within a string stream is actually valid UTF-8. But refuse to do it if it was already set
         // to binary
         if stream.type_().is_string_coercible() {
-            Ok(PipelineData::ByteStream(
+            Ok(PipelineData::byte_stream(
                 stream.with_type(ByteStreamType::String),
                 metadata,
             ))
@@ -181,6 +194,7 @@ fn string_helper(
             decimals_value,
             cell_paths,
             config,
+            group_digits,
         };
         operate(action, args, input, head, engine_state.signals())
     }
@@ -189,10 +203,12 @@ fn string_helper(
 fn action(input: &Value, args: &Arguments, span: Span) -> Value {
     let digits = args.decimals_value;
     let config = &args.config;
+    let group_digits = args.group_digits;
+
     match input {
         Value::Int { val, .. } => {
             let decimal_value = digits.unwrap_or(0) as usize;
-            let res = format_int(*val, false, decimal_value);
+            let res = format_int(*val, group_digits, decimal_value);
             Value::string(res, span)
         }
         Value::Float { val, .. } => {
@@ -205,15 +221,18 @@ fn action(input: &Value, args: &Arguments, span: Span) -> Value {
         }
         Value::Bool { val, .. } => Value::string(val.to_string(), span),
         Value::Date { val, .. } => Value::string(val.format("%c").to_string(), span),
-        Value::String { val, .. } => Value::string(val.to_string(), span),
-        Value::Glob { val, .. } => Value::string(val.to_string(), span),
-
-        Value::Filesize { val: _, .. } => {
-            Value::string(input.to_expanded_string(", ", config), span)
+        Value::String { val, .. } => Value::string(val, span),
+        Value::Glob { val, .. } => Value::string(val, span),
+        Value::CellPath { val, .. } => Value::string(val.to_string(), span),
+        Value::Filesize { val, .. } => {
+            if group_digits {
+                let decimal_value = digits.unwrap_or(0) as usize;
+                Value::string(format_int(val.get(), group_digits, decimal_value), span)
+            } else {
+                Value::string(input.to_expanded_string(", ", config), span)
+            }
         }
         Value::Duration { val: _, .. } => Value::string(input.to_expanded_string("", config), span),
-
-        Value::Error { error, .. } => Value::string(into_code(error).unwrap_or_default(), span),
         Value::Nothing { .. } => Value::string("".to_string(), span),
         Value::Record { .. } => Value::error(
             // Watch out for CantConvert's argument order
@@ -249,6 +268,7 @@ fn action(input: &Value, args: &Arguments, span: Span) -> Value {
                 })
                 .unwrap_or_else(|err| Value::error(err, span))
         }
+        Value::Error { .. } => input.clone(),
         x => Value::error(
             ShellError::CantConvert {
                 to_type: String::from("string"),
@@ -290,9 +310,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    #[env(NU_TEST_LOCALE_OVERRIDE = "en_US.utf8")]
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(IntoString)
     }
 }

@@ -1,12 +1,12 @@
 use nu_engine::command_prelude::*;
 use nu_protocol::{FloatRange, Range};
-use rand::prelude::{thread_rng, Rng};
+use rand::random_range;
 use std::ops::Bound;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct RandomFloat;
 
-impl Command for SubCommand {
+impl Command for RandomFloat {
     fn name(&self) -> &str {
         "random float"
     }
@@ -37,25 +37,25 @@ impl Command for SubCommand {
         float(engine_state, stack, call)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Generate a default float value between 0 and 1",
+                description: "Generate a default float value between 0 and 1.",
                 example: "random float",
                 result: None,
             },
             Example {
-                description: "Generate a random float less than or equal to 500",
+                description: "Generate a random float less than or equal to 500.",
                 example: "random float ..500",
                 result: None,
             },
             Example {
-                description: "Generate a random float greater than or equal to 100000",
+                description: "Generate a random float greater than or equal to 100000.",
                 example: "random float 100000..",
                 result: None,
             },
             Example {
-                description: "Generate a random float between 1.0 and 1.1",
+                description: "Generate a random float between 1.0 and 1.1.",
                 example: "random float 1.0..1.1",
                 result: None,
             },
@@ -70,8 +70,6 @@ fn float(
 ) -> Result<PipelineData, ShellError> {
     let span = call.head;
     let range: Option<Spanned<Range>> = call.opt(engine_state, stack, 0)?;
-
-    let mut thread_rng = thread_rng();
 
     match range {
         Some(range) => {
@@ -90,15 +88,15 @@ fn float(
             }
 
             let value = match range.end() {
-                Bound::Included(end) => thread_rng.gen_range(range.start()..=end),
-                Bound::Excluded(end) => thread_rng.gen_range(range.start()..end),
-                Bound::Unbounded => thread_rng.gen_range(range.start()..f64::INFINITY),
+                Bound::Included(end) => random_range(range.start()..=end),
+                Bound::Excluded(end) => random_range(range.start()..end),
+                Bound::Unbounded => random_range(range.start()..f64::MAX),
             };
 
-            Ok(PipelineData::Value(Value::float(value, span), None))
+            Ok(PipelineData::value(Value::float(value, span), None))
         }
-        None => Ok(PipelineData::Value(
-            Value::float(thread_rng.gen_range(0.0..1.0), span),
+        None => Ok(PipelineData::value(
+            Value::float(random_range(0.0..1.0), span),
             None,
         )),
     }
@@ -109,9 +107,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(RandomFloat)
     }
 }

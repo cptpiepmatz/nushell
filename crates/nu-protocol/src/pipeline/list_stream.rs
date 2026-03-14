@@ -15,6 +15,7 @@ pub type ValueIterator = Box<dyn Iterator<Item = Value> + Send + 'static>;
 pub struct ListStream {
     stream: ValueIterator,
     span: Span,
+    caller_spans: Vec<Span>,
 }
 
 impl ListStream {
@@ -27,12 +28,25 @@ impl ListStream {
         Self {
             stream: Box::new(InterruptIter::new(iter, signals)),
             span,
+            caller_spans: vec![],
         }
     }
 
     /// Returns the [`Span`] associated with this [`ListStream`].
     pub fn span(&self) -> Span {
         self.span
+    }
+
+    /// Push a caller [`Span`] to the bytestream, it's useful to construct a backtrace.
+    pub fn push_caller_span(&mut self, span: Span) {
+        if span != self.span {
+            self.caller_spans.push(span)
+        }
+    }
+
+    /// Get all caller [`Span`], it's useful to construct a backtrace.
+    pub fn get_caller_spans(&self) -> &Vec<Span> {
+        &self.caller_spans
     }
 
     /// Changes the [`Span`] associated with this [`ListStream`].
@@ -61,7 +75,20 @@ impl ListStream {
     }
 
     /// Collect the values of a [`ListStream`] into a list [`Value`].
-    pub fn into_value(self) -> Value {
+    ///
+    /// If any of the values in the stream is a [Value::Error], its inner [ShellError] is returned.
+    pub fn into_value(self) -> Result<Value, ShellError> {
+        Ok(Value::list(
+            self.stream
+                .map(Value::unwrap_error)
+                .collect::<Result<_, _>>()?,
+            self.span,
+        ))
+    }
+
+    /// Collect the values of a [`ListStream`] into a [`Value::List`], preserving [Value::Error]
+    /// items for debugging purposes.
+    pub fn into_debug_value(self) -> Value {
         Value::list(self.stream.collect(), self.span)
     }
 
@@ -94,6 +121,7 @@ impl ListStream {
         Self {
             stream: Box::new(f(self.stream)),
             span: self.span,
+            caller_spans: self.caller_spans,
         }
     }
 
@@ -124,7 +152,7 @@ impl IntoIterator for ListStream {
 
 impl From<ListStream> for PipelineData {
     fn from(stream: ListStream) -> Self {
-        Self::ListStream(stream, None)
+        Self::list_stream(stream, None)
     }
 }
 

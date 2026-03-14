@@ -1,21 +1,23 @@
-use crate::{menus::NuMenuCompleter, NuHelpCompleter};
+use crate::{NuHelpCompleter, menus::NuMenuCompleter};
 use crossterm::event::{KeyCode, KeyModifiers};
 use nu_ansi_term::Style;
 use nu_color_config::{color_record_to_nustyle, lookup_ansi_color_style};
 use nu_engine::eval_block;
 use nu_parser::parse;
 use nu_protocol::{
+    Config, EditBindings, FromValue, ParsedKeybinding, ParsedMenu, PipelineData, Record,
+    ShellError, Span, Type, Value,
     debugger::WithoutDebug,
     engine::{EngineState, Stack, StateWorkingSet},
-    extract_value, Config, EditBindings, FromValue, ParsedKeybinding, ParsedMenu, PipelineData,
-    Record, ShellError, Span, Type, Value,
+    extract_value,
 };
 use reedline::{
+    ColumnarMenu, DescriptionMenu, DescriptionMode, EditCommand, EditCommandDiscriminants, IdeMenu,
+    Keybindings, ListMenu, MenuBuilder, Reedline, ReedlineEvent, ReedlineEventDiscriminants,
+    ReedlineMenu, TextObject, TextObjectScope, TextObjectType, TraversalDirection,
     default_emacs_keybindings, default_vi_insert_keybindings, default_vi_normal_keybindings,
-    ColumnarMenu, DescriptionMenu, DescriptionMode, EditCommand, IdeMenu, Keybindings, ListMenu,
-    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu,
 };
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 const DEFAULT_COMPLETION_MENU: &str = r#"
 {
@@ -27,6 +29,7 @@ const DEFAULT_COMPLETION_MENU: &str = r#"
       columns: 4
       col_width: 20
       col_padding: 2
+      tab_traversal: "horizontal"
   }
   style: {
       text: green,
@@ -49,7 +52,7 @@ const DEFAULT_IDE_COMPLETION_MENU: &str = r#"
     border: true,
     cursor_offset: 0,
     description_mode: "prefer_right"
-    min_description_width: 0
+    min_description_width: 15
     max_description_width: 50
     max_description_height: 10
     description_offset: 1
@@ -97,7 +100,7 @@ const DEFAULT_HELP_MENU: &str = r#"
       col_width: 20
       col_padding: 2
       selection_rows: 4
-      description_rows: 10
+      description_rows: 15
   }
   style: {
       text: green,
@@ -147,7 +150,7 @@ pub(crate) fn add_menus(
                 let mut working_set = StateWorkingSet::new(&engine_state);
                 let output = parse(
                     &mut working_set,
-                    Some(name), // format!("entry #{}", entry_num)
+                    Some(name), // format!("repl_entry #{}", entry_num)
                     definition.as_bytes(),
                     true,
                 );
@@ -158,7 +161,7 @@ pub(crate) fn add_menus(
             engine_state.merge_delta(delta)?;
 
             let mut temp_stack = Stack::new().collect_value();
-            let input = PipelineData::Empty;
+            let input = PipelineData::empty();
             menu_eval_results.push(eval_block::<WithoutDebug>(
                 &engine_state,
                 &mut temp_stack,
@@ -170,7 +173,7 @@ pub(crate) fn add_menus(
 
     let new_engine_state_ref = Arc::new(engine_state);
 
-    for res in menu_eval_results.into_iter() {
+    for res in menu_eval_results.into_iter().map(|p| p.body) {
         if let PipelineData::Value(value, None) = res {
             line_editor = add_menu(
                 line_editor,
@@ -283,6 +286,23 @@ pub(crate) fn add_columnar_menu(
                 let col_padding = col_padding.as_int()?;
                 columnar_menu.with_column_padding(col_padding as usize)
             }
+            Err(_) => columnar_menu,
+        };
+
+        columnar_menu = match extract_value("tab_traversal", val, span) {
+            Ok(tab_traversal) => match tab_traversal.coerce_str()?.as_ref() {
+                "vertical" => columnar_menu.with_traversal_direction(TraversalDirection::Vertical),
+                "horizontal" => {
+                    columnar_menu.with_traversal_direction(TraversalDirection::Horizontal)
+                }
+                str => {
+                    return Err(ShellError::InvalidValue {
+                        valid: "'horizontal' or 'vertical'".into(),
+                        actual: format!("'{str}'"),
+                        span: tab_traversal.span(),
+                    });
+                }
+            },
             Err(_) => columnar_menu,
         };
     }
@@ -740,9 +760,15 @@ fn add_keybinding(
     let span = mode.span();
     match &mode {
         Value::String { val, .. } => match val.as_str() {
-            "emacs" => add_parsed_keybinding(emacs_keybindings, keybinding, config),
-            "vi_insert" => add_parsed_keybinding(insert_keybindings, keybinding, config),
-            "vi_normal" => add_parsed_keybinding(normal_keybindings, keybinding, config),
+            str if str.eq_ignore_ascii_case("emacs") => {
+                add_parsed_keybinding(emacs_keybindings, keybinding, config)
+            }
+            str if str.eq_ignore_ascii_case("vi_insert") => {
+                add_parsed_keybinding(insert_keybindings, keybinding, config)
+            }
+            str if str.eq_ignore_ascii_case("vi_normal") => {
+                add_parsed_keybinding(normal_keybindings, keybinding, config)
+            }
             str => Err(ShellError::InvalidValue {
                 valid: "'emacs', 'vi_insert', or 'vi_normal'".into(),
                 actual: format!("'{str}'"),
@@ -910,10 +936,7 @@ fn parse_event(value: &Value, config: &Config) -> Result<Option<ReedlineEvent>, 
     match value {
         Value::Record { val: record, .. } => match EventType::try_from_record(record, span)? {
             EventType::Send(value) => event_from_record(
-                value
-                    .to_expanded_string("", config)
-                    .to_ascii_lowercase()
-                    .as_str(),
+                value.to_expanded_string("", config).as_str(),
                 record,
                 config,
                 span,
@@ -921,10 +944,7 @@ fn parse_event(value: &Value, config: &Config) -> Result<Option<ReedlineEvent>, 
             .map(Some),
             EventType::Edit(value) => {
                 let edit = edit_from_record(
-                    value
-                        .to_expanded_string("", config)
-                        .to_ascii_lowercase()
-                        .as_str(),
+                    value.to_expanded_string("", config).as_str(),
                     record,
                     config,
                     span,
@@ -990,47 +1010,64 @@ fn event_from_record(
     config: &Config,
     span: Span,
 ) -> Result<ReedlineEvent, ShellError> {
-    let event = match name {
-        "none" => ReedlineEvent::None,
-        "clearscreen" => ReedlineEvent::ClearScreen,
-        "clearscrollback" => ReedlineEvent::ClearScrollback,
-        "historyhintcomplete" => ReedlineEvent::HistoryHintComplete,
-        "historyhintwordcomplete" => ReedlineEvent::HistoryHintWordComplete,
-        "ctrld" => ReedlineEvent::CtrlD,
-        "ctrlc" => ReedlineEvent::CtrlC,
-        "enter" => ReedlineEvent::Enter,
-        "submit" => ReedlineEvent::Submit,
-        "submitornewline" => ReedlineEvent::SubmitOrNewline,
-        "esc" | "escape" => ReedlineEvent::Esc,
-        "up" => ReedlineEvent::Up,
-        "down" => ReedlineEvent::Down,
-        "right" => ReedlineEvent::Right,
-        "left" => ReedlineEvent::Left,
-        "searchhistory" => ReedlineEvent::SearchHistory,
-        "nexthistory" => ReedlineEvent::NextHistory,
-        "previoushistory" => ReedlineEvent::PreviousHistory,
-        "repaint" => ReedlineEvent::Repaint,
-        "menudown" => ReedlineEvent::MenuDown,
-        "menuup" => ReedlineEvent::MenuUp,
-        "menuleft" => ReedlineEvent::MenuLeft,
-        "menuright" => ReedlineEvent::MenuRight,
-        "menunext" => ReedlineEvent::MenuNext,
-        "menuprevious" => ReedlineEvent::MenuPrevious,
-        "menupagenext" => ReedlineEvent::MenuPageNext,
-        "menupageprevious" => ReedlineEvent::MenuPagePrevious,
-        "openeditor" => ReedlineEvent::OpenEditor,
-        "menu" => {
+    use ReedlineEventDiscriminants as RED;
+    let event = match RED::from_str(name) {
+        Ok(RED::None) => ReedlineEvent::None,
+        Ok(RED::HistoryHintComplete) => ReedlineEvent::HistoryHintComplete,
+        Ok(RED::HistoryHintWordComplete) => ReedlineEvent::HistoryHintWordComplete,
+        Ok(RED::CtrlD) => ReedlineEvent::CtrlD,
+        Ok(RED::CtrlC) => ReedlineEvent::CtrlC,
+        Ok(RED::ClearScreen) => ReedlineEvent::ClearScreen,
+        Ok(RED::ClearScrollback) => ReedlineEvent::ClearScrollback,
+        Ok(RED::Enter) => ReedlineEvent::Enter,
+        Ok(RED::Submit) => ReedlineEvent::Submit,
+        Ok(RED::SubmitOrNewline) => ReedlineEvent::SubmitOrNewline,
+        Ok(RED::Esc) => ReedlineEvent::Esc,
+        Ok(RED::Repaint) => ReedlineEvent::Repaint,
+        Ok(RED::PreviousHistory) => ReedlineEvent::PreviousHistory,
+        Ok(RED::Up) => ReedlineEvent::Up,
+        Ok(RED::Down) => ReedlineEvent::Down,
+        Ok(RED::Right) => ReedlineEvent::Right,
+        Ok(RED::Left) => ReedlineEvent::Left,
+        Ok(RED::ToStart) => ReedlineEvent::ToStart,
+        Ok(RED::ToEnd) => ReedlineEvent::ToEnd,
+        Ok(RED::NextHistory) => ReedlineEvent::NextHistory,
+        Ok(RED::SearchHistory) => ReedlineEvent::SearchHistory,
+        Ok(RED::Menu) => {
             let menu = extract_value("name", record, span)?;
             ReedlineEvent::Menu(menu.to_expanded_string("", config))
         }
-        "executehostcommand" => {
+        Ok(RED::MenuNext) => ReedlineEvent::MenuNext,
+        Ok(RED::MenuPrevious) => ReedlineEvent::MenuPrevious,
+        Ok(RED::MenuUp) => ReedlineEvent::MenuUp,
+        Ok(RED::MenuDown) => ReedlineEvent::MenuDown,
+        Ok(RED::MenuLeft) => ReedlineEvent::MenuLeft,
+        Ok(RED::MenuRight) => ReedlineEvent::MenuRight,
+        Ok(RED::MenuPageNext) => ReedlineEvent::MenuPageNext,
+        Ok(RED::MenuPagePrevious) => ReedlineEvent::MenuPagePrevious,
+        Ok(RED::ExecuteHostCommand) => {
             let cmd = extract_value("cmd", record, span)?;
             ReedlineEvent::ExecuteHostCommand(cmd.to_expanded_string("", config))
         }
-        str => {
+        Ok(RED::OpenEditor) => ReedlineEvent::OpenEditor,
+        Ok(RED::ViChangeMode) => {
+            let mode = extract_value("mode", record, span)?;
+            ReedlineEvent::ViChangeMode(mode.as_str()?.to_owned())
+        }
+        // Non-sensical for user configuration:
+        //
+        // `ReedlineEvent::Mouse` - itself a no-op
+        // `ReedlineEvent::Resize` - requires size info specifically from the ANSI resize event
+        //
+        // Handled above in `parse_event`:
+        //
+        // `ReedlineEvent::Edit`
+        // `ReedlineEvent::Multiple`
+        // `ReedlineEvent::UntilFound`
+        Ok(RED::Mouse | RED::Resize) | Ok(RED::Edit | RED::Multiple | RED::UntilFound) | Err(_) => {
             return Err(ShellError::InvalidValue {
                 valid: "a reedline event".into(),
-                actual: format!("'{str}'"),
+                actual: format!("'{name}'"),
                 span,
             });
         }
@@ -1039,80 +1076,139 @@ fn event_from_record(
     Ok(event)
 }
 
+// This is displayed in `keybindings list` command
+pub(crate) fn display_reedline_event(event: ReedlineEventDiscriminants) -> Option<&'static str> {
+    use ReedlineEventDiscriminants as RED;
+    Some(match event {
+        RED::None => "None",
+        RED::HistoryHintComplete => "HistoryHintComplete",
+        RED::HistoryHintWordComplete => "HistoryHintWordComplete",
+        RED::CtrlD => "CtrlD",
+        RED::CtrlC => "CtrlC",
+        RED::ClearScreen => "ClearScreen",
+        RED::ClearScrollback => "ClearScrollback",
+        RED::Enter => "Enter",
+        RED::Submit => "Submit",
+        RED::SubmitOrNewline => "SubmitOrNewline",
+        RED::Esc => "Esc",
+        RED::Edit => "Edit: <EditCommand> or Edit: <EditCommand> value: <string>",
+        RED::Repaint => "Repaint",
+        RED::PreviousHistory => "PreviousHistory",
+        RED::Up => "Up",
+        RED::Down => "Down",
+        RED::ToStart => "ToStart",
+        RED::ToEnd => "ToEnd",
+        RED::Right => "Right",
+        RED::Left => "Left",
+        RED::NextHistory => "NextHistory",
+        RED::SearchHistory => "SearchHistory",
+        RED::Multiple => "Multiple[ {{ ReedLineEvents, }} ]",
+        RED::UntilFound => "UntilFound [ {{ ReedLineEvents, }} ]",
+        RED::Menu => "Menu Name: <string>",
+        RED::MenuNext => "MenuNext",
+        RED::MenuPrevious => "MenuPrevious",
+        RED::MenuUp => "MenuUp",
+        RED::MenuDown => "MenuDown",
+        RED::MenuLeft => "MenuLeft",
+        RED::MenuRight => "MenuRight",
+        RED::MenuPageNext => "MenuPageNext",
+        RED::MenuPagePrevious => "MenuPagePrevious",
+        RED::ExecuteHostCommand => "ExecuteHostCommand",
+        RED::OpenEditor => "OpenEditor",
+        RED::ViChangeMode => "ViChangeMode mode: <string>",
+        RED::Mouse | RED::Resize => return None,
+    })
+}
+
 fn edit_from_record(
     name: &str,
     record: &Record,
     config: &Config,
     span: Span,
 ) -> Result<EditCommand, ShellError> {
-    let edit = match name {
-        "movetostart" => EditCommand::MoveToStart {
+    use EditCommandDiscriminants as ECD;
+    let edit = match ECD::from_str(name) {
+        Ok(ECD::MoveToStart) => EditCommand::MoveToStart {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movetolinestart" => EditCommand::MoveToLineStart {
+        Ok(ECD::MoveToLineStart) => EditCommand::MoveToLineStart {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-
-        "movetoend" => EditCommand::MoveToEnd {
+        Ok(ECD::MoveToLineNonBlankStart) => EditCommand::MoveToLineNonBlankStart {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movetolineend" => EditCommand::MoveToLineEnd {
+        Ok(ECD::MoveToEnd) => EditCommand::MoveToEnd {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "moveleft" => EditCommand::MoveLeft {
+        Ok(ECD::MoveToLineEnd) => EditCommand::MoveToLineEnd {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "moveright" => EditCommand::MoveRight {
+        Ok(ECD::MoveLineUp) => EditCommand::MoveLineUp {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movewordleft" => EditCommand::MoveWordLeft {
+        Ok(ECD::MoveLineDown) => EditCommand::MoveLineDown {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movebigwordleft" => EditCommand::MoveBigWordLeft {
+        Ok(ECD::MoveLeft) => EditCommand::MoveLeft {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movewordright" => EditCommand::MoveWordRight {
+        Ok(ECD::MoveRight) => EditCommand::MoveRight {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movewordrightend" => EditCommand::MoveWordRightEnd {
+        Ok(ECD::MoveWordLeft) => EditCommand::MoveWordLeft {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movebigwordrightend" => EditCommand::MoveBigWordRightEnd {
+        Ok(ECD::MoveBigWordLeft) => EditCommand::MoveBigWordLeft {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movewordrightstart" => EditCommand::MoveWordRightStart {
+        Ok(ECD::MoveWordRight) => EditCommand::MoveWordRight {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movebigwordrightstart" => EditCommand::MoveBigWordRightStart {
+        Ok(ECD::MoveWordRightStart) => EditCommand::MoveWordRightStart {
             select: extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
         },
-        "movetoposition" => {
+        Ok(ECD::MoveBigWordRightStart) => EditCommand::MoveBigWordRightStart {
+            select: extract_value("select", record, span)
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+        },
+        Ok(ECD::MoveWordRightEnd) => EditCommand::MoveWordRightEnd {
+            select: extract_value("select", record, span)
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+        },
+        Ok(ECD::MoveBigWordRightEnd) => EditCommand::MoveBigWordRightEnd {
+            select: extract_value("select", record, span)
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+        },
+        Ok(ECD::MoveToPosition) => {
             let value = extract_value("value", record, span)?;
             let select = extract_value("select", record, span)
                 .and_then(|value| value.as_bool())
@@ -1123,54 +1219,71 @@ fn edit_from_record(
                 select,
             }
         }
-        "insertchar" => {
+        Ok(ECD::InsertChar) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             EditCommand::InsertChar(char)
         }
-        "insertstring" => {
+        Ok(ECD::InsertString) => {
             let value = extract_value("value", record, span)?;
             EditCommand::InsertString(value.to_expanded_string("", config))
         }
-        "insertnewline" => EditCommand::InsertNewline,
-        "backspace" => EditCommand::Backspace,
-        "delete" => EditCommand::Delete,
-        "cutchar" => EditCommand::CutChar,
-        "backspaceword" => EditCommand::BackspaceWord,
-        "deleteword" => EditCommand::DeleteWord,
-        "clear" => EditCommand::Clear,
-        "cleartolineend" => EditCommand::ClearToLineEnd,
-        "cutcurrentline" => EditCommand::CutCurrentLine,
-        "cutfromstart" => EditCommand::CutFromStart,
-        "cutfromlinestart" => EditCommand::CutFromLineStart,
-        "cuttoend" => EditCommand::CutToEnd,
-        "cuttolineend" => EditCommand::CutToLineEnd,
-        "cutwordleft" => EditCommand::CutWordLeft,
-        "cutbigwordleft" => EditCommand::CutBigWordLeft,
-        "cutwordright" => EditCommand::CutWordRight,
-        "cutbigwordright" => EditCommand::CutBigWordRight,
-        "cutwordrighttonext" => EditCommand::CutWordRightToNext,
-        "cutbigwordrighttonext" => EditCommand::CutBigWordRightToNext,
-        "pastecutbufferbefore" => EditCommand::PasteCutBufferBefore,
-        "pastecutbufferafter" => EditCommand::PasteCutBufferAfter,
-        "uppercaseword" => EditCommand::UppercaseWord,
-        "lowercaseword" => EditCommand::LowercaseWord,
-        "capitalizechar" => EditCommand::CapitalizeChar,
-        "swapwords" => EditCommand::SwapWords,
-        "swapgraphemes" => EditCommand::SwapGraphemes,
-        "undo" => EditCommand::Undo,
-        "redo" => EditCommand::Redo,
-        "cutrightuntil" => {
+        Ok(ECD::InsertNewline) => EditCommand::InsertNewline,
+        Ok(ECD::ReplaceChar) => {
+            let value = extract_value("value", record, span)?;
+            let char = extract_char(value)?;
+            EditCommand::ReplaceChar(char)
+        }
+        Ok(ECD::Backspace) => EditCommand::Backspace,
+        Ok(ECD::Delete) => EditCommand::Delete,
+        Ok(ECD::CutChar) => EditCommand::CutChar,
+        Ok(ECD::BackspaceWord) => EditCommand::BackspaceWord,
+        Ok(ECD::DeleteWord) => EditCommand::DeleteWord,
+        Ok(ECD::Clear) => EditCommand::Clear,
+        Ok(ECD::ClearToLineEnd) => EditCommand::ClearToLineEnd,
+        Ok(ECD::Complete) => EditCommand::Complete,
+        Ok(ECD::CutCurrentLine) => EditCommand::CutCurrentLine,
+        Ok(ECD::CutFromStart) => EditCommand::CutFromStart,
+        Ok(ECD::CutFromStartLinewise) => EditCommand::CutFromStartLinewise {
+            leave_blank_line: extract_value("value", record, span)
+                .and_then(|value| value.as_bool())?,
+        },
+        Ok(ECD::CutFromLineStart) => EditCommand::CutFromLineStart,
+        Ok(ECD::CutFromLineNonBlankStart) => EditCommand::CutFromLineNonBlankStart,
+        Ok(ECD::CutToEnd) => EditCommand::CutToEnd,
+        Ok(ECD::CutToEndLinewise) => EditCommand::CutToEndLinewise {
+            leave_blank_line: extract_value("value", record, span)
+                .and_then(|value| value.as_bool())?,
+        },
+        Ok(ECD::CutToLineEnd) => EditCommand::CutToLineEnd,
+        Ok(ECD::KillLine) => EditCommand::KillLine,
+        Ok(ECD::CutWordLeft) => EditCommand::CutWordLeft,
+        Ok(ECD::CutBigWordLeft) => EditCommand::CutBigWordLeft,
+        Ok(ECD::CutWordRight) => EditCommand::CutWordRight,
+        Ok(ECD::CutBigWordRight) => EditCommand::CutBigWordRight,
+        Ok(ECD::CutWordRightToNext) => EditCommand::CutWordRightToNext,
+        Ok(ECD::CutBigWordRightToNext) => EditCommand::CutBigWordRightToNext,
+        Ok(ECD::PasteCutBufferBefore) => EditCommand::PasteCutBufferBefore,
+        Ok(ECD::PasteCutBufferAfter) => EditCommand::PasteCutBufferAfter,
+        Ok(ECD::UppercaseWord) => EditCommand::UppercaseWord,
+        Ok(ECD::LowercaseWord) => EditCommand::LowercaseWord,
+        Ok(ECD::CapitalizeChar) => EditCommand::CapitalizeChar,
+        Ok(ECD::SwitchcaseChar) => EditCommand::SwitchcaseChar,
+        Ok(ECD::SwapWords) => EditCommand::SwapWords,
+        Ok(ECD::SwapGraphemes) => EditCommand::SwapGraphemes,
+        Ok(ECD::Undo) => EditCommand::Undo,
+        Ok(ECD::Redo) => EditCommand::Redo,
+        Ok(ECD::CutRightUntil) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             EditCommand::CutRightUntil(char)
         }
-        "cutrightbefore" => {
+        Ok(ECD::CutRightBefore) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             EditCommand::CutRightBefore(char)
         }
-        "moverightuntil" => {
+        Ok(ECD::MoveRightUntil) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             let select = extract_value("select", record, span)
@@ -1178,7 +1291,7 @@ fn edit_from_record(
                 .unwrap_or(false);
             EditCommand::MoveRightUntil { c: char, select }
         }
-        "moverightbefore" => {
+        Ok(ECD::MoveRightBefore) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             let select = extract_value("select", record, span)
@@ -1186,17 +1299,17 @@ fn edit_from_record(
                 .unwrap_or(false);
             EditCommand::MoveRightBefore { c: char, select }
         }
-        "cutleftuntil" => {
+        Ok(ECD::CutLeftUntil) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             EditCommand::CutLeftUntil(char)
         }
-        "cutleftbefore" => {
+        Ok(ECD::CutLeftBefore) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             EditCommand::CutLeftBefore(char)
         }
-        "moveleftuntil" => {
+        Ok(ECD::MoveLeftUntil) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             let select = extract_value("select", record, span)
@@ -1204,7 +1317,7 @@ fn edit_from_record(
                 .unwrap_or(false);
             EditCommand::MoveLeftUntil { c: char, select }
         }
-        "moveleftbefore" => {
+        Ok(ECD::MoveLeftBefore) => {
             let value = extract_value("value", record, span)?;
             let char = extract_char(value)?;
             let select = extract_value("select", record, span)
@@ -1212,27 +1325,206 @@ fn edit_from_record(
                 .unwrap_or(false);
             EditCommand::MoveLeftBefore { c: char, select }
         }
-        "complete" => EditCommand::Complete,
-        "cutselection" => EditCommand::CutSelection,
+        Ok(ECD::SelectAll) => EditCommand::SelectAll,
+        Ok(ECD::CutSelection) => EditCommand::CutSelection,
+        Ok(ECD::CopySelection) => EditCommand::CopySelection,
+        Ok(ECD::Paste) => EditCommand::Paste,
+        Ok(ECD::CopyFromStart) => EditCommand::CopyFromStart,
+        Ok(ECD::CopyFromStartLinewise) => EditCommand::CopyFromStartLinewise,
+        Ok(ECD::CopyFromLineStart) => EditCommand::CopyFromLineStart,
+        Ok(ECD::CopyFromLineNonBlankStart) => EditCommand::CopyFromLineNonBlankStart,
+        Ok(ECD::CopyToEnd) => EditCommand::CopyToEnd,
+        Ok(ECD::CopyToEndLinewise) => EditCommand::CopyToEndLinewise,
+        Ok(ECD::CopyToLineEnd) => EditCommand::CopyToLineEnd,
+        Ok(ECD::CopyCurrentLine) => EditCommand::CopyCurrentLine,
+        Ok(ECD::CopyWordLeft) => EditCommand::CopyWordLeft,
+        Ok(ECD::CopyBigWordLeft) => EditCommand::CopyBigWordLeft,
+        Ok(ECD::CopyWordRight) => EditCommand::CopyWordRight,
+        Ok(ECD::CopyBigWordRight) => EditCommand::CopyBigWordRight,
+        Ok(ECD::CopyWordRightToNext) => EditCommand::CopyWordRightToNext,
+        Ok(ECD::CopyBigWordRightToNext) => EditCommand::CopyBigWordRightToNext,
+        Ok(ECD::CopyLeft) => EditCommand::CopyLeft,
+        Ok(ECD::CopyRight) => EditCommand::CopyRight,
+        Ok(ECD::CopyRightUntil) => {
+            let value = extract_value("value", record, span)?;
+            let char = extract_char(value)?;
+            EditCommand::CopyRightUntil(char)
+        }
+        Ok(ECD::CopyRightBefore) => {
+            let value = extract_value("value", record, span)?;
+            let char = extract_char(value)?;
+            EditCommand::CopyRightBefore(char)
+        }
+        Ok(ECD::CopyLeftUntil) => {
+            let value = extract_value("value", record, span)?;
+            let char = extract_char(value)?;
+            EditCommand::CopyLeftUntil(char)
+        }
+        Ok(ECD::CopyLeftBefore) => {
+            let value = extract_value("value", record, span)?;
+            let char = extract_char(value)?;
+            EditCommand::CopyLeftBefore(char)
+        }
+        Ok(ECD::SwapCursorAndAnchor) => EditCommand::SwapCursorAndAnchor,
         #[cfg(feature = "system-clipboard")]
-        "cutselectionsystem" => EditCommand::CutSelectionSystem,
-        "copyselection" => EditCommand::CopySelection,
+        Ok(ECD::CutSelectionSystem) => EditCommand::CutSelectionSystem,
         #[cfg(feature = "system-clipboard")]
-        "copyselectionsystem" => EditCommand::CopySelectionSystem,
-        "paste" => EditCommand::Paste,
+        Ok(ECD::CopySelectionSystem) => EditCommand::CopySelectionSystem,
         #[cfg(feature = "system-clipboard")]
-        "pastesystem" => EditCommand::PasteSystem,
-        "selectall" => EditCommand::SelectAll,
-        str => {
+        Ok(ECD::PasteSystem) => EditCommand::PasteSystem,
+        Ok(ECD::CutInsidePair) => {
+            let value = extract_value("left", record, span)?;
+            let left = extract_char(value)?;
+            let value = extract_value("right", record, span)?;
+            let right = extract_char(value)?;
+            EditCommand::CutInsidePair { left, right }
+        }
+        Ok(ECD::CopyInsidePair) => {
+            let value = extract_value("left", record, span)?;
+            let left = extract_char(value)?;
+            let value = extract_value("right", record, span)?;
+            let right = extract_char(value)?;
+            EditCommand::CopyInsidePair { left, right }
+        }
+        Ok(ECD::CutAroundPair) => {
+            let value = extract_value("left", record, span)?;
+            let left = extract_char(value)?;
+            let value = extract_value("right", record, span)?;
+            let right = extract_char(value)?;
+            EditCommand::CutAroundPair { left, right }
+        }
+        Ok(ECD::CopyAroundPair) => {
+            let value = extract_value("left", record, span)?;
+            let left = extract_char(value)?;
+            let value = extract_value("right", record, span)?;
+            let right = extract_char(value)?;
+            EditCommand::CopyAroundPair { left, right }
+        }
+        Ok(ECD::CopyTextObject) => EditCommand::CopyTextObject {
+            text_object: parse_text_object(record, config, span)?,
+        },
+        Ok(ECD::CutTextObject) => EditCommand::CutTextObject {
+            text_object: parse_text_object(record, config, span)?,
+        },
+        // `EditCommand::ReplaceChars` - Internal hack not sanely implementable as a
+        // standalone binding
+        Ok(ECD::ReplaceChars) | Err(_) => {
             return Err(ShellError::InvalidValue {
                 valid: "a reedline EditCommand".into(),
-                actual: format!("'{str}'"),
+                actual: format!("'{name}'"),
                 span,
             });
         }
     };
 
     Ok(edit)
+}
+
+// This is displayed in `keybindings list` command
+pub(crate) fn display_edit_command(edit: EditCommandDiscriminants) -> Option<&'static str> {
+    use EditCommandDiscriminants as ECD;
+    Some(match edit {
+        ECD::MoveToStart => "MoveToStart Optional[select: <bool>]",
+        ECD::MoveToLineStart => "MoveToLineStart Optional[select: <bool>]",
+        ECD::MoveToLineNonBlankStart => "MoveToLineNonBlankStart Optional[select: <bool>]",
+        ECD::MoveToEnd => "MoveToEnd Optional[select: <bool>]",
+        ECD::MoveToLineEnd => "MoveToLineEnd Optional[select: <bool>]",
+        ECD::MoveLineUp => "MoveLineUp Optional[select: <bool>]",
+        ECD::MoveLineDown => "MoveLineDown Optional[select: <bool>]",
+        ECD::MoveLeft => "MoveLeft Optional[select: <bool>]",
+        ECD::MoveRight => "MoveRight Optional[select: <bool>]",
+        ECD::MoveWordLeft => "MoveWordLeft Optional[select: <bool>]",
+        ECD::MoveBigWordLeft => "MoveBigWordLeft Optional[select: <bool>]",
+        ECD::MoveWordRight => "MoveWordRight Optional[select: <bool>]",
+        ECD::MoveWordRightEnd => "MoveWordRightEnd Optional[select: <bool>]",
+        ECD::MoveBigWordRightEnd => "MoveBigWordRightEnd Optional[select: <bool>]",
+        ECD::MoveWordRightStart => "MoveWordRightStart Optional[select: <bool>]",
+        ECD::MoveBigWordRightStart => "MoveBigWordRightStart Optional[select: <bool>]",
+        ECD::MoveToPosition => "MoveToPosition  Value: <int>, Optional[select: <bool>]",
+        ECD::MoveLeftUntil => "MoveLeftUntil Value: <char>, Optional[select: <bool>]",
+        ECD::MoveLeftBefore => "MoveLeftBefore Value: <char>, Optional[select: <bool>]",
+        ECD::InsertChar => "InsertChar  Value: <char>",
+        ECD::InsertString => "InsertString Value: <string>",
+        ECD::InsertNewline => "InsertNewline",
+        ECD::ReplaceChar => "ReplaceChar <char>",
+        ECD::Backspace => "Backspace",
+        ECD::Delete => "Delete",
+        ECD::CutChar => "CutChar",
+        ECD::BackspaceWord => "BackspaceWord",
+        ECD::DeleteWord => "DeleteWord",
+        ECD::Clear => "Clear",
+        ECD::ClearToLineEnd => "ClearToLineEnd",
+        ECD::Complete => "Complete",
+        ECD::CutCurrentLine => "CutCurrentLine",
+        ECD::CutFromStart => "CutFromStart",
+        ECD::CutFromStartLinewise => "CutFromStartLinewise Value: <bool>",
+        ECD::CutFromLineStart => "CutFromLineStart",
+        ECD::CutFromLineNonBlankStart => "CutFromLineNonBlankStart",
+        ECD::CutToEnd => "CutToEnd",
+        ECD::CutToEndLinewise => "CutToEndLinewise Value: <bool>",
+        ECD::CutToLineEnd => "CutToLineEnd",
+        ECD::KillLine => "KillLine",
+        ECD::CutWordLeft => "CutWordLeft",
+        ECD::CutBigWordLeft => "CutBigWordLeft",
+        ECD::CutWordRight => "CutWordRight",
+        ECD::CutBigWordRight => "CutBigWordRight",
+        ECD::CutWordRightToNext => "CutWordRightToNext",
+        ECD::CutBigWordRightToNext => "CutBigWordRightToNext",
+        ECD::PasteCutBufferBefore => "PasteCutBufferBefore",
+        ECD::PasteCutBufferAfter => "PasteCutBufferAfter",
+        ECD::UppercaseWord => "UppercaseWord",
+        ECD::LowercaseWord => "LowercaseWord",
+        ECD::SwitchcaseChar => "SwitchcaseChar",
+        ECD::CapitalizeChar => "CapitalizeChar",
+        ECD::SwapWords => "SwapWords",
+        ECD::SwapGraphemes => "SwapGraphemes",
+        ECD::Undo => "Undo",
+        ECD::Redo => "Redo",
+        ECD::CutRightUntil => "CutRightUntil Value: <char>",
+        ECD::CutRightBefore => "CutRightBefore Value: <char>",
+        ECD::MoveRightUntil => "MoveRightUntil Value: <char>",
+        ECD::MoveRightBefore => "MoveRightBefore Value: <char>",
+        ECD::CutLeftUntil => "CutLeftUntil Value: <char>",
+        ECD::CutLeftBefore => "CutLeftBefore Value: <char>",
+        ECD::SelectAll => "SelectAll",
+        ECD::CutSelection => "CutSelection",
+        ECD::CopySelection => "CopySelection",
+        ECD::Paste => "Paste",
+        ECD::CopyFromStart => "CopyFromStart",
+        ECD::CopyFromStartLinewise => "CopyFromStartLinewise",
+        ECD::CopyFromLineStart => "CopyFromLineStart",
+        ECD::CopyFromLineNonBlankStart => "CopyFromLineNonBlankStart",
+        ECD::CopyToEnd => "CopyToEnd",
+        ECD::CopyToEndLinewise => "CopyToEndLinewise",
+        ECD::CopyToLineEnd => "CopyToLineEnd",
+        ECD::CopyCurrentLine => "CopyCurrentLine",
+        ECD::CopyWordLeft => "CopyWordLeft",
+        ECD::CopyBigWordLeft => "CopyBigWordLeft",
+        ECD::CopyWordRight => "CopyWordRight",
+        ECD::CopyBigWordRight => "CopyBigWordRight",
+        ECD::CopyWordRightToNext => "CopyWordRightToNext",
+        ECD::CopyBigWordRightToNext => "CopyBigWordRightToNext",
+        ECD::CopyLeft => "CopyLeft",
+        ECD::CopyRight => "CopyRight",
+        ECD::CopyRightUntil => "CopyRightUntil Value: <char>",
+        ECD::CopyRightBefore => "CopyRightBefore Value: <char>",
+        ECD::CopyLeftUntil => "CopyLeftUntil Value: <char>",
+        ECD::CopyLeftBefore => "CopyLeftBefore Value: <char>",
+        ECD::SwapCursorAndAnchor => "SwapCursorAndAnchor",
+        #[cfg(feature = "system-clipboard")]
+        ECD::CutSelectionSystem => "CutSelectionSystem",
+        #[cfg(feature = "system-clipboard")]
+        ECD::CopySelectionSystem => "CopySelectionSystem",
+        #[cfg(feature = "system-clipboard")]
+        ECD::PasteSystem => "PasteSystem",
+        ECD::CutInsidePair => "CutInsidePair Value: <char> <char>",
+        ECD::CopyInsidePair => "CopyInsidePair Value: <char> <char>",
+        ECD::CutAroundPair => "CutAroundPair Value: <char> <char>",
+        ECD::CopyAroundPair => "CopyAroundPair Value: <char> <char>",
+        ECD::CutTextObject => "CutTextObject Value: <TextObject>",
+        ECD::CopyTextObject => "CopyTextObject Value: <TextObject>",
+        ECD::ReplaceChars => return None,
+    })
 }
 
 fn extract_char(value: &Value) -> Result<char, ShellError> {
@@ -1253,6 +1545,48 @@ fn extract_char(value: &Value) -> Result<char, ShellError> {
             span: value.span(),
         })
     }
+}
+
+fn parse_text_object(
+    record: &Record,
+    config: &Config,
+    span: Span,
+) -> Result<TextObject, ShellError> {
+    let scope_value = extract_value("scope", record, span)?;
+    let scope_str = scope_value
+        .to_expanded_string("", config)
+        .to_ascii_lowercase();
+    let scope = match scope_str.as_str() {
+        "inner" => TextObjectScope::Inner,
+        "around" => TextObjectScope::Around,
+        str => {
+            return Err(ShellError::InvalidValue {
+                valid: "'inner' or 'around'".into(),
+                actual: format!("'{str}'"),
+                span: scope_value.span(),
+            });
+        }
+    };
+
+    let type_value = extract_value("object_type", record, span)?;
+    let type_str = type_value
+        .to_expanded_string("", config)
+        .to_ascii_lowercase();
+    let object_type = match type_str.as_str() {
+        "word" => TextObjectType::Word,
+        "bigword" => TextObjectType::BigWord,
+        "brackets" | "bracket" => TextObjectType::Brackets,
+        "quote" | "quotes" => TextObjectType::Quote,
+        str => {
+            return Err(ShellError::InvalidValue {
+                valid: "'word', 'bigword', 'brackets', or 'quote'".into(),
+                actual: format!("'{str}'"),
+                span: type_value.span(),
+            });
+        }
+    };
+
+    Ok(TextObject { scope, object_type })
 }
 
 #[cfg(test)]

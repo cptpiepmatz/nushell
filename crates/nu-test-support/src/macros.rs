@@ -1,3 +1,5 @@
+use kitest::println;
+
 /// Run a command in nu and get its output
 ///
 /// The `nu!` macro accepts a number of options like the `cwd` in which the
@@ -51,7 +53,7 @@
 /// ```
 #[macro_export]
 macro_rules! nu {
-    // In the `@options` phase, we restucture all the
+    // In the `@options` phase, we restructure all the
     // `$field_1: $value_1, $field_2: $value_2, ...`
     // pairs to a structure like
     // `@options[ $field_1 => $value_1 ; $field_2 => $value_2 ; ... ]`.
@@ -89,7 +91,7 @@ macro_rules! nu {
         // Here we parse the options into a `NuOpts` struct
         let opts = nu!(@nu_opts $($options)*);
         // and format the `$path` using the `$part`s
-        let path = nu!(@format_path $path, $($part),*);
+        let path = $path;
         // Then finally we go to the `@main` phase, where the actual work is done.
         nu!(@main opts, path)
     }};
@@ -103,15 +105,6 @@ macro_rules! nu {
             ..Default::default()
         }
     };
-
-    // Helper to format `$path`.
-    (@format_path $path:expr $(,)?) => {
-        // When there are no `$part`s, do not format anything
-        $path
-    };
-    (@format_path $path:expr, $($part:expr),* $(,)?) => {{
-        format!($path, $( $part ),*)
-    }};
 
     // Do the actual work.
     (@main $opts:expr, $path:expr) => {{
@@ -127,7 +120,7 @@ macro_rules! nu {
 
 #[macro_export]
 macro_rules! nu_with_std {
-    // In the `@options` phase, we restucture all the
+    // In the `@options` phase, we restructure all the
     // `$field_1: $value_1, $field_2: $value_2, ...`
     // pairs to a structure like
     // `@options[ $field_1 => $value_1 ; $field_2 => $value_2 ; ... ]`.
@@ -233,9 +226,8 @@ macro_rules! nu_with_plugins {
 
 }
 
-use crate::{Outcome, NATIVE_PATH_ENV_VAR};
+use crate::{NATIVE_PATH_ENV_VAR, Outcome};
 use nu_path::{AbsolutePath, AbsolutePathBuf, Path, PathBuf};
-use nu_utils::escape_quote_string;
 use std::{
     ffi::OsStr,
     process::{Command, Stdio},
@@ -247,6 +239,7 @@ pub struct NuOpts {
     pub cwd: Option<AbsolutePathBuf>,
     pub locale: Option<String>,
     pub envs: Option<Vec<(String, String)>>,
+    pub experimental: Option<Vec<String>>,
     pub collapse_output: Option<bool>,
     // Note: At the time this was added, passing in a file path was more convenient. However,
     // passing in file contents seems like a better API - consider this when adding new uses of
@@ -262,7 +255,7 @@ pub fn nu_run_test(opts: NuOpts, commands: impl AsRef<str>, with_std: bool) -> O
     let mut paths = crate::shell_os_paths();
     paths.insert(0, test_bins.into());
 
-    let commands = commands.as_ref().lines().collect::<Vec<_>>().join("; ");
+    let commands = commands.as_ref();
 
     let paths_joined = match std::env::join_paths(paths) {
         Ok(all) => all,
@@ -290,18 +283,20 @@ pub fn nu_run_test(opts: NuOpts, commands: impl AsRef<str>, with_std: bool) -> O
         None => command.arg("--no-config-file"),
     };
 
+    if let Some(experimental_opts) = opts.experimental {
+        let opts = format!("[{}]", experimental_opts.join(","));
+        command.arg(format!("--experimental-options={opts}"));
+    }
+
     if !with_std {
         command.arg("--no-std-lib");
     }
     // Use plain errors to help make error text matching more consistent
-    command.args(["--error-style", "plain"]);
-    command
-        .arg(format!("-c {}", escape_quote_string(&commands)))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.args(["--error-style", "plain", "--commands", commands]);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     // Uncomment to debug the command being run:
-    // println!("=== command\n{command:?}\n");
+    // println!("=== command\n{command:#?}\n");
 
     let process = match command.spawn() {
         Ok(child) => child,
@@ -321,7 +316,7 @@ pub fn nu_run_test(opts: NuOpts, commands: impl AsRef<str>, with_std: bool) -> O
         out.into_owned()
     };
 
-    println!("=== stderr\n{}", err);
+    println!("=== stderr\n{err}");
 
     Outcome::new(out, err.into_owned(), output.status)
 }
@@ -358,17 +353,14 @@ where
 
     crate::commands::ensure_plugins_built();
 
-    let plugin_paths_quoted: Vec<String> = plugins
+    let plugin_paths: Vec<std::path::PathBuf> = plugins
         .iter()
         .map(|plugin_name| {
             let plugin = with_exe(plugin_name);
-            let plugin_path = nu_path::canonicalize_with(&plugin, &test_bins)
-                .unwrap_or_else(|_| panic!("failed to canonicalize plugin {} path", &plugin));
-            let plugin_path = plugin_path.to_string_lossy();
-            escape_quote_string(&plugin_path)
+            nu_path::canonicalize_with(&plugin, &test_bins)
+                .unwrap_or_else(|_| panic!("failed to canonicalize plugin {} path", &plugin))
         })
         .collect();
-    let plugins_arg = format!("[{}]", plugin_paths_quoted.join(","));
 
     let target_cwd = crate::fs::in_directory(&cwd);
     // In plugin testing, we need to use installed nushell to drive
@@ -378,8 +370,8 @@ where
         executable_path = crate::fs::installed_nu_path();
     }
 
-    let process = match setup_command(&executable_path, &target_cwd)
-        .envs(envs)
+    let mut cmd = setup_command(&executable_path, &target_cwd);
+    cmd.envs(envs)
         .arg("--commands")
         .arg(command)
         // Use plain errors to help make error text matching more consistent
@@ -389,15 +381,19 @@ where
         .arg("--env-config")
         .arg(temp_env_config_file)
         .arg("--plugin-config")
-        .arg(temp_plugin_file)
-        .arg("--plugins")
-        .arg(plugins_arg)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+        .arg(temp_plugin_file);
+
+    // Add each plugin path as a separate argument after --plugins
+    if !plugin_paths.is_empty() {
+        cmd.arg("--plugins");
+        for path in &plugin_paths {
+            cmd.arg(path);
+        }
+    }
+
+    let process = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(child) => child,
-        Err(why) => panic!("Can't run test {}", why),
+        Err(why) => panic!("Can't run test {why}"),
     };
 
     let output = process
@@ -407,7 +403,7 @@ where
     let out = collapse_output(&String::from_utf8_lossy(&output.stdout));
     let err = String::from_utf8_lossy(&output.stderr);
 
-    println!("=== stderr\n{}", err);
+    println!("=== stderr\n{err}");
 
     Outcome::new(out, err.into_owned(), output.status)
 }
@@ -433,9 +429,37 @@ fn setup_command(executable_path: &AbsolutePath, target_cwd: &AbsolutePath) -> C
     let mut command = Command::new(executable_path);
 
     command
+        .env_clear()
         .current_dir(target_cwd)
         .env_remove("FILE_PWD")
         .env("PWD", target_cwd); // setting PWD is enough to set cwd;
+
+    // Need these extra environments from before the environment is cleared.
+    let envs: std::collections::HashMap<String, String> = std::env::vars()
+        .filter(|(n, _)| {
+            n.starts_with("System") // System variables for disks, paths, etc.
+                || n == "NUSHELL_CARGO_PROFILE" // Variable for crate::fs::binaries()
+                || n == "PATHEXT" // Needed for Windows translate `nu` to `.../nu.exe`
+                || n == "TMP"
+                || n == "TEMP"
+                || n == "USERPROFILE"
+                || n == "TMPDIR"
+                || n.starts_with("CARGO_")
+                || n.starts_with("RUSTUP_")
+        })
+        .collect();
+
+    #[cfg(windows)]
+    let mut envs = envs;
+
+    #[cfg(windows)]
+    if let Some(pathext) = envs.get_mut("PATHEXT")
+        && !pathext.to_uppercase().contains(".PS1")
+    {
+        pathext.push_str(";.PS1");
+    }
+
+    command.envs(envs);
 
     command
 }

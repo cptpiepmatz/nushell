@@ -1,15 +1,14 @@
 use crate::{
-    values::{
-        cant_convert_err, Column, CustomValueSupport, NuDataFrame, NuExpression,
-        PolarsPluginObject, PolarsPluginType,
-    },
     PolarsPlugin,
+    values::{
+        Column, CustomValueSupport, NuDataFrame, NuExpression, PolarsPluginObject,
+        PolarsPluginType, cant_convert_err,
+    },
 };
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 use polars::prelude::DataType;
 
@@ -36,27 +35,22 @@ impl PluginCommand for ToDecimal {
             .required(
                 "infer_length",
                 SyntaxShape::Int,
-                "Number of decimal points to infer",
+                "Number of decimal points to infer.",
             )
             .input_output_type(
-                Type::Custom("expression".into()),
-                Type::Custom("expression".into()),
+                PolarsPluginType::NuExpression.into(),
+                PolarsPluginType::NuExpression.into(),
             )
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Modifies strings to decimal",
             example: "[[a b]; [1, '2.4']] | polars into-df | polars select (polars col b | polars decimal 2) | polars collect",
             result: Some(
                 NuDataFrame::try_from_columns(
-                    vec![Column::new(
-                        "b".to_string(),
-                        vec![
-                            Value::test_float(2.40),
-                        ],
-                    )],
+                    vec![Column::new("b".to_string(), vec![Value::test_float(2.40)])],
                     None,
                 )
                 .expect("simple df for test should not fail")
@@ -72,12 +66,14 @@ impl PluginCommand for ToDecimal {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value = input.into_value(call.head)?;
         match PolarsPluginObject::try_from_value(plugin, &value)? {
             PolarsPluginObject::NuExpression(expr) => command(plugin, engine, call, expr),
             _ => Err(cant_convert_err(&value, &[PolarsPluginType::NuExpression])),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

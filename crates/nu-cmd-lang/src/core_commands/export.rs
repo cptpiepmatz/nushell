@@ -38,9 +38,9 @@ impl Command for ExportCommand {
         Ok(Value::string(get_full_help(self, engine_state, stack), call.head).into_pipeline_data())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Export a definition from a module",
+            description: "Export a definition from a module.",
             example: r#"module utils { export def my-command [] { "hello" } }; use utils my-command; my-command"#,
             result: Some(Value::test_string("hello")),
         }]

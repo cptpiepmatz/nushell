@@ -1,4 +1,4 @@
-use nu_engine::{command_prelude::*, ClosureEval};
+use nu_engine::{ClosureEval, command_prelude::*};
 use nu_protocol::engine::Closure;
 
 #[derive(Clone)]
@@ -34,10 +34,10 @@ impl Command for SkipUntil {
         vec!["ignore"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Skip until the element is positive",
+                description: "Skip until the element is positive.",
                 example: "[-2 0 2 -1] | skip until {|x| $x > 0 }",
                 result: Some(Value::test_list(vec![
                     Value::test_int(2),
@@ -45,7 +45,7 @@ impl Command for SkipUntil {
                 ])),
             },
             Example {
-                description: "Skip until the element is positive using stored condition",
+                description: "Skip until the element is positive using stored condition.",
                 example: "let cond = {|x| $x > 0 }; [-2 0 2 -1] | skip until $cond",
                 result: Some(Value::test_list(vec![
                     Value::test_int(2),
@@ -53,7 +53,7 @@ impl Command for SkipUntil {
                 ])),
             },
             Example {
-                description: "Skip until the field value is positive",
+                description: "Skip until the field value is positive.",
                 example: "[{a: -2} {a: 0} {a: 2} {a: -1}] | skip until {|x| $x.a > 0 }",
                 result: Some(Value::test_list(vec![
                     Value::test_record(record! {
@@ -98,9 +98,7 @@ mod tests {
     use crate::SkipUntil;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SkipUntil)
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(SkipUntil)
     }
 }

@@ -1,9 +1,9 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    record, Category, Example, IntoPipelineData, LabeledError, PipelineData, Signature, Value,
+    Category, Example, IntoPipelineData, LabeledError, PipelineData, Signature, Value, record,
 };
 
-use crate::{values::PolarsPluginObject, PolarsPlugin};
+use crate::{PolarsPlugin, values::PolarsPluginObject};
 
 #[derive(Clone)]
 pub struct ListDF;
@@ -23,7 +23,7 @@ impl PluginCommand for ListDF {
         Signature::build(self.name()).category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Creates a new dataframe and shows it in the dataframe list",
             example: r#"let test = ([[a b];[1 2] [3 4]] | polars into-df);
@@ -132,7 +132,52 @@ impl PluginCommand for ListDF {
                         "reference_count" => Value::int(value.reference_count as i64, call.head),
                     },
                     call.head,
-                )))
+                ))),
+                PolarsPluginObject::NuDataType(_) => Ok(Some(Value::record(
+                    record! {
+                        "key" => Value::string(key.to_string(), call.head),
+                        "created" => Value::date(value.created, call.head),
+                        "columns" => Value::nothing(call.head),
+                        "rows" => Value::nothing(call.head),
+                        "type" => Value::string("DataType", call.head),
+                        "estimated_size" => Value::nothing(call.head),
+                        "span_contents" =>  Value::string(span_contents, value.span),
+                        "span_start" => Value::int(value.span.start as i64, call.head),
+                        "span_end" => Value::int(value.span.end as i64, call.head),
+                        "reference_count" => Value::int(value.reference_count as i64, call.head),
+                    },
+                    call.head,
+                ))),
+                PolarsPluginObject::NuSchema(_) => Ok(Some(Value::record(
+                    record! {
+                        "key" => Value::string(key.to_string(), call.head),
+                        "created" => Value::date(value.created, call.head),
+                        "columns" => Value::nothing(call.head),
+                        "rows" => Value::nothing(call.head),
+                        "type" => Value::string("Schema", call.head),
+                        "estimated_size" => Value::nothing(call.head),
+                        "span_contents" =>  Value::string(span_contents, value.span),
+                        "span_start" => Value::int(value.span.start as i64, call.head),
+                        "span_end" => Value::int(value.span.end as i64, call.head),
+                        "reference_count" => Value::int(value.reference_count as i64, call.head),
+                    },
+                    call.head,
+                ))),
+                PolarsPluginObject::NuSelector(_) => Ok(Some(Value::record(
+                    record! {
+                        "key" => Value::string(key.to_string(), call.head),
+                        "created" => Value::date(value.created, call.head),
+                        "columns" => Value::nothing(call.head),
+                        "rows" => Value::nothing(call.head),
+                        "type" => Value::string("Selector", call.head),
+                        "estimated_size" => Value::nothing(call.head),
+                        "span_contents" =>  Value::string(span_contents, value.span),
+                        "span_start" => Value::int(value.span.start as i64, call.head),
+                        "span_end" => Value::int(value.span.end as i64, call.head),
+                        "reference_count" => Value::int(value.reference_count as i64, call.head),
+                    },
+                    call.head,
+                ))),
             }
         })?;
         let vals = vals.into_iter().flatten().collect();

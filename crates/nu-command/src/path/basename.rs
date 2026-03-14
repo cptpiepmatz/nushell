@@ -10,9 +10,9 @@ struct Arguments {
 impl PathSubcommandArguments for Arguments {}
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct PathBasename;
 
-impl Command for SubCommand {
+impl Command for PathBasename {
     fn name(&self) -> &str {
         "path basename"
     }
@@ -29,7 +29,7 @@ impl Command for SubCommand {
             .named(
                 "replace",
                 SyntaxShape::String,
-                "Return original path with basename replaced by this string",
+                "Return original path with basename replaced by this string.",
                 Some('r'),
             )
             .category(Category::Path)
@@ -56,7 +56,7 @@ impl Command for SubCommand {
         };
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(
@@ -77,7 +77,7 @@ impl Command for SubCommand {
         };
 
         // This doesn't match explicit nulls
-        if matches!(input, PipelineData::Empty) {
+        if let PipelineData::Empty = input {
             return Err(ShellError::PipelineEmpty { dst_span: head });
         }
         input.map(
@@ -87,15 +87,15 @@ impl Command for SubCommand {
     }
 
     #[cfg(windows)]
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Get basename of a path",
+                description: "Get basename of a path.",
                 example: "'C:\\Users\\joe\\test.txt' | path basename",
                 result: Some(Value::test_string("test.txt")),
             },
             Example {
-                description: "Get basename of a list of paths",
+                description: "Get basename of a list of paths.",
                 example: r"[ C:\Users\joe, C:\Users\doe ] | path basename",
                 result: Some(Value::test_list(vec![
                     Value::test_string("joe"),
@@ -103,7 +103,7 @@ impl Command for SubCommand {
                 ])),
             },
             Example {
-                description: "Replace basename of a path",
+                description: "Replace basename of a path.",
                 example: "'C:\\Users\\joe\\test.txt' | path basename --replace 'spam.png'",
                 result: Some(Value::test_string("C:\\Users\\joe\\spam.png")),
             },
@@ -111,15 +111,15 @@ impl Command for SubCommand {
     }
 
     #[cfg(not(windows))]
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Get basename of a path",
+                description: "Get basename of a path.",
                 example: "'/home/joe/test.txt' | path basename",
                 result: Some(Value::test_string("test.txt")),
             },
             Example {
-                description: "Get basename of a list of paths",
+                description: "Get basename of a list of paths.",
                 example: "[ /home/joe, /home/doe ] | path basename",
                 result: Some(Value::test_list(vec![
                     Value::test_string("joe"),
@@ -127,7 +127,7 @@ impl Command for SubCommand {
                 ])),
             },
             Example {
-                description: "Replace basename of a path",
+                description: "Replace basename of a path.",
                 example: "'/home/joe/test.txt' | path basename --replace 'spam.png'",
                 result: Some(Value::test_string("/home/joe/spam.png")),
             },
@@ -153,9 +153,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(PathBasename)
     }
 }

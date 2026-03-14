@@ -1,7 +1,7 @@
 use crate::CustomValuePlugin;
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{
-    record, Category, CustomValue, LabeledError, ShellError, Signature, Span, SyntaxShape, Value,
+    Category, CustomValue, LabeledError, ShellError, Signature, Span, SyntaxShape, Value, record,
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +72,7 @@ impl SimplePluginCommand for DropCheck {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .required("msg", SyntaxShape::String, "the message to print on drop")
+            .required("msg", SyntaxShape::String, "The message to print on drop.")
             .category(Category::Experimental)
     }
 

@@ -9,7 +9,7 @@ impl Command for BytesBuild {
     }
 
     fn description(&self) -> &str {
-        "Create bytes from the arguments."
+        "Create a binary value from the provided arguments."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -23,11 +23,11 @@ impl Command for BytesBuild {
             .category(Category::Bytes)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "bytes build 0x[01 02] 0x[03] 0x[04]",
-                description: "Builds binary data from 0x[01 02], 0x[03], 0x[04]",
+                description: "Builds binary data from 0x[01 02], 0x[03], 0x[04].",
                 result: Some(Value::binary(
                     vec![0x01, 0x02, 0x03, 0x04],
                     Span::test_data(),
@@ -35,7 +35,7 @@ impl Command for BytesBuild {
             },
             Example {
                 example: "bytes build 255 254 253 252",
-                description: "Builds binary data from byte numbers",
+                description: "Builds binary data from byte numbers.",
                 result: Some(Value::test_binary(vec![0xff, 0xfe, 0xfd, 0xfc])),
             },
         ]
@@ -67,7 +67,7 @@ impl Command for BytesBuild {
                     return Err(ShellError::TypeMismatch {
                         err_message: "only binary data arguments are supported".to_string(),
                         span: other.span(),
-                    })
+                    });
                 }
             }
         }
@@ -81,9 +81,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(BytesBuild {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(BytesBuild)
     }
 }

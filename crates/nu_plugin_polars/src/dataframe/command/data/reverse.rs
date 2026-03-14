@@ -1,9 +1,9 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
-use nu_protocol::{Category, Example, LabeledError, PipelineData, Signature, Span, Type, Value};
+use nu_protocol::{Category, Example, LabeledError, PipelineData, Signature, Span, Value};
 
 use crate::{
-    values::{Column, CustomValueSupport, NuDataFrame, NuLazyFrame},
     PolarsPlugin,
+    values::{Column, CustomValueSupport, NuDataFrame, NuLazyFrame, PolarsPluginType},
 };
 
 pub struct LazyReverse;
@@ -21,14 +21,20 @@ impl PluginCommand for LazyReverse {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Reverses the dataframe.",
             example: "[[a b]; [6 2] [4 2] [2 2]] | polars into-df | polars reverse",
@@ -59,11 +65,13 @@ impl PluginCommand for LazyReverse {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let lazy = NuLazyFrame::try_from_pipeline_coerce(plugin, input, call.head)
             .map_err(LabeledError::from)?;
         let lazy = NuLazyFrame::new(lazy.from_eager, lazy.to_polars().reverse());
         lazy.to_pipeline_data(plugin, engine, call.head)
             .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

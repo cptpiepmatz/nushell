@@ -1,13 +1,12 @@
 use crate::progress_bar;
-use nu_engine::get_eval_block;
-#[allow(deprecated)]
-use nu_engine::{command_prelude::*, current_dir};
-use nu_path::expand_path_with;
+use nu_engine::{command_prelude::*, get_eval_block};
+use nu_path::{expand_path_with, is_windows_device_path};
 use nu_protocol::{
-    ast, byte_stream::copy_with_signals, process::ChildPipe, ByteStreamSource, DataSource, OutDest,
-    PipelineMetadata, Signals,
+    ByteStreamSource, DataSource, OutDest, PipelineMetadata, Signals, ast,
+    byte_stream::copy_with_signals, process::ChildPipe, shell_error::io::IoError,
 };
 use std::{
+    borrow::Cow,
     fs::File,
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -47,13 +46,13 @@ impl Command for Save {
             .named(
                 "stderr",
                 SyntaxShape::Filepath,
-                "the filename used to save stderr, only works with `-r` flag",
+                "The filename used to save stderr, only works with `-r` flag.",
                 Some('e'),
             )
-            .switch("raw", "save file as raw binary", Some('r'))
-            .switch("append", "append input to the end of the file", Some('a'))
-            .switch("force", "overwrite the destination", Some('f'))
-            .switch("progress", "enable progress bar", Some('p'))
+            .switch("raw", "Save file as raw binary.", Some('r'))
+            .switch("append", "Append input to the end of the file.", Some('a'))
+            .switch("force", "Overwrite the destination.", Some('f'))
+            .switch("progress", "Enable progress bar.", Some('p'))
             .category(Category::FileSystem)
     }
 
@@ -70,8 +69,7 @@ impl Command for Save {
         let progress = call.has_flag(engine_state, stack, "progress")?;
 
         let span = call.head;
-        #[allow(deprecated)]
-        let cwd = current_dir(engine_state, stack)?;
+        let cwd = engine_state.cwd(Some(stack))?.into_std_path_buf();
 
         let path_arg = call.req::<Spanned<PathBuf>>(engine_state, stack, 0)?;
         let path = Spanned {
@@ -86,11 +84,13 @@ impl Command for Save {
                 span: arg.span,
             });
 
+        let from_io_error = IoError::factory(span, path.item.as_path());
         match input {
             PipelineData::ByteStream(stream, metadata) => {
                 check_saving_to_source_file(metadata.as_ref(), &path, stderr_path.as_ref())?;
 
-                let (file, stderr_file) = get_files(&path, stderr_path.as_ref(), append, force)?;
+                let (file, stderr_file) =
+                    get_files(engine_state, &path, stderr_path.as_ref(), append, force)?;
 
                 let size = stream.known_size();
                 let signals = engine_state.signals();
@@ -129,7 +129,7 @@ impl Command for Save {
                                         io::copy(&mut tee, &mut io::stderr())
                                     }
                                 }
-                                .err_span(span)?;
+                                .map_err(|err| IoError::new(err, span, None))?;
                             }
                             Ok(())
                         }
@@ -153,7 +153,7 @@ impl Command for Save {
                                         )
                                     })
                                     .transpose()
-                                    .err_span(span)?;
+                                    .map_err(&from_io_error)?;
 
                                 let res = match stdout {
                                     ChildPipe::Pipe(pipe) => {
@@ -189,7 +189,7 @@ impl Command for Save {
                     }
                 }
 
-                Ok(PipelineData::Empty)
+                Ok(PipelineData::empty())
             }
             PipelineData::ListStream(ls, pipeline_metadata)
                 if raw || prepare_path(&path, append, force)?.0.extension().is_none() =>
@@ -200,18 +200,14 @@ impl Command for Save {
                     stderr_path.as_ref(),
                 )?;
 
-                let (mut file, _) = get_files(&path, stderr_path.as_ref(), append, force)?;
+                let (mut file, _) =
+                    get_files(engine_state, &path, stderr_path.as_ref(), append, force)?;
                 for val in ls {
                     file.write_all(&value_to_bytes(val)?)
-                        .map_err(|err| ShellError::IOError {
-                            msg: err.to_string(),
-                        })?;
-                    file.write_all("\n".as_bytes())
-                        .map_err(|err| ShellError::IOError {
-                            msg: err.to_string(),
-                        })?;
+                        .map_err(&from_io_error)?;
+                    file.write_all("\n".as_bytes()).map_err(&from_io_error)?;
                 }
-                file.flush()?;
+                file.flush().map_err(&from_io_error)?;
 
                 Ok(PipelineData::empty())
             }
@@ -226,48 +222,78 @@ impl Command for Save {
                     )?;
                 }
 
-                let bytes =
-                    input_to_bytes(input, Path::new(&path.item), raw, engine_state, stack, span)?;
+                // Try to convert the input pipeline into another type if we know the extension
+                let ext = extract_extension(&input, &path.item, raw);
+                let converted = match ext {
+                    None => input,
+                    Some(ext) => convert_to_extension(engine_state, &ext, stack, input, span)?,
+                };
+
+                // Save custom value however they implement saving
+                if let PipelineData::Value(v @ Value::Custom { .. }, ..) = converted {
+                    let val_span = v.span();
+                    let val = v.into_custom_value()?;
+                    return val
+                        .save(
+                            Spanned {
+                                item: &path.item,
+                                span: path.span,
+                            },
+                            val_span,
+                            span,
+                        )
+                        .map(|()| PipelineData::empty());
+                }
+
+                let bytes = value_to_bytes(converted.into_value(span)?)?;
 
                 // Only open file after successful conversion
-                let (mut file, _) = get_files(&path, stderr_path.as_ref(), append, force)?;
+                let (mut file, _) =
+                    get_files(engine_state, &path, stderr_path.as_ref(), append, force)?;
 
-                file.write_all(&bytes).map_err(|err| ShellError::IOError {
-                    msg: err.to_string(),
-                })?;
-
-                file.flush()?;
+                file.write_all(&bytes).map_err(&from_io_error)?;
+                file.flush().map_err(&from_io_error)?;
 
                 Ok(PipelineData::empty())
             }
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Save a string to foo.txt in the current directory",
+                description: "Save a string to foo.txt in the current directory.",
                 example: r#"'save me' | save foo.txt"#,
                 result: None,
             },
             Example {
-                description: "Append a string to the end of foo.txt",
+                description: "Append a string to the end of foo.txt.",
                 example: r#"'append me' | save --append foo.txt"#,
                 result: None,
             },
             Example {
-                description: "Save a record to foo.json in the current directory",
+                description: "Save a record to foo.json in the current directory.",
                 example: r#"{ a: 1, b: 2 } | save foo.json"#,
                 result: None,
             },
             Example {
-                description: "Save a running program's stderr to foo.txt",
+                description: "Save a running program's stderr to foo.txt.",
                 example: r#"do -i {} | save foo.txt --stderr foo.txt"#,
                 result: None,
             },
             Example {
-                description: "Save a running program's stderr to separate file",
+                description: "Save a running program's stderr to separate file.",
                 example: r#"do -i {} | save foo.txt --stderr bar.txt"#,
+                result: None,
+            },
+            Example {
+                description: "Show the extensions for which the `save` command will automatically serialize.",
+                example: r#"scope commands
+    | where name starts-with "to "
+    | insert extension { get name | str replace -r "^to " "" | $"*.($in)" }
+    | select extension name
+    | rename extension command
+"#,
                 result: None,
             },
         ]
@@ -306,43 +332,23 @@ fn check_saving_to_source_file(
         return Err(saving_to_source_file_error(dest));
     }
 
-    if let Some(dest) = stderr_dest {
-        if &dest.item == source {
-            return Err(saving_to_source_file_error(dest));
-        }
+    if let Some(dest) = stderr_dest
+        && &dest.item == source
+    {
+        return Err(saving_to_source_file_error(dest));
     }
 
     Ok(())
 }
 
-/// Convert [`PipelineData`] bytes to write in file, possibly converting
-/// to format of output file
-fn input_to_bytes(
-    input: PipelineData,
-    path: &Path,
-    raw: bool,
-    engine_state: &EngineState,
-    stack: &mut Stack,
-    span: Span,
-) -> Result<Vec<u8>, ShellError> {
-    let ext = if raw {
-        None
-    } else if let PipelineData::ByteStream(..) = input {
-        None
-    } else if let PipelineData::Value(Value::String { .. }, ..) = input {
-        None
-    } else {
-        path.extension()
-            .map(|name| name.to_string_lossy().to_string())
-    };
-
-    let input = if let Some(ext) = ext {
-        convert_to_extension(engine_state, &ext, stack, input, span)?
-    } else {
-        input
-    };
-
-    value_to_bytes(input.into_value(span)?)
+/// Extract extension for conversion.
+fn extract_extension<'e>(input: &PipelineData, path: &'e Path, raw: bool) -> Option<Cow<'e, str>> {
+    match (raw, input) {
+        (true, _)
+        | (_, PipelineData::ByteStream(..))
+        | (_, PipelineData::Value(Value::String { .. }, ..)) => None,
+        _ => path.extension().map(|name| name.to_string_lossy()),
+    }
 }
 
 /// Convert given data into content of file of specified extension if
@@ -360,7 +366,7 @@ fn convert_to_extension(
         if let Some(block_id) = decl.block_id() {
             let block = engine_state.get_block(block_id);
             let eval_block = get_eval_block(engine_state);
-            eval_block(engine_state, stack, block, input)
+            eval_block(engine_state, stack, block, input).map(|p| p.body)
         } else {
             let call = ast::Call::new(span);
             decl.run(engine_state, stack, &(&call).into(), input)
@@ -419,23 +425,68 @@ fn prepare_path(
     }
 }
 
-fn open_file(path: &Path, span: Span, append: bool) -> Result<File, ShellError> {
-    let file = match (append, path.exists()) {
+fn open_file(
+    engine_state: &EngineState,
+    path: &Path,
+    span: Span,
+    append: bool,
+) -> Result<File, ShellError> {
+    let file: std::io::Result<File> = match (append, path.exists() || is_windows_device_path(path))
+    {
         (true, true) => std::fs::OpenOptions::new().append(true).open(path),
-        _ => std::fs::File::create(path),
+        _ => {
+            // This is a temporary solution until `std::fs::File::create` is fixed on Windows (rust-lang/rust#134893)
+            // A TOCTOU problem exists here, which may cause wrong error message to be shown
+            #[cfg(target_os = "windows")]
+            if path.is_dir() {
+                #[allow(
+                    deprecated,
+                    reason = "we don't get a IsADirectory error, so we need to provide it"
+                )]
+                Err(std::io::ErrorKind::IsADirectory.into())
+            } else {
+                std::fs::File::create(path)
+            }
+            #[cfg(not(target_os = "windows"))]
+            std::fs::File::create(path)
+        }
     };
 
-    file.map_err(|e| ShellError::GenericError {
-        error: format!("Problem with [{}], Permission denied", path.display()),
-        msg: e.to_string(),
-        span: Some(span),
-        help: None,
-        inner: vec![],
-    })
+    match file {
+        Ok(file) => Ok(file),
+        Err(err) => {
+            // In caase of NotFound, search for the missing parent directory.
+            // This also presents a TOCTOU (or TOUTOC, technically?)
+            if err.kind() == std::io::ErrorKind::NotFound
+                && let Some(missing_component) =
+                    path.ancestors().skip(1).filter(|dir| !dir.exists()).last()
+            {
+                // By looking at the postfix to remove, rather than the prefix
+                // to keep, we are able to handle relative paths too.
+                let components_to_remove = path
+                    .strip_prefix(missing_component)
+                    .expect("Stripping ancestor from a path should never fail")
+                    .as_os_str()
+                    .as_encoded_bytes();
+
+                return Err(ShellError::Io(IoError::new(
+                    ErrorKind::DirectoryNotFound,
+                    engine_state
+                        .span_match_postfix(span, components_to_remove)
+                        .map(|(pre, _post)| pre)
+                        .unwrap_or(span),
+                    PathBuf::from(missing_component),
+                )));
+            }
+
+            Err(ShellError::Io(IoError::new(err, span, PathBuf::from(path))))
+        }
+    }
 }
 
 /// Get output file and optional stderr file
 fn get_files(
+    engine_state: &EngineState,
     path: &Spanned<PathBuf>,
     stderr_path: Option<&Spanned<PathBuf>>,
     append: bool,
@@ -449,7 +500,7 @@ fn get_files(
         .transpose()?;
 
     // Only if both files can be used open and possibly truncate them
-    let file = open_file(path, path_span, append)?;
+    let file = open_file(engine_state, path, path_span, append)?;
 
     let stderr_file = stderr_path_and_span
         .map(|(stderr_path, stderr_path_span)| {
@@ -462,7 +513,7 @@ fn get_files(
                     inner: vec![],
                 })
             } else {
-                open_file(stderr_path, stderr_path_span, append)
+                open_file(engine_state, stderr_path, stderr_path_span, append)
             }
         })
         .transpose()?;
@@ -478,6 +529,9 @@ fn stream_to_file(
     span: Span,
     progress: bool,
 ) -> Result<(), ShellError> {
+    // TODO: maybe we can get a path in here
+    let from_io_error = IoError::factory(span, None);
+
     // https://github.com/nushell/nushell/pull/9377 contains the reason for not using `BufWriter`
     if progress {
         let mut bytes_processed = 0;
@@ -489,7 +543,7 @@ fn stream_to_file(
         let mut reader = BufReader::new(source);
 
         let res = loop {
-            if let Err(err) = signals.check(span) {
+            if let Err(err) = signals.check(&span) {
                 bar.abandoned_msg("# Cancelled #".to_owned());
                 return Err(err);
             }
@@ -497,7 +551,7 @@ fn stream_to_file(
             match reader.fill_buf() {
                 Ok(&[]) => break Ok(()),
                 Ok(buf) => {
-                    file.write_all(buf).err_span(span)?;
+                    file.write_all(buf).map_err(&from_io_error)?;
                     let len = buf.len();
                     reader.consume(len);
                     bytes_processed += len as u64;
@@ -515,9 +569,9 @@ fn stream_to_file(
         if let Err(err) = res {
             let _ = file.flush();
             bar.abandoned_msg("# Error while saving #".to_owned());
-            Err(err.into_spanned(span).into())
+            Err(from_io_error(err).into())
         } else {
-            file.flush().err_span(span)?;
+            file.flush().map_err(&from_io_error)?;
             Ok(())
         }
     } else {

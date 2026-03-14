@@ -34,7 +34,7 @@ impl Command for SysTemp {
         Ok(temp(call.head).into_pipeline_data())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Show the system temperatures",
             example: "sys temp",
@@ -49,8 +49,8 @@ fn temp(span: Span) -> Value {
         .map(|component| {
             let mut record = record! {
                 "unit" => Value::string(component.label(), span),
-                "temp" => Value::float(component.temperature().into(), span),
-                "high" => Value::float(component.max().into(), span),
+                "temp" => Value::float(component.temperature().unwrap_or(f32::NAN).into(), span),
+                "high" => Value::float(component.max().unwrap_or(f32::NAN).into(), span),
             };
 
             if let Some(critical) = component.critical() {

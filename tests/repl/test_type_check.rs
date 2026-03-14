@@ -1,4 +1,4 @@
-use crate::repl::tests::{fail_test, run_test, TestResult};
+use crate::repl::tests::{TestResult, fail_test, run_test, run_test_contains};
 use rstest::rstest;
 
 #[test]
@@ -13,7 +13,10 @@ fn type_in_list_of_this_type() -> TestResult {
 
 #[test]
 fn type_in_list_of_non_this_type() -> TestResult {
-    fail_test(r#"'hello' in [41 42 43]"#, "is not supported")
+    fail_test(
+        r#"'hello' in [41 42 43]"#,
+        "nu::parser::operator_incompatible_types",
+    )
 }
 
 #[test]
@@ -40,7 +43,10 @@ fn date_minus_duration() -> TestResult {
 
 #[test]
 fn duration_minus_date_not_supported() -> TestResult {
-    fail_test("2day - 2023-04-22", "doesn't support these values")
+    fail_test(
+        "2day - 2023-04-22",
+        "nu::parser::operator_incompatible_types",
+    )
 }
 
 #[test]
@@ -123,7 +129,7 @@ fn record_subtyping_allows_record_after_general_command() -> TestResult {
 fn record_subtyping_allows_general_inner() -> TestResult {
     run_test(
         "def merge_records [other: record<bar: int>]: record<foo: string> -> record<foo: string, bar: int> { merge $other }",
-       "",
+        "",
     )
 }
 
@@ -132,6 +138,69 @@ fn record_subtyping_works() -> TestResult {
     run_test(
         r#"def merge_records [other: record<bar: int>] { "" }; merge_records {"bar": 3, "foo": 4}"#,
         "",
+    )
+}
+
+#[rstest]
+// [ int, number ] is widened to list<number>
+#[case("let n: number = 1; let foo = [ 1, $n ];", "list<number>")]
+// supertype of list elements (records)
+#[case("let foo = [ { a: 1 }, { a: 1, b: 2 } ];", "list<record<a: int>>")]
+// [ list supertype, table ]
+#[case(
+    "let foo = [ [ { a: 1 } ], [ [a, b]; [1, 2] ] ];",
+    "list<list<record<a: int>>>"
+)]
+// [ list, table supertype ]
+#[case(
+    "let foo = [ [{ a: 1, b: 2 }], [ [a]; [1] ] ];",
+    "list<list<record<a: int>>>"
+)]
+// disjoint element types: empty element supertype
+#[case("let foo = [[ [bar]; [1] ], [ { baz: 1 } ] ];", "list<list<record>>")]
+// `bar: int` and `bar: number` are widened to table<bar: number>
+#[case(
+    "let n: number = 1; let foo = [ [bar]; [1], [$n] ];",
+    "table<bar: number>"
+)]
+// supertype of table values (records)
+#[case(
+    "let foo = [ [item]; [ {a: 1} ], [ {a: 1, b: 1 } ] ];",
+    "table<item: record<a: int>>"
+)]
+// disjoint table values: oneof
+#[case("let foo = [ [bar]; [1], [true] ];", "table<bar: oneof<int, bool>>")]
+#[case(
+    "let a: any = 1; let b: int = 2; let foo = [ [bar]; [$a], [$b] ];",
+    "table<bar: any>"
+)]
+#[test]
+fn collection_supertype_inference(
+    #[case] assignment: &str,
+    #[case] expected_type: &str,
+) -> TestResult {
+    run_test(
+        &format!(r#"{assignment} scope variables | where name == "$foo" | first | get type"#),
+        expected_type,
+    )
+}
+
+#[test]
+fn pipeline_oneof() -> TestResult {
+    // Empty is compatible with oneof<nothing, ..>
+    run_test(
+        "def f []: [oneof<int, nothing> -> nothing] { describe }; f",
+        "nothing",
+    )?;
+    // ByteStream is compatible with oneof<binary, ..>
+    run_test(
+        "def f []: [oneof<int, binary> -> nothing] { describe }; [0x[01]] | bytes collect | f",
+        "binary (stream)",
+    )?;
+    // ListStream is compatible with oneof<list, ..>>
+    run_test(
+        "def f []: [oneof<string, list<int>> -> nothing] { describe }; [1] | each {} | f",
+        "list<int> (stream)",
     )
 }
 
@@ -171,4 +240,71 @@ fn in_oneof_block_expected_type(#[case] input: &str) -> TestResult {
 #[test]
 fn in_oneof_block_expected_block() -> TestResult {
     fail_test("match 1 { 0 => { try 3 } }", "expected block")
+}
+
+#[test]
+fn pipeline_multiple_types() -> TestResult {
+    // https://github.com/nushell/nushell/issues/15485
+    run_test_contains("{year: 2019} | into datetime | date humanize", "years ago")
+}
+
+const MULTIPLE_TYPES_DEFS: &str = "
+def foo []: [int -> int, int -> string] {
+  if $in > 2 { 'hi' } else 4
+}
+def bar []: [int -> filesize, string -> string] {
+  if $in == 'hi' { 'meow' } else { into filesize }
+}
+";
+
+#[test]
+fn pipeline_multiple_types_custom() -> TestResult {
+    run_test(
+        &format!(
+            "{MULTIPLE_TYPES_DEFS}
+            5 | foo | str trim"
+        ),
+        "hi",
+    )
+}
+
+#[test]
+fn pipeline_multiple_types_propagate_string() -> TestResult {
+    run_test(
+        &format!(
+            "{MULTIPLE_TYPES_DEFS}
+            5 | foo | bar | str trim"
+        ),
+        "meow",
+    )
+}
+
+#[test]
+fn pipeline_multiple_types_propagate_int() -> TestResult {
+    run_test(
+        &format!(
+            "{MULTIPLE_TYPES_DEFS}
+            2 | foo | bar | format filesize B"
+        ),
+        "4 B",
+    )
+}
+
+#[test]
+fn pipeline_multiple_types_propagate_error() -> TestResult {
+    fail_test(
+        &format!(
+            "{MULTIPLE_TYPES_DEFS}
+            2 | foo | bar | values"
+        ),
+        "parser::input_type_mismatch",
+    )
+}
+
+#[test]
+fn array_of_wrong_types() -> TestResult {
+    fail_test(
+        "0..128 | each {} | into string | bytes collect",
+        "nu::shell::only_supports_this_input_type",
+    )
 }

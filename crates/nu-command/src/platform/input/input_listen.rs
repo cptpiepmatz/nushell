@@ -4,7 +4,9 @@ use crossterm::event::{
 };
 use crossterm::{execute, terminal};
 use nu_engine::command_prelude::*;
+use std::time::{Duration, Instant};
 
+use nu_protocol::shell_error::io::IoError;
 use num_traits::AsPrimitive;
 use std::io::stdout;
 
@@ -26,13 +28,19 @@ impl Command for InputListen {
             .named(
                 "types",
                 SyntaxShape::List(Box::new(SyntaxShape::String)),
-                "Listen for event of specified types only (can be one of: focus, key, mouse, paste, resize)",
+                "Listen for event of specified types only (can be one of: focus, key, mouse, paste, resize).",
                 Some('t'),
             )
             .switch(
                 "raw",
-                "Add raw_code field with numeric value of keycode and raw_flags with bit mask flags",
+                "Add raw_code field with numeric value of keycode and raw_flags with bit mask flags.",
                 Some('r'),
+            )
+            .named(
+                "timeout",
+                SyntaxShape::Duration,
+                "How long to wait for input before returning.",
+                Some('o')
             )
             .input_output_types(vec![(
                 Type::Nothing,
@@ -44,7 +52,7 @@ impl Command for InputListen {
     }
 
     fn description(&self) -> &str {
-        "Listen for user interface event."
+        "Listen for user interface events."
     }
 
     fn extra_description(&self) -> &str {
@@ -64,9 +72,9 @@ There are 4 `key_type` variants:
     media - dedicated media keys (play, pause, tracknext ...)
     other - keys not falling under previous categories (up, down, backspace, enter ...)"#
     }
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Listen for a keyboard shortcut and find out how nu receives it",
+            description: "Listen for a keyboard shortcut and find out how nu receives it.",
             example: "input listen --types [key]",
             result: None,
         }]
@@ -80,10 +88,11 @@ There are 4 `key_type` variants:
     ) -> Result<PipelineData, ShellError> {
         let head = call.head;
         let event_type_filter = get_event_type_filter(engine_state, stack, call, head)?;
+        let timeout: Option<Duration> = call.get_flag(engine_state, stack, "timeout")?;
         let add_raw = call.has_flag(engine_state, stack, "raw")?;
-        let config = engine_state.get_config();
+        let config = stack.get_config(engine_state);
 
-        terminal::enable_raw_mode()?;
+        terminal::enable_raw_mode().map_err(|err| IoError::new(err, head, None))?;
 
         if config.use_kitty_protocol {
             if let Ok(false) = crossterm::terminal::supports_keyboard_enhancement() {
@@ -111,8 +120,29 @@ There are 4 `key_type` variants:
             );
         }
 
-        let console_state = event_type_filter.enable_events()?;
+        let console_state = event_type_filter.enable_events(head)?;
+        let start = Instant::now();
+        let mut remaining_time = timeout;
+
         loop {
+            if let Some(t) = remaining_time
+                && !crossterm::event::poll(t).map_err(|_| ShellError::GenericError {
+                    error: "Error with user input".into(),
+                    msg: "".into(),
+                    span: Some(head),
+                    help: None,
+                    inner: vec![],
+                })?
+            {
+                terminal::disable_raw_mode().map_err(|err| IoError::new(err, head, None))?;
+                return Err(ShellError::GenericError {
+                    error: "Timed out while waiting for user input".into(),
+                    msg: "no input was received within the timeout duration".into(),
+                    span: Some(head),
+                    help: None,
+                    inner: vec![],
+                });
+            }
             let event = crossterm::event::read().map_err(|_| ShellError::GenericError {
                 error: "Error with user input".into(),
                 msg: "".into(),
@@ -122,7 +152,7 @@ There are 4 `key_type` variants:
             })?;
             let event = parse_event(head, &event, &event_type_filter, add_raw);
             if let Some(event) = event {
-                terminal::disable_raw_mode()?;
+                terminal::disable_raw_mode().map_err(|err| IoError::new(err, head, None))?;
                 if config.use_kitty_protocol {
                     let _ = execute!(
                         std::io::stdout(),
@@ -133,6 +163,8 @@ There are 4 `key_type` variants:
                 console_state.restore();
                 return Ok(event.into_pipeline_data());
             }
+
+            remaining_time = timeout.map(|t| t.saturating_sub(start.elapsed()));
         }
     }
 }
@@ -207,7 +239,7 @@ impl EventTypeFilter {
 
     fn wrong_type_error(head: Span, val: &str, val_span: Span) -> ShellError {
         ShellError::UnsupportedInput {
-            msg: format!("{} is not a valid event type", val),
+            msg: format!("{val} is not a valid event type"),
             input: "value originates from here".into(),
             msg_span: head,
             input_span: val_span,
@@ -226,17 +258,20 @@ impl EventTypeFilter {
     /// Enable capturing of all events allowed by this filter.
     /// Call [`DeferredConsoleRestore::restore`] when done capturing events to restore
     /// console state
-    fn enable_events(&self) -> Result<DeferredConsoleRestore, ShellError> {
+    fn enable_events(&self, span: Span) -> Result<DeferredConsoleRestore, ShellError> {
         if self.listen_mouse {
-            crossterm::execute!(stdout(), EnableMouseCapture)?;
+            crossterm::execute!(stdout(), EnableMouseCapture)
+                .map_err(|err| IoError::new(err, span, None))?;
         }
 
         if self.listen_paste {
-            crossterm::execute!(stdout(), EnableBracketedPaste)?;
+            crossterm::execute!(stdout(), EnableBracketedPaste)
+                .map_err(|err| IoError::new(err, span, None))?;
         }
 
         if self.listen_focus {
-            crossterm::execute!(stdout(), crossterm::event::EnableFocusChange)?;
+            crossterm::execute!(stdout(), crossterm::event::EnableFocusChange)
+                .map_err(|err| IoError::new(err, span, None))?;
         }
 
         Ok(DeferredConsoleRestore {

@@ -1,4 +1,4 @@
-use nu_engine::{command_prelude::*, ClosureEval, ClosureEvalOnce};
+use nu_engine::{ClosureEval, ClosureEvalOnce, command_prelude::*};
 use nu_protocol::engine::Closure;
 
 #[derive(Clone)]
@@ -26,12 +26,12 @@ impl Command for EachWhile {
             .required(
                 "closure",
                 SyntaxShape::Closure(Some(vec![SyntaxShape::Any])),
-                "the closure to run",
+                "The closure to run.",
             )
             .category(Category::Filters)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         let stream_test_1 = vec![Value::test_int(2), Value::test_int(4)];
         let stream_test_2 = vec![
             Value::test_string("Output: 1"),
@@ -72,7 +72,7 @@ impl Command for EachWhile {
 
         let metadata = input.metadata();
         match input {
-            PipelineData::Empty => Ok(PipelineData::Empty),
+            PipelineData::Empty => Ok(PipelineData::empty()),
             PipelineData::Value(Value::Range { .. }, ..)
             | PipelineData::Value(Value::List { .. }, ..)
             | PipelineData::ListStream(..) => {
@@ -109,7 +109,7 @@ impl Command for EachWhile {
                         .fuse()
                         .into_pipeline_data(head, engine_state.signals().clone()))
                 } else {
-                    Ok(PipelineData::Empty)
+                    Ok(PipelineData::empty())
                 }
             }
             // This match allows non-iterables to be accepted,
@@ -127,9 +127,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(EachWhile {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(EachWhile)
     }
 }

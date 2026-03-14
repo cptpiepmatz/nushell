@@ -1,11 +1,10 @@
-use crate::{values::CustomValueSupport, PolarsPlugin};
+use crate::{PolarsPlugin, values::CustomValueSupport};
 
-use crate::values::{Column, NuDataFrame};
+use crate::values::{Column, NuDataFrame, PolarsPluginType};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 use polars::{
     chunked_array::ChunkedArray,
@@ -32,19 +31,25 @@ impl PluginCommand for Summary {
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .category(Category::Custom("dataframe".into()))
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .named(
                 "quantiles",
                 SyntaxShape::List(Box::new(SyntaxShape::Float)),
-                "provide optional quantiles",
+                "Provide optional quantiles.",
                 Some('q'),
             )
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "list dataframe descriptives",
             example: "[[a b]; [1 1] [1 1]] | polars into-df | polars summary",
@@ -112,7 +117,10 @@ impl PluginCommand for Summary {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        command(plugin, engine, call, input).map_err(LabeledError::from)
+        let metadata = input.metadata();
+        command(plugin, engine, call, input)
+            .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 
@@ -184,8 +192,8 @@ fn command(
 
     let tail = df
         .as_ref()
-        .iter()
-        .filter(|col| !matches!(col.dtype(), &DataType::Object("object", _)))
+        .materialized_column_iter()
+        .filter(|col| !matches!(col.dtype(), &DataType::Object("object")))
         .map(|col| {
             let count = col.len() as f64;
 
@@ -225,7 +233,7 @@ fn command(
         .map(PolarsColumn::from)
         .collect::<Vec<PolarsColumn>>();
 
-    let polars_df = DataFrame::new(res).map_err(|e| ShellError::GenericError {
+    let polars_df = DataFrame::new_infer_height(res).map_err(|e| ShellError::GenericError {
         error: "Dataframe Error".into(),
         msg: e.to_string(),
         span: Some(call.head),

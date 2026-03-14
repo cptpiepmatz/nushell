@@ -1,14 +1,14 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
     Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, Spanned,
-    SyntaxShape, Type, Value,
+    SyntaxShape, Value,
 };
 use polars::prelude::NamedFrom;
 use polars::series::Series;
 
-use crate::{values::CustomValueSupport, PolarsPlugin};
+use crate::{PolarsPlugin, values::CustomValueSupport};
 
-use crate::values::{Column, NuDataFrame};
+use crate::values::{Column, NuDataFrame, PolarsPluginType};
 
 #[derive(Clone)]
 pub struct SampleDF;
@@ -29,31 +29,37 @@ impl PluginCommand for SampleDF {
             .named(
                 "n-rows",
                 SyntaxShape::Int,
-                "number of rows to be taken from dataframe",
+                "Number of rows to be taken from dataframe.",
                 Some('n'),
             )
             .named(
                 "fraction",
                 SyntaxShape::Number,
-                "fraction of dataframe to be taken",
+                "Fraction of dataframe to be taken.",
                 Some('f'),
             )
             .named(
                 "seed",
                 SyntaxShape::Number,
-                "seed for the selection",
+                "Seed for the selection.",
                 Some('s'),
             )
-            .switch("replace", "sample with replace", Some('e'))
-            .switch("shuffle", "shuffle sample", Some('u'))
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .switch("replace", "Sample with replace.", Some('e'))
+            .switch("shuffle", "Shuffle sample.", Some('u'))
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("dataframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Sample rows from dataframe",
@@ -62,14 +68,12 @@ impl PluginCommand for SampleDF {
             },
             Example {
                 description: "Shows sample row using fraction and replace",
-                example:
-                    "[[a b]; [1 2] [3 4] [5 6]] | polars into-df | polars sample --fraction 0.5 --replace",
+                example: "[[a b]; [1 2] [3 4] [5 6]] | polars into-df | polars sample --fraction 0.5 --replace",
                 result: None, // No expected value because sampling is random
             },
             Example {
                 description: "Shows sample row using using predefined seed 1",
-                example:
-                    "[[a b]; [1 2] [3 4] [5 6]] | polars into-df | polars sample --seed 1 --n-rows 1",
+                example: "[[a b]; [1 2] [3 4] [5 6]] | polars into-df | polars sample --seed 1 --n-rows 1",
                 result: Some(
                     NuDataFrame::try_from_columns(
                         vec![
@@ -80,9 +84,8 @@ impl PluginCommand for SampleDF {
                     )
                     .expect("should not fail")
                     .into_value(Span::test_data()),
-                )
+                ),
             },
-
         ]
     }
 

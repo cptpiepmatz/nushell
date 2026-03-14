@@ -1,12 +1,13 @@
 //! Module containing the internal representation of user configuration
 
-use crate as nu_protocol;
 use crate::FromValue;
+use crate::{self as nu_protocol};
 use helper::*;
 use prelude::*;
 use std::collections::HashMap;
 
 pub use ansi_coloring::UseAnsiColoring;
+pub use clip::ClipConfig;
 pub use completions::{
     CompletionAlgorithm, CompletionConfig, CompletionSort, ExternalCompleterConfig,
 };
@@ -14,10 +15,10 @@ pub use datetime_format::DatetimeFormatConfig;
 pub use display_errors::DisplayErrors;
 pub use filesize::FilesizeConfig;
 pub use helper::extract_value;
-pub use history::{HistoryConfig, HistoryFileFormat};
+pub use history::{HistoryConfig, HistoryFileFormat, HistoryPath};
 pub use hooks::Hooks;
 pub use ls::LsConfig;
-pub use output::ErrorStyle;
+pub use output::{BannerKind, ErrorStyle};
 pub use plugin_gc::{PluginGcConfig, PluginGcConfigs};
 pub use reedline::{CursorShapeConfig, EditBindings, NuCursorShape, ParsedKeybinding, ParsedMenu};
 pub use rm::RmConfig;
@@ -25,6 +26,7 @@ pub use shell_integration::ShellIntegrationConfig;
 pub use table::{FooterMode, TableConfig, TableIndent, TableIndexMode, TableMode, TrimStrategy};
 
 mod ansi_coloring;
+mod clip;
 mod completions;
 mod datetime_format;
 mod display_errors;
@@ -47,6 +49,7 @@ pub struct Config {
     pub filesize: FilesizeConfig,
     pub table: TableConfig,
     pub ls: LsConfig,
+    pub clip: ClipConfig,
     pub color_config: HashMap<String, Value>,
     pub footer_mode: FooterMode,
     pub float_precision: i64,
@@ -54,6 +57,7 @@ pub struct Config {
     pub use_ansi_coloring: UseAnsiColoring,
     pub completions: CompletionConfig,
     pub edit_mode: EditBindings,
+    pub show_hints: bool,
     pub history: HistoryConfig,
     pub keybindings: Vec<ParsedKeybinding>,
     pub menus: Vec<ParsedMenu>,
@@ -61,13 +65,14 @@ pub struct Config {
     pub rm: RmConfig,
     pub shell_integration: ShellIntegrationConfig,
     pub buffer_editor: Value,
-    pub show_banner: Value,
+    pub show_banner: BannerKind,
     pub bracketed_paste: bool,
     pub render_right_prompt_on_last_line: bool,
     pub explore: HashMap<String, Value>,
     pub cursor_shape: CursorShapeConfig,
     pub datetime_format: DatetimeFormatConfig,
     pub error_style: ErrorStyle,
+    pub error_lines: i64,
     pub display_errors: DisplayErrors,
     pub use_kitty_protocol: bool,
     pub highlight_resolved_externals: bool,
@@ -84,7 +89,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            show_banner: Value::bool(true, Span::unknown()),
+            show_banner: BannerKind::default(),
 
             table: TableConfig::default(),
             rm: RmConfig::default(),
@@ -104,6 +109,8 @@ impl Default for Config {
 
             cursor_shape: CursorShapeConfig::default(),
 
+            clip: ClipConfig::default(),
+
             color_config: HashMap::new(),
             footer_mode: FooterMode::RowCount(25),
             float_precision: 2,
@@ -111,6 +118,7 @@ impl Default for Config {
             use_ansi_coloring: UseAnsiColoring::default(),
             bracketed_paste: true,
             edit_mode: EditBindings::default(),
+            show_hints: true,
 
             shell_integration: ShellIntegrationConfig::default(),
 
@@ -122,7 +130,8 @@ impl Default for Config {
 
             keybindings: Vec::new(),
 
-            error_style: ErrorStyle::Fancy,
+            error_style: ErrorStyle::default(),
+            error_lines: 1,
             display_errors: DisplayErrors::default(),
 
             use_kitty_protocol: false,
@@ -158,10 +167,12 @@ impl UpdateFromValue for Config {
                 "filesize" => self.filesize.update(val, path, errors),
                 "explore" => self.explore.update(val, path, errors),
                 "color_config" => self.color_config.update(val, path, errors),
+                "clip" => self.clip.update(val, path, errors),
                 "footer_mode" => self.footer_mode.update(val, path, errors),
                 "float_precision" => self.float_precision.update(val, path, errors),
                 "use_ansi_coloring" => self.use_ansi_coloring.update(val, path, errors),
                 "edit_mode" => self.edit_mode.update(val, path, errors),
+                "show_hints" => self.show_hints.update(val, path, errors),
                 "shell_integration" => self.shell_integration.update(val, path, errors),
                 "buffer_editor" => match val {
                     Value::Nothing { .. } | Value::String { .. } => {
@@ -201,6 +212,17 @@ impl UpdateFromValue for Config {
                 "hooks" => self.hooks.update(val, path, errors),
                 "datetime_format" => self.datetime_format.update(val, path, errors),
                 "error_style" => self.error_style.update(val, path, errors),
+                "error_lines" => {
+                    if let Ok(lines) = val.as_int() {
+                        if lines >= 0 {
+                            self.error_lines = lines;
+                        } else {
+                            errors.invalid_value(path, "an int greater than or equal to 0", val);
+                        }
+                    } else {
+                        errors.type_mismatch(path, Type::Int, val);
+                    }
+                }
                 "recursion_limit" => {
                     if let Ok(limit) = val.as_int() {
                         if limit > 1 {
@@ -219,7 +241,11 @@ impl UpdateFromValue for Config {
 }
 
 impl Config {
-    pub fn update_from_value(&mut self, old: &Config, value: &Value) -> Option<ShellError> {
+    pub fn update_from_value(
+        &mut self,
+        old: &Config,
+        value: &Value,
+    ) -> Result<Option<ShellWarning>, ShellError> {
         // Current behaviour is that config errors are displayed, but do not prevent the rest
         // of the config from being updated (fields with errors are skipped/not updated).
         // Errors are simply collected one-by-one and wrapped into a ShellError variant at the end.
@@ -228,6 +254,6 @@ impl Config {
 
         self.update(value, &mut path, &mut errors);
 
-        errors.into_shell_error()
+        errors.check()
     }
 }

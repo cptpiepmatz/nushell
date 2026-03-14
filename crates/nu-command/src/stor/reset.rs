@@ -1,4 +1,4 @@
-use crate::database::{SQLiteDatabase, MEMORY_DB};
+use crate::database::{MEMORY_DB, SQLiteDatabase};
 use nu_engine::command_prelude::*;
 use nu_protocol::Signals;
 
@@ -25,7 +25,7 @@ impl Command for StorReset {
         vec!["sqlite", "remove", "table", "saving", "drop"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Reset the in-memory sqlite database",
             example: "stor reset",
@@ -49,9 +49,25 @@ impl Command for StorReset {
         ));
 
         if let Ok(conn) = db.open_connection() {
+            conn.execute("PRAGMA foreign_keys = OFF", [])
+                .map_err(|err| ShellError::GenericError {
+                    error: "Failed to turn off foreign_key protections for reset".into(),
+                    msg: err.to_string(),
+                    span: Some(Span::test_data()),
+                    help: None,
+                    inner: vec![],
+                })?;
             db.drop_all_tables(&conn)
                 .map_err(|err| ShellError::GenericError {
-                    error: "Failed to open SQLite connection in memory from reset".into(),
+                    error: "Failed to drop all tables in memory from reset".into(),
+                    msg: err.to_string(),
+                    span: Some(Span::test_data()),
+                    help: None,
+                    inner: vec![],
+                })?;
+            conn.execute("PRAGMA foreign_keys = ON", [])
+                .map_err(|err| ShellError::GenericError {
+                    error: "Failed to turn on foreign_key protections for reset".into(),
                     msg: err.to_string(),
                     span: Some(Span::test_data()),
                     help: None,
@@ -68,9 +84,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(StorReset {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(StorReset)
     }
 }

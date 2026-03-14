@@ -1,10 +1,10 @@
 use crate::{
+    Module, Span,
     ast::Block,
     engine::{
-        description::Doccomments, CachedFile, Command, EngineState, OverlayFrame, ScopeFrame,
-        Variable, VirtualPath,
+        CachedFile, Command, EngineState, OverlayFrame, ScopeFrame, Variable, VirtualPath,
+        description::Doccomments,
     },
-    Module, Span,
 };
 use std::sync::Arc;
 
@@ -14,6 +14,7 @@ use crate::{PluginRegistryItem, RegisteredPlugin};
 /// A delta (or change set) between the current global state and a possible future global state. Deltas
 /// can be applied to the global state to update it to contain both previous state and the state held
 /// within the delta.
+#[derive(Clone)]
 pub struct StateDelta {
     pub(super) files: Vec<CachedFile>,
     pub(super) virtual_paths: Vec<(String, VirtualPath)>,
@@ -62,6 +63,10 @@ impl StateDelta {
 
     pub fn num_virtual_paths(&self) -> usize {
         self.virtual_paths.len()
+    }
+
+    pub fn num_vars(&self) -> usize {
+        self.vars.len()
     }
 
     pub fn num_decls(&self) -> usize {

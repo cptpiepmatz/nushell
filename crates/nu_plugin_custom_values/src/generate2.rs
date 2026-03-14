@@ -1,4 +1,4 @@
-use crate::{second_custom_value::SecondCustomValue, CustomValuePlugin};
+use crate::{CustomValuePlugin, second_custom_value::SecondCustomValue};
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, Example, LabeledError, Signature, Span, SyntaxShape, Value};
 
@@ -20,12 +20,12 @@ impl SimplePluginCommand for Generate2 {
             .optional(
                 "closure",
                 SyntaxShape::Closure(Some(vec![SyntaxShape::Any])),
-                "An optional closure to pass the custom value to",
+                "An optional closure to pass the custom value to.",
             )
             .category(Category::Experimental)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "custom-value generate2",

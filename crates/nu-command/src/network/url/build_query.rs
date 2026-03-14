@@ -3,9 +3,9 @@ use nu_engine::command_prelude::*;
 use super::query::{record_to_query_string, table_to_query_string};
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct UrlBuildQuery;
 
-impl Command for SubCommand {
+impl Command for UrlBuildQuery {
     fn name(&self) -> &str {
         "url build-query"
     }
@@ -30,25 +30,25 @@ impl Command for SubCommand {
         vec!["convert", "record", "table"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Outputs a query string representing the contents of this record",
+                description: "Outputs a query string representing the contents of this record.",
                 example: r#"{ mode:normal userid:31415 } | url build-query"#,
                 result: Some(Value::test_string("mode=normal&userid=31415")),
             },
             Example {
-                description: "Outputs a query string representing the contents of this record, with a value that needs to be url-encoded",
+                description: "Outputs a query string representing the contents of this record, with a value that needs to be URL-encoded.",
                 example: r#"{a:"AT&T", b: "AT T"} | url build-query"#,
                 result: Some(Value::test_string("a=AT%26T&b=AT+T")),
             },
             Example {
-                description: "Outputs a query string representing the contents of this record, \"exploding\" the list into multiple parameters",
+                description: "Outputs a query string representing the contents of this record, \"exploding\" the list into multiple parameters.",
                 example: r#"{a: ["one", "two"], b: "three"} | url build-query"#,
                 result: Some(Value::test_string("a=one&a=two&b=three")),
             },
             Example {
-                description: "Outputs a query string representing the contents of this table containing key-value pairs",
+                description: "Outputs a query string representing the contents of this table containing key-value pairs.",
                 example: r#"[[key, value]; [a, one], [a, two], [b, three], [a, four]] | url build-query"#,
                 result: Some(Value::test_string("a=one&a=two&b=three&a=four")),
             },
@@ -87,9 +87,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(UrlBuildQuery)
     }
 }

@@ -1,11 +1,12 @@
 use crate::util::eval_source;
 #[cfg(feature = "plugin")]
-use nu_path::canonicalize_with;
+use nu_path::absolute_with;
 #[cfg(feature = "plugin")]
-use nu_protocol::{engine::StateWorkingSet, ParseError, PluginRegistryFile, Spanned};
+use nu_protocol::{ParseError, PluginRegistryFile, Spanned, engine::StateWorkingSet};
 use nu_protocol::{
+    PipelineData,
     engine::{EngineState, Stack},
-    report_shell_error, PipelineData,
+    report_shell_error,
 };
 #[cfg(feature = "plugin")]
 use nu_utils::perf;
@@ -18,7 +19,7 @@ const OLD_PLUGIN_FILE: &str = "plugin.nu";
 
 #[cfg(feature = "plugin")]
 pub fn read_plugin_file(engine_state: &mut EngineState, plugin_file: Option<Spanned<String>>) {
-    use nu_protocol::ShellError;
+    use nu_protocol::{ShellError, shell_error::io::IoError};
     use std::path::Path;
 
     let span = plugin_file.as_ref().map(|s| s.span);
@@ -30,6 +31,7 @@ pub fn read_plugin_file(engine_state: &mut EngineState, plugin_file: Option<Span
         .is_some_and(|ext| ext == "nu")
     {
         report_shell_error(
+            None,
             engine_state,
             &ShellError::GenericError {
                 error: "Wrong plugin file format".into(),
@@ -77,17 +79,13 @@ pub fn read_plugin_file(engine_state: &mut EngineState, plugin_file: Option<Span
                     }
                 } else {
                     report_shell_error(
+                        None,
                         engine_state,
-                        &ShellError::GenericError {
-                            error: format!(
-                                "Error while opening plugin registry file: {}",
-                                plugin_path.display()
-                            ),
-                            msg: "plugin path defined here".into(),
-                            span,
-                            help: None,
-                            inner: vec![err.into()],
-                        },
+                        &ShellError::Io(IoError::new_internal_with_path(
+                            err,
+                            "Could not open plugin registry file",
+                            plugin_path,
+                        )),
                     );
                     return;
                 }
@@ -109,6 +107,7 @@ pub fn read_plugin_file(engine_state: &mut EngineState, plugin_file: Option<Span
             Err(err) => {
                 log::warn!("Failed to read plugin registry file: {err:?}");
                 report_shell_error(
+                    None,
                     engine_state,
                     &ShellError::GenericError {
                         error: format!(
@@ -141,10 +140,31 @@ pub fn read_plugin_file(engine_state: &mut EngineState, plugin_file: Option<Span
 
         let mut working_set = StateWorkingSet::new(engine_state);
 
-        nu_plugin_engine::load_plugin_file(&mut working_set, &contents, span);
+        let plugin_load_errors =
+            nu_plugin_engine::load_plugin_file(&mut working_set, &contents, span);
+
+        if plugin_load_errors > 0 {
+            report_shell_error(
+                None,
+                engine_state,
+                &ShellError::GenericError {
+                    error: format!(
+                        "Failed to load {plugin_load_errors} plugin entr{} from {}",
+                        if plugin_load_errors == 1 { "y" } else { "ies" },
+                        plugin_path.display(),
+                    ),
+                    msg: "plugins with incompatible or invalid registry data were skipped".into(),
+                    span,
+                    help: Some(
+                        "run `plugin list` and re-add outdated plugins with `plugin add`".into(),
+                    ),
+                    inner: vec![],
+                },
+            );
+        }
 
         if let Err(err) = engine_state.merge_delta(working_set.render()) {
-            report_shell_error(engine_state, &err);
+            report_shell_error(None, engine_state, &err);
             return;
         }
 
@@ -169,16 +189,19 @@ pub fn add_plugin_file(engine_state: &mut EngineState, plugin_file: Option<Spann
         if let Some(plugin_file) = plugin_file {
             let path = Path::new(&plugin_file.item);
             let path_dir = path.parent().unwrap_or(path);
-            // Just try to canonicalize the directory of the plugin file first.
-            if let Ok(path_dir) = canonicalize_with(path_dir, &cwd) {
-                // Try to canonicalize the actual filename, but it's ok if that fails. The file doesn't
-                // have to exist.
+            // Just try the absolute directory of the plugin file first.
+            if let Ok(path_dir) = absolute_with(path_dir, &cwd)
+                && path_dir.exists()
+            {
+                // Get an absolute path to the file.
+                // We don't need to check if it exists.
                 let path = path_dir.join(path.file_name().unwrap_or(path.as_os_str()));
-                let path = canonicalize_with(&path, &cwd).unwrap_or(path);
+                let path = absolute_with(&path, &cwd).unwrap_or(path);
                 engine_state.plugin_path = Some(path)
             } else {
                 // It's an error if the directory for the plugin file doesn't exist.
                 report_parse_error(
+                    None,
                     &StateWorkingSet::new(engine_state),
                     &ParseError::FileNotFound(
                         path_dir.to_string_lossy().into_owned(),
@@ -188,10 +211,9 @@ pub fn add_plugin_file(engine_state: &mut EngineState, plugin_file: Option<Spann
             }
         } else if let Some(plugin_path) = nu_path::nu_config_dir() {
             // Path to store plugins signatures
-            let mut plugin_path =
-                canonicalize_with(&plugin_path, &cwd).unwrap_or(plugin_path.into());
+            let mut plugin_path = absolute_with(&plugin_path, &cwd).unwrap_or(plugin_path.into());
             plugin_path.push(PLUGIN_FILE);
-            let plugin_path = canonicalize_with(&plugin_path, &cwd).unwrap_or(plugin_path);
+            let plugin_path = absolute_with(&plugin_path, &cwd).unwrap_or(plugin_path);
             engine_state.plugin_path = Some(plugin_path);
         }
     }
@@ -201,6 +223,7 @@ pub fn eval_config_contents(
     config_path: PathBuf,
     engine_state: &mut EngineState,
     stack: &mut Stack,
+    strict_mode: bool,
 ) {
     if config_path.exists() & config_path.is_file() {
         let config_filename = config_path.to_string_lossy();
@@ -211,7 +234,7 @@ pub fn eval_config_contents(
             engine_state.file = Some(config_path.clone());
 
             // TODO: ignore this error?
-            let _ = eval_source(
+            let exit_code = eval_source(
                 engine_state,
                 stack,
                 &contents,
@@ -219,13 +242,16 @@ pub fn eval_config_contents(
                 PipelineData::empty(),
                 false,
             );
+            if exit_code != 0 && strict_mode {
+                std::process::exit(exit_code)
+            }
 
             // Restore the current active file.
             engine_state.file = prev_file;
 
             // Merge the environment in case env vars changed in the config
             if let Err(e) = engine_state.merge_env(stack) {
-                report_shell_error(engine_state, &e);
+                report_shell_error(Some(stack), engine_state, &e);
             }
         }
     }
@@ -235,7 +261,7 @@ pub fn eval_config_contents(
 pub fn migrate_old_plugin_file(engine_state: &EngineState) -> bool {
     use nu_protocol::{
         PluginExample, PluginIdentity, PluginRegistryItem, PluginRegistryItemData, PluginSignature,
-        ShellError,
+        ShellError, shell_error::io::IoError,
     };
     use std::collections::BTreeMap;
 
@@ -246,19 +272,24 @@ pub fn migrate_old_plugin_file(engine_state: &EngineState) -> bool {
     };
 
     let Some(config_dir) =
-        nu_path::nu_config_dir().and_then(|dir| nu_path::canonicalize_with(dir, &cwd).ok())
+        nu_path::nu_config_dir().and_then(|dir| nu_path::absolute_with(dir, &cwd).ok())
     else {
         return false;
     };
 
-    let Ok(old_plugin_file_path) = nu_path::canonicalize_with(OLD_PLUGIN_FILE, &config_dir) else {
+    let Ok(old_plugin_file_path) = nu_path::absolute_with(OLD_PLUGIN_FILE, &config_dir) else {
         return false;
     };
+
+    if !config_dir.exists() || !old_plugin_file_path.exists() {
+        return false;
+    }
 
     let old_contents = match std::fs::read(&old_plugin_file_path) {
         Ok(old_contents) => old_contents,
         Err(err) => {
             report_shell_error(
+                None,
                 engine_state,
                 &ShellError::GenericError {
                     error: "Can't read old plugin file to migrate".into(),
@@ -281,7 +312,7 @@ pub fn migrate_old_plugin_file(engine_state: &EngineState) -> bool {
         &mut stack,
         &old_contents,
         &old_plugin_file_path.to_string_lossy(),
-        PipelineData::Empty,
+        PipelineData::empty(),
         false,
     ) != 0
     {
@@ -324,10 +355,18 @@ pub fn migrate_old_plugin_file(engine_state: &EngineState) -> bool {
     // Write the new file
     let new_plugin_file_path = config_dir.join(PLUGIN_FILE);
     if let Err(err) = std::fs::File::create(&new_plugin_file_path)
-        .map_err(|e| e.into())
+        .map_err(|err| {
+            IoError::new_internal_with_path(
+                err,
+                "Could not create new plugin file",
+                new_plugin_file_path.clone(),
+            )
+        })
+        .map_err(ShellError::from)
         .and_then(|file| contents.write_to(file, None))
     {
         report_shell_error(
+            None,
             &engine_state,
             &ShellError::GenericError {
                 error: "Failed to save migrated plugin file".into(),

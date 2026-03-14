@@ -1,7 +1,7 @@
 use super::utils::chain_error_with_input;
-use nu_engine::{command_prelude::*, ClosureEval};
-use nu_protocol::engine::Closure;
+use nu_engine::{ClosureEval, command_prelude::*};
 use nu_protocol::Signals;
+use nu_protocol::engine::Closure;
 
 #[derive(Clone)]
 pub struct ChunkBy;
@@ -47,7 +47,7 @@ consecutive elements that share the same closure result value into lists."#
         chunk_by(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Chunk data into runs of larger than zero or not.",
@@ -193,13 +193,15 @@ pub fn chunk_by(
     call: &Call,
     input: PipelineData,
 ) -> Result<PipelineData, ShellError> {
+    let input = input.into_stream_or_original(engine_state);
+
     let head = call.head;
     let closure: Closure = call.req(engine_state, stack, 0)?;
 
     let metadata = input.metadata();
 
     match input {
-        PipelineData::Empty => Ok(PipelineData::Empty),
+        PipelineData::Empty => Ok(PipelineData::empty()),
         PipelineData::Value(Value::Range { .. }, ..)
         | PipelineData::Value(Value::List { .. }, ..)
         | PipelineData::ListStream(..) => {
@@ -248,9 +250,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ChunkBy {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ChunkBy)
     }
 }

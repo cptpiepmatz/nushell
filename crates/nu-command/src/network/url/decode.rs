@@ -1,12 +1,12 @@
-use nu_cmd_base::input_handler::{operate, CellPathOnlyArgs};
+use nu_cmd_base::input_handler::{CellPathOnlyArgs, operate};
 use nu_engine::command_prelude::*;
 
 use percent_encoding::percent_decode_str;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct UrlDecode;
 
-impl Command for SubCommand {
+impl Command for UrlDecode {
     fn name(&self) -> &str {
         "url decode"
     }
@@ -51,15 +51,15 @@ impl Command for SubCommand {
         operate(action, args, input, call.head, engine_state.signals())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Decode a url with escape characters",
+                description: "Decode a URL with escape characters.",
                 example: "'https://example.com/foo%20bar' | url decode",
                 result: Some(Value::test_string("https://example.com/foo bar")),
             },
             Example {
-                description: "Decode multiple urls with escape characters in list",
+                description: "Decode multiple URLs with escape characters in list.",
                 example: "['https://example.com/foo%20bar' 'https://example.com/a%3Eb' '%E4%B8%AD%E6%96%87%E5%AD%97/eng/12%2034'] | url decode",
                 result: Some(Value::list(
                     vec![
@@ -111,9 +111,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(UrlDecode)
     }
 }

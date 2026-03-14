@@ -2,13 +2,14 @@
 
 use nu_cmd_base::hook::eval_hook;
 use nu_engine::{eval_block, eval_block_with_early_return};
-use nu_parser::{lex, parse, unescape_unquote_string, Token, TokenContents};
+use nu_parser::{Token, TokenContents, lex, parse, unescape_unquote_string};
 use nu_protocol::{
-    cli_error::report_compile_error,
+    PipelineData, ShellError, Span, Value,
     debugger::WithoutDebug,
     engine::{EngineState, Stack, StateWorkingSet},
-    report_parse_error, report_parse_warning, report_shell_error, PipelineData, ShellError, Span,
-    Value,
+    process::check_exit_status_future,
+    report_error::report_compile_error,
+    report_parse_error, report_parse_warning, report_shell_error,
 };
 #[cfg(windows)]
 use nu_utils::enable_vt_processing;
@@ -44,6 +45,7 @@ fn gather_env_vars(
 ) {
     fn report_capture_error(engine_state: &EngineState, env_str: &str, msg: &str) {
         report_shell_error(
+            None,
             engine_state,
             &ShellError::GenericError {
                 error: format!("Environment variable was not captured: {env_str}"),
@@ -75,6 +77,7 @@ fn gather_env_vars(
         None => {
             // Could not capture current working directory
             report_shell_error(
+                None,
                 engine_state,
                 &ShellError::GenericError {
                     error: "Current directory is not a valid utf-8 path".into(),
@@ -132,7 +135,7 @@ fn gather_env_vars(
                     working_set.error(err);
                 }
 
-                if working_set.parse_errors.first().is_some() {
+                if !working_set.parse_errors.is_empty() {
                     report_capture_error(
                         engine_state,
                         &String::from_utf8_lossy(contents),
@@ -176,7 +179,7 @@ fn gather_env_vars(
                     working_set.error(err);
                 }
 
-                if working_set.parse_errors.first().is_some() {
+                if !working_set.parse_errors.is_empty() {
                     report_capture_error(
                         engine_state,
                         &String::from_utf8_lossy(contents),
@@ -216,7 +219,7 @@ pub fn print_pipeline(
     pipeline: PipelineData,
     no_newline: bool,
 ) -> Result<(), ShellError> {
-    if let Some(hook) = engine_state.get_config().hooks.display_output.clone() {
+    if let Some(hook) = stack.get_config(engine_state).hooks.display_output.clone() {
         let pipeline = eval_hook(
             engine_state,
             stack,
@@ -249,7 +252,7 @@ pub fn eval_source(
             code
         }
         Err(err) => {
-            report_shell_error(engine_state, &err);
+            report_shell_error(Some(stack), engine_state, &err);
             let code = err.exit_code();
             stack.set_last_error(&err);
             code.unwrap_or(0)
@@ -286,21 +289,21 @@ fn evaluate_source(
         let mut working_set = StateWorkingSet::new(engine_state);
         let output = parse(
             &mut working_set,
-            Some(fname), // format!("entry #{}", entry_num)
+            Some(fname), // format!("repl_entry #{}", entry_num)
             source,
             false,
         );
         if let Some(warning) = working_set.parse_warnings.first() {
-            report_parse_warning(&working_set, warning);
+            report_parse_warning(Some(stack), &working_set, warning);
         }
 
         if let Some(err) = working_set.parse_errors.first() {
-            report_parse_error(&working_set, err);
+            report_parse_error(Some(stack), &working_set, err);
             return Ok(true);
         }
 
         if let Some(err) = working_set.compile_errors.first() {
-            report_compile_error(&working_set, err);
+            report_compile_error(Some(stack), &working_set, err);
             return Ok(true);
         }
 
@@ -314,11 +317,27 @@ fn evaluate_source(
     } else {
         eval_block::<WithoutDebug>(engine_state, stack, &block, input)
     }?;
+    let pipeline_data = pipeline.body;
 
-    let no_newline = matches!(&pipeline, &PipelineData::ByteStream(..));
-    print_pipeline(engine_state, stack, pipeline, no_newline)?;
+    // Update engine_state with deleted variables
+    for var_id in &stack.deletions {
+        if let Some(active_id) = engine_state.scope.active_overlays.last()
+            && let Some((_, overlay)) = engine_state.scope.overlays.get_mut((*active_id).get())
+        {
+            overlay.vars.retain(|_, v| *v != *var_id);
+        }
+    }
+    stack.deletions.clear();
 
-    Ok(false)
+    let no_newline = matches!(&pipeline_data, &PipelineData::ByteStream(..));
+    print_pipeline(engine_state, stack, pipeline_data, no_newline)?;
+
+    let pipefail = nu_experimental::PIPE_FAIL.get();
+    if !pipefail {
+        return Ok(false);
+    }
+    // After print pipeline, need to check exit status to implement pipeline feature.
+    check_exit_status_future(pipeline.exit).map(|_| false)
 }
 
 #[cfg(test)]

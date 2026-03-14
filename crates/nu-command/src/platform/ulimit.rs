@@ -1,4 +1,4 @@
-use nix::sys::resource::{rlim_t, Resource, RLIM_INFINITY};
+use nix::sys::resource::{RLIM_INFINITY, Resource, rlim_t};
 use nu_engine::command_prelude::*;
 
 use std::sync::LazyLock;
@@ -42,7 +42,7 @@ impl<'a> ResourceInfo<'a> {
     }
 }
 
-impl<'a> Default for ResourceInfo<'a> {
+impl Default for ResourceInfo<'_> {
     fn default() -> Self {
         Self {
             name: "file-size",
@@ -470,19 +470,15 @@ fn parse_limit(
             if val == "unlimited" {
                 Ok(RLIM_INFINITY)
             } else if val == "soft" {
-                if soft {
-                    Ok(hard_limit)
-                } else {
-                    Ok(soft_limit)
-                }
+                if soft { Ok(hard_limit) } else { Ok(soft_limit) }
             } else if val == "hard" {
                 Ok(hard_limit)
             } else {
-                return Err(ShellError::IncorrectValue {
+                Err(ShellError::IncorrectValue {
                     msg: "Only unlimited, soft and hard are supported for strings".into(),
                     val_span,
                     call_span,
-                });
+                })
             }
         }
         _ => Err(ShellError::TypeMismatch {
@@ -510,10 +506,10 @@ impl Command for ULimit {
     fn signature(&self) -> Signature {
         let mut sig = Signature::build("ulimit")
             .input_output_types(vec![(Type::Nothing, Type::Any)])
-            .switch("soft", "Sets soft resource limit", Some('S'))
-            .switch("hard", "Sets hard resource limit", Some('H'))
-            .switch("all", "Prints all current limits", Some('a'))
-            .optional("limit", SyntaxShape::Any, "Limit value.")
+            .switch("soft", "Sets soft resource limit.", Some('S'))
+            .switch("hard", "Sets hard resource limit.", Some('H'))
+            .switch("all", "Prints all current limits.", Some('a'))
+            .optional("limit", SyntaxShape::Any, "The limit value to set.")
             .category(Category::Platform);
 
         for res in RESOURCE_ARRAY.iter() {
@@ -559,41 +555,41 @@ impl Command for ULimit {
                 set_limits(&limit_value, &res, hard, soft, call.head)?;
             }
 
-            Ok(PipelineData::Empty)
+            Ok(PipelineData::empty())
         } else {
             print_limits(call, engine_state, stack, all, soft, hard)
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Print all current limits",
+                description: "Print all current limits.",
                 example: "ulimit -a",
                 result: None,
             },
             Example {
-                description: "Print specified limits",
+                description: "Print specified limits.",
                 example: "ulimit --core-size --data-size --file-size",
                 result: None,
             },
             Example {
-                description: "Set limit",
+                description: "Set limit.",
                 example: "ulimit --core-size 102400",
                 result: None,
             },
             Example {
-                description: "Set stack size soft limit",
+                description: "Set stack size soft limit.",
                 example: "ulimit -s -S 10240",
                 result: None,
             },
             Example {
-                description: "Set virtual memory size hard limit",
+                description: "Set virtual memory size hard limit.",
                 example: "ulimit -v -H 10240",
                 result: None,
             },
             Example {
-                description: "Set core size limit to unlimited",
+                description: "Set core size limit to unlimited.",
                 example: "ulimit -c unlimited",
                 result: None,
             },

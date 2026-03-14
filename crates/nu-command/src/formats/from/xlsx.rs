@@ -21,7 +21,7 @@ impl Command for FromXlsx {
             .named(
                 "sheets",
                 SyntaxShape::List(Box::new(SyntaxShape::String)),
-                "Only convert specified sheets",
+                "Only convert specified sheets.",
                 Some('s'),
             )
             .category(Category::Formats)
@@ -54,15 +54,15 @@ impl Command for FromXlsx {
         from_xlsx(input, head, sel_sheets, no_infer).map(|pd| pd.set_metadata(metadata))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Convert binary .xlsx data to a table",
+                description: "Convert binary .xlsx data to a table.",
                 example: "open --raw test.xlsx | from xlsx",
                 result: None,
             },
             Example {
-                description: "Convert binary .xlsx data to a table, specifying the tables",
+                description: "Convert binary .xlsx data to a table, specifying the tables.",
                 example: "open --raw test.xlsx | from xlsx --sheets [Spreadsheet1]",
                 result: None,
             },
@@ -103,7 +103,7 @@ fn collect_binary(input: PipelineData, span: Span) -> Result<Vec<u8>, ShellError
                         input: "value originates from here".into(),
                         msg_span: span,
                         input_span: x.span(),
-                    })
+                    });
                 }
                 None => break,
             }
@@ -189,7 +189,7 @@ fn from_xlsx(
         }
     }
 
-    Ok(PipelineData::Value(
+    Ok(PipelineData::value(
         Value::record(dict.into_iter().collect(), head),
         None,
     ))
@@ -200,9 +200,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(FromXlsx {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(FromXlsx)
     }
 }

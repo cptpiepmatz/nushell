@@ -1,7 +1,9 @@
 use nu_engine::{command_prelude::*, get_eval_block_with_early_return, redirect_env};
 #[cfg(feature = "os")]
 use nu_protocol::process::{ChildPipe, ChildProcess};
-use nu_protocol::{engine::Closure, ByteStream, ByteStreamSource, OutDest};
+use nu_protocol::{
+    ByteStream, ByteStreamSource, OutDest, engine::Closure, shell_error::io::IoError,
+};
 
 use std::{
     io::{Cursor, Read},
@@ -26,27 +28,17 @@ impl Command for Do {
             .input_output_types(vec![(Type::Any, Type::Any)])
             .switch(
                 "ignore-errors",
-                "ignore errors as the closure runs",
+                "Ignore errors as the closure runs.",
                 Some('i'),
             )
             .switch(
-                "ignore-shell-errors",
-                "ignore shell errors as the closure runs",
-                Some('s'),
-            )
-            .switch(
-                "ignore-program-errors",
-                "ignore external program errors as the closure runs",
-                Some('p'),
-            )
-            .switch(
                 "capture-errors",
-                "catch errors as the closure runs, and return them",
+                "Catch errors as the closure runs, and return them.",
                 Some('c'),
             )
             .switch(
                 "env",
-                "keep the environment defined inside the command",
+                "Keep the environment defined inside the command.",
                 None,
             )
             .rest(
@@ -69,36 +61,6 @@ impl Command for Do {
         let rest: Vec<Value> = call.rest(engine_state, caller_stack, 1)?;
         let ignore_all_errors = call.has_flag(engine_state, caller_stack, "ignore-errors")?;
 
-        if call.has_flag(engine_state, caller_stack, "ignore-shell-errors")? {
-            nu_protocol::report_shell_warning(
-                engine_state,
-                &ShellError::GenericError {
-                    error: "Deprecated option".into(),
-                    msg: "`--ignore-shell-errors` is deprecated and will be removed in 0.102.0."
-                        .into(),
-                    span: Some(call.head),
-                    help: Some("Please use the `--ignore-errors(-i)`".into()),
-                    inner: vec![],
-                },
-            );
-        }
-        if call.has_flag(engine_state, caller_stack, "ignore-program-errors")? {
-            nu_protocol::report_shell_warning(
-                engine_state,
-                &ShellError::GenericError {
-                    error: "Deprecated option".into(),
-                    msg: "`--ignore-program-errors` is deprecated and will be removed in 0.102.0."
-                        .into(),
-                    span: Some(call.head),
-                    help: Some("Please use the `--ignore-errors(-i)`".into()),
-                    inner: vec![],
-                },
-            );
-        }
-        let ignore_shell_errors = ignore_all_errors
-            || call.has_flag(engine_state, caller_stack, "ignore-shell-errors")?;
-        let ignore_program_errors = ignore_all_errors
-            || call.has_flag(engine_state, caller_stack, "ignore-program-errors")?;
         let capture_errors = call.has_flag(engine_state, caller_stack, "capture-errors")?;
         let has_env = call.has_flag(engine_state, caller_stack, "env")?;
 
@@ -108,7 +70,8 @@ impl Command for Do {
         bind_args_to(&mut callee_stack, &block.signature, rest, head)?;
         let eval_block_with_early_return = get_eval_block_with_early_return(engine_state);
 
-        let result = eval_block_with_early_return(engine_state, &mut callee_stack, block, input);
+        let result = eval_block_with_early_return(engine_state, &mut callee_stack, block, input)
+            .map(|p| p.body);
 
         if has_env {
             // Merge the block's environment to the current stack
@@ -121,7 +84,7 @@ impl Command for Do {
                 #[cfg(not(feature = "os"))]
                 return Err(ShellError::DisabledOsSupport {
                     msg: "Cannot create a thread to receive stdout message.".to_string(),
-                    span: Some(span),
+                    span,
                 });
 
                 #[cfg(feature = "os")]
@@ -143,10 +106,15 @@ impl Command for Do {
                                     .name("stdout consumer".to_string())
                                     .spawn(move || {
                                         let mut buf = Vec::new();
-                                        stdout.read_to_end(&mut buf)?;
+                                        stdout.read_to_end(&mut buf).map_err(|err| {
+                                            IoError::new_internal(
+                                                err,
+                                                "Could not read stdout to end",
+                                            )
+                                        })?;
                                         Ok::<_, ShellError>(buf)
                                     })
-                                    .err_span(head)
+                                    .map_err(|err| IoError::new(err, head, None))
                             })
                             .transpose()?;
 
@@ -156,7 +124,9 @@ impl Command for Do {
                             None => String::new(),
                             Some(mut stderr) => {
                                 let mut buf = String::new();
-                                stderr.read_to_string(&mut buf).err_span(span)?;
+                                stderr
+                                    .read_to_string(&mut buf)
+                                    .map_err(|err| IoError::new(err, span, None))?;
                                 buf
                             }
                         };
@@ -187,16 +157,16 @@ impl Command for Do {
                         if !stderr_msg.is_empty() {
                             child.stderr = Some(ChildPipe::Tee(Box::new(Cursor::new(stderr_msg))));
                         }
-                        Ok(PipelineData::ByteStream(
+                        Ok(PipelineData::byte_stream(
                             ByteStream::child(child, span),
                             metadata,
                         ))
                     }
-                    Err(stream) => Ok(PipelineData::ByteStream(stream, metadata)),
+                    Err(stream) => Ok(PipelineData::byte_stream(stream, metadata)),
                 }
             }
             Ok(PipelineData::ByteStream(mut stream, metadata))
-                if ignore_program_errors
+                if ignore_all_errors
                     && !matches!(
                         caller_stack.stdout(),
                         OutDest::Pipe | OutDest::PipeSeparate | OutDest::Value
@@ -206,12 +176,12 @@ impl Command for Do {
                 if let ByteStreamSource::Child(child) = stream.source_mut() {
                     child.ignore_error(true);
                 }
-                Ok(PipelineData::ByteStream(stream, metadata))
+                Ok(PipelineData::byte_stream(stream, metadata))
             }
-            Ok(PipelineData::Value(Value::Error { .. }, ..)) | Err(_) if ignore_shell_errors => {
+            Ok(PipelineData::Value(Value::Error { .. }, ..)) | Err(_) if ignore_all_errors => {
                 Ok(PipelineData::empty())
             }
-            Ok(PipelineData::ListStream(stream, metadata)) if ignore_shell_errors => {
+            Ok(PipelineData::ListStream(stream, metadata)) if ignore_all_errors => {
                 let stream = stream.map(move |value| {
                     if let Value::Error { .. } = value {
                         Value::nothing(head)
@@ -219,56 +189,56 @@ impl Command for Do {
                         value
                     }
                 });
-                Ok(PipelineData::ListStream(stream, metadata))
+                Ok(PipelineData::list_stream(stream, metadata))
             }
             r => r,
         }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Run the closure",
+                description: "Run the closure.",
                 example: r#"do { echo hello }"#,
                 result: Some(Value::test_string("hello")),
             },
             Example {
-                description: "Run a stored first-class closure",
+                description: "Run a stored first-class closure.",
                 example: r#"let text = "I am enclosed"; let hello = {|| echo $text}; do $hello"#,
                 result: Some(Value::test_string("I am enclosed")),
             },
             Example {
-                description: "Run the closure and ignore both shell and external program errors",
+                description: "Run the closure and ignore both shell and external program errors.",
                 example: r#"do --ignore-errors { thisisnotarealcommand }"#,
                 result: None,
             },
             Example {
-                description: "Abort the pipeline if a program returns a non-zero exit code",
+                description: "Abort the pipeline if a program returns a non-zero exit code.",
                 example: r#"do --capture-errors { nu --commands 'exit 1' } | myscarycommand"#,
                 result: None,
             },
             Example {
-                description: "Run the closure with a positional, type-checked parameter",
+                description: "Run the closure with a positional, type-checked parameter.",
                 example: r#"do {|x:int| 100 + $x } 77"#,
                 result: Some(Value::test_int(177)),
             },
             Example {
-                description: "Run the closure with pipeline input",
+                description: "Run the closure with pipeline input.",
                 example: r#"77 | do { 100 + $in }"#,
                 result: Some(Value::test_int(177)),
             },
             Example {
-                description: "Run the closure with a default parameter value",
+                description: "Run the closure with a default parameter value.",
                 example: r#"77 | do {|x=100| $x + $in }"#,
                 result: Some(Value::test_int(177)),
             },
             Example {
-                description: "Run the closure with two positional parameters",
+                description: "Run the closure with two positional parameters.",
                 example: r#"do {|x,y| $x + $y } 77 100"#,
                 result: Some(Value::test_int(177)),
             },
             Example {
-                description: "Run the closure and keep changes to the environment",
+                description: "Run the closure and keep changes to the environment.",
                 example: r#"do --env { $env.foo = 'bar' }; $env.foo"#,
                 result: Some(Value::test_string("bar")),
             },
@@ -294,22 +264,13 @@ fn bind_args_to(
             .expect("internal error: all custom parameters must have var_ids");
         if let Some(result) = val_iter.next() {
             let param_type = param.shape.to_type();
-            if required && !result.get_type().is_subtype(&param_type) {
-                // need to check if result is an empty list, and param_type is table or list
-                // nushell needs to pass type checking for the case.
-                let empty_list_matches = result
-                    .as_list()
-                    .map(|l| l.is_empty() && matches!(param_type, Type::List(_) | Type::Table(_)))
-                    .unwrap_or(false);
-
-                if !empty_list_matches {
-                    return Err(ShellError::CantConvert {
-                        to_type: param.shape.to_type().to_string(),
-                        from_type: result.get_type().to_string(),
-                        span: result.span(),
-                        help: None,
-                    });
-                }
+            if !result.is_subtype_of(&param_type) {
+                return Err(ShellError::CantConvert {
+                    to_type: param.shape.to_type().to_string(),
+                    from_type: result.get_type().to_string(),
+                    span: result.span(),
+                    help: None,
+                });
             }
             stack.add_var(var_id, result);
         } else if let Some(value) = &param.default_value {
@@ -349,9 +310,8 @@ fn bind_args_to(
 
 mod test {
     #[test]
-    fn test_examples() {
+    fn test_examples() -> nu_test_support::Result {
         use super::Do;
-        use crate::test_examples;
-        test_examples(Do {})
+        nu_test_support::test().examples(Do)
     }
 }

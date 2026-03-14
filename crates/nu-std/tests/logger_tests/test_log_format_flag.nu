@@ -1,3 +1,4 @@
+use std/testing *
 use std *
 use std/log *
 use std/assert
@@ -15,7 +16,7 @@ def run-command [
     } else {
         ^$nu.current-exe --no-config-file --commands $'use std; use std/log; NU_LOG_LEVEL=($system_level) log ($message_level) --format "($format)" "($message)"'
     }
-    | complete | get --ignore-errors stderr
+    | complete | get --optional stderr
 }
 
 
@@ -40,7 +41,7 @@ def "assert formatted" [
     assert equal ($output | str trim --right) (format-message $message $format $prefix $ansi)
 }
 
-#[test]
+@test
 def format_flag [] {
     assert formatted "test" "25 %MSG% %ANSI_START% %LEVEL%%ANSI_STOP%" critical
     assert formatted "test" "25 %MSG% %ANSI_START% %LEVEL%%ANSI_STOP%" error

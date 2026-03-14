@@ -1,22 +1,22 @@
 use super::{
+    Interface, InterfaceManager, PluginRead, PluginWrite,
     stream::{StreamManager, StreamManagerHandle},
     test_util::TestCase,
-    Interface, InterfaceManager, PluginRead, PluginWrite,
 };
 use nu_plugin_protocol::{
     ByteStreamInfo, ListStreamInfo, PipelineDataHeader, PluginInput, PluginOutput, StreamData,
     StreamMessage,
 };
 use nu_protocol::{
-    engine::Sequence, ByteStream, ByteStreamSource, ByteStreamType, DataSource, ListStream,
-    PipelineData, PipelineMetadata, ShellError, Signals, Span, Value,
+    ByteStream, ByteStreamSource, ByteStreamType, DataSource, ListStream, PipelineData,
+    PipelineMetadata, ShellError, Signals, Span, Value, engine::Sequence, shell_error::io::IoError,
 };
 use std::{path::Path, sync::Arc};
 
 fn test_metadata() -> PipelineMetadata {
     PipelineMetadata {
         data_source: DataSource::FilePath("/test/path".into()),
-        content_type: None,
+        ..Default::default()
     }
 }
 
@@ -139,7 +139,7 @@ fn read_pipeline_data_value() -> Result<(), ShellError> {
     let value = Value::test_int(4);
     let metadata = Some(PipelineMetadata {
         data_source: DataSource::FilePath("/test/path".into()),
-        content_type: None,
+        ..Default::default()
     });
     let header = PipelineDataHeader::Value(value.clone(), metadata.clone());
     match manager.read_pipeline_data(header, &Signals::empty())? {
@@ -168,8 +168,8 @@ fn read_pipeline_data_list_stream() -> Result<(), ShellError> {
     test.add(StreamMessage::End(7));
 
     let metadata = Some(PipelineMetadata {
-        data_source: DataSource::None,
         content_type: Some("foobar".into()),
+        ..Default::default()
     });
 
     let header = PipelineDataHeader::ListStream(ListStreamInfo {
@@ -218,8 +218,8 @@ fn read_pipeline_data_byte_stream() -> Result<(), ShellError> {
     let test_span = Span::new(10, 13);
 
     let metadata = Some(PipelineMetadata {
-        data_source: DataSource::None,
         content_type: Some("foobar".into()),
+        ..Default::default()
     });
 
     let header = PipelineDataHeader::ByteStream(ByteStreamInfo {
@@ -245,7 +245,8 @@ fn read_pipeline_data_byte_stream() -> Result<(), ShellError> {
             match stream.into_source() {
                 ByteStreamSource::Read(mut read) => {
                     let mut buf = Vec::new();
-                    read.read_to_end(&mut buf)?;
+                    read.read_to_end(&mut buf)
+                        .map_err(|err| IoError::new(err, test_span, None))?;
                     let iter = buf.chunks_exact(out_pattern.len());
                     assert_eq!(iter.len(), iterations);
                     for chunk in iter {
@@ -271,8 +272,8 @@ fn read_pipeline_data_byte_stream() -> Result<(), ShellError> {
 fn read_pipeline_data_prepared_properly() -> Result<(), ShellError> {
     let manager = TestInterfaceManager::new(&TestCase::new());
     let metadata = Some(PipelineMetadata {
-        data_source: DataSource::None,
         content_type: Some("foobar".into()),
+        ..Default::default()
     });
 
     let header = PipelineDataHeader::ListStream(ListStreamInfo {
@@ -301,7 +302,7 @@ fn write_pipeline_data_empty() -> Result<(), ShellError> {
     let manager = TestInterfaceManager::new(&test);
     let interface = manager.get_interface();
 
-    let (header, writer) = interface.init_write_pipeline_data(PipelineData::Empty, &())?;
+    let (header, writer) = interface.init_write_pipeline_data(PipelineData::empty(), &())?;
 
     assert!(matches!(header, PipelineDataHeader::Empty));
 
@@ -323,7 +324,7 @@ fn write_pipeline_data_value() -> Result<(), ShellError> {
     let value = Value::test_int(7);
 
     let (header, writer) =
-        interface.init_write_pipeline_data(PipelineData::Value(value.clone(), None), &())?;
+        interface.init_write_pipeline_data(PipelineData::value(value.clone(), None), &())?;
 
     match header {
         PipelineDataHeader::Value(read_value, _) => assert_eq!(value, read_value),
@@ -348,7 +349,7 @@ fn write_pipeline_data_prepared_properly() {
     // Sending a binary should be an error in our test scenario
     let value = Value::test_binary(vec![7, 8]);
 
-    match interface.init_write_pipeline_data(PipelineData::Value(value, None), &()) {
+    match interface.init_write_pipeline_data(PipelineData::value(value, None), &()) {
         Ok(_) => panic!("prepare_pipeline_data was not called"),
         Err(err) => {
             assert_eq!(
@@ -375,7 +376,7 @@ fn write_pipeline_data_list_stream() -> Result<(), ShellError> {
     ];
 
     // Set up pipeline data for a list stream
-    let pipe = PipelineData::ListStream(
+    let pipe = PipelineData::list_stream(
         ListStream::new(
             values.clone().into_iter(),
             Span::test_data(),
@@ -429,7 +430,7 @@ fn write_pipeline_data_byte_stream() -> Result<(), ShellError> {
     let span = Span::new(400, 500);
 
     // Set up pipeline data for a byte stream
-    let data = PipelineData::ByteStream(
+    let data = PipelineData::byte_stream(
         ByteStream::read(
             std::io::Cursor::new(expected),
             span,

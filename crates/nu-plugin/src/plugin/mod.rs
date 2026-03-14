@@ -5,19 +5,22 @@ use std::{
     ffi::OsString,
     ops::Deref,
     panic::AssertUnwindSafe,
+    path::Path,
     sync::mpsc::{self, TrySendError},
     thread,
 };
 
-use nu_engine::documentation::{get_flags_section, HelpStyle};
+use nu_engine::documentation::{FormatterValue, HelpStyle, get_flags_section};
 use nu_plugin_core::{
     ClientCommunicationIo, CommunicationMode, InterfaceManager, PluginEncoder, PluginRead,
     PluginWrite,
 };
-use nu_plugin_protocol::{CallInfo, CustomValueOp, PluginCustomValue, PluginInput, PluginOutput};
+use nu_plugin_protocol::{
+    CallInfo, CustomValueOp, GetCompletionInfo, PluginCustomValue, PluginInput, PluginOutput,
+};
 use nu_protocol::{
-    ast::Operator, CustomValue, IntoSpanned, LabeledError, PipelineData, PluginMetadata,
-    ShellError, Spanned, Value,
+    CustomValue, IntoSpanned, LabeledError, PipelineData, PluginMetadata, ShellError, Span,
+    Spanned, Value, ast::Operator, casing::Casing,
 };
 use thiserror::Error;
 
@@ -26,7 +29,7 @@ use self::{command::render_examples, interface::ReceivedPluginCall};
 mod command;
 mod interface;
 
-pub use command::{create_plugin_signature, PluginCommand, SimplePluginCommand};
+pub use command::{PluginCommand, SimplePluginCommand, create_plugin_signature};
 pub use interface::{EngineInterface, EngineInterfaceManager};
 
 /// This should be larger than the largest commonly sent message to avoid excessive fragmentation.
@@ -145,11 +148,12 @@ pub trait Plugin: Sync {
         engine: &EngineInterface,
         custom_value: Spanned<Box<dyn CustomValue>>,
         index: Spanned<usize>,
+        optional: bool,
     ) -> Result<Value, LabeledError> {
         let _ = engine;
         custom_value
             .item
-            .follow_path_int(custom_value.span, index.item, index.span)
+            .follow_path_int(custom_value.span, index.item, index.span, optional)
             .map_err(LabeledError::from)
     }
 
@@ -162,11 +166,19 @@ pub trait Plugin: Sync {
         engine: &EngineInterface,
         custom_value: Spanned<Box<dyn CustomValue>>,
         column_name: Spanned<String>,
+        optional: bool,
+        casing: Casing,
     ) -> Result<Value, LabeledError> {
         let _ = engine;
         custom_value
             .item
-            .follow_path_string(custom_value.span, column_name.item, column_name.span)
+            .follow_path_string(
+                custom_value.span,
+                column_name.item,
+                column_name.span,
+                optional,
+                casing,
+            )
             .map_err(LabeledError::from)
     }
 
@@ -202,6 +214,24 @@ pub trait Plugin: Sync {
         let _ = engine;
         left.item
             .operation(left.span, operator.item, operator.span, &right)
+            .map_err(LabeledError::from)
+    }
+
+    /// Implement saving logic for a custom value.
+    ///
+    /// The default implementation of this method just calls [`CustomValue::save`], but
+    /// the method can be implemented differently if accessing plugin state is desirable.
+    fn custom_value_save(
+        &self,
+        engine: &EngineInterface,
+        value: Spanned<Box<dyn CustomValue>>,
+        path: Spanned<&Path>,
+        save_call_span: Span,
+    ) -> Result<(), LabeledError> {
+        let _ = engine;
+        value
+            .item
+            .save(path, value.span, save_call_span)
             .map_err(LabeledError::from)
     }
 
@@ -387,7 +417,7 @@ pub enum ServePluginError {
 impl From<ShellError> for ServePluginError {
     fn from(error: ShellError) -> Self {
         match error {
-            ShellError::IOError { .. } => ServePluginError::IOError(error),
+            ShellError::Io(_) => ServePluginError::IOError(error),
             ShellError::PluginFailedToLoad { .. } => ServePluginError::Incompatible(error),
             _ => ServePluginError::UnreportedError(error),
         }
@@ -509,6 +539,39 @@ where
             }
         };
 
+        let get_dynamic_completion = |engine, get_dynamic_completion_info| {
+            // SAFETY: It should be okay to use `AssertUnwindSafe` here, because we don't use any
+            // of the references after we catch the unwind, and immediately exit.
+            let unwind_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let GetCompletionInfo {
+                    name,
+                    arg_type,
+                    call,
+                } = get_dynamic_completion_info;
+                let items = if let Some(command) = commands.get(&name) {
+                    let arg_type = arg_type.into();
+                    command.get_dynamic_completion(
+                        plugin,
+                        &engine,
+                        call,
+                        arg_type,
+                        #[expect(deprecated, reason = "internal usage")]
+                        nu_protocol::engine::ExperimentalMarker,
+                    )
+                } else {
+                    None
+                };
+                let write_result = engine.write_completion_items(items).try_to_report(&engine);
+                if let Err(err) = write_result {
+                    let _ = error_tx.send(err);
+                }
+            }));
+            if unwind_result.is_err() {
+                // Exit after unwind if a panic occurred
+                std::process::exit(1);
+            }
+        };
+
         // As an optimization: create one thread that can be reused for Run calls in sequence
         let (run_tx, run_rx) = mpsc::sync_channel(0);
         thread::Builder::new()
@@ -569,6 +632,9 @@ where
                 } => {
                     custom_value_op(plugin, &engine, custom_value, op).try_to_report(&engine)?;
                 }
+                ReceivedPluginCall::GetCompletion { engine, info } => {
+                    get_dynamic_completion(engine, info)
+                }
             }
         }
 
@@ -600,23 +666,27 @@ fn custom_value_op(
         CustomValueOp::ToBaseValue => {
             let result = plugin
                 .custom_value_to_base_value(engine, local_value)
-                .map(|value| PipelineData::Value(value, None));
+                .map(|value| PipelineData::value(value, None));
             engine
                 .write_response(result)
                 .and_then(|writer| writer.write())
         }
-        CustomValueOp::FollowPathInt(index) => {
+        CustomValueOp::FollowPathInt { index, optional } => {
             let result = plugin
-                .custom_value_follow_path_int(engine, local_value, index)
-                .map(|value| PipelineData::Value(value, None));
+                .custom_value_follow_path_int(engine, local_value, index, optional)
+                .map(|value| PipelineData::value(value, None));
             engine
                 .write_response(result)
                 .and_then(|writer| writer.write())
         }
-        CustomValueOp::FollowPathString(column_name) => {
+        CustomValueOp::FollowPathString {
+            column_name,
+            optional,
+            casing,
+        } => {
             let result = plugin
-                .custom_value_follow_path_string(engine, local_value, column_name)
-                .map(|value| PipelineData::Value(value, None));
+                .custom_value_follow_path_string(engine, local_value, column_name, optional, casing)
+                .map(|value| PipelineData::value(value, None));
             engine
                 .write_response(result)
                 .and_then(|writer| writer.write())
@@ -634,15 +704,26 @@ fn custom_value_op(
             PluginCustomValue::deserialize_custom_values_in(&mut right)?;
             let result = plugin
                 .custom_value_operation(engine, local_value, operator, right)
-                .map(|value| PipelineData::Value(value, None));
+                .map(|value| PipelineData::value(value, None));
             engine
                 .write_response(result)
                 .and_then(|writer| writer.write())
         }
+        CustomValueOp::Save {
+            path,
+            save_call_span,
+        } => {
+            let path = Spanned {
+                item: path.item.as_path(),
+                span: path.span,
+            };
+            let result = plugin.custom_value_save(engine, local_value, path, save_call_span);
+            engine.write_ok(result)
+        }
         CustomValueOp::Dropped => {
             let result = plugin
                 .custom_value_dropped(engine, local_value.item)
-                .map(|_| PipelineData::Empty);
+                .map(|_| PipelineData::empty());
             engine
                 .write_response(result)
                 .and_then(|writer| writer.write())
@@ -663,7 +744,7 @@ fn print_help(plugin: &impl Plugin, encoder: impl PluginEncoder) {
         .as_ref()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "(unknown)".into());
-    println!("Plugin file path: {}", plugin_name);
+    println!("Plugin file path: {plugin_name}");
 
     let mut help = String::new();
     let help_style = HelpStyle::default();
@@ -684,7 +765,10 @@ fn print_help(plugin: &impl Plugin, encoder: impl PluginEncoder) {
                 }
             })
             .and_then(|_| {
-                let flags = get_flags_section(&signature, &help_style, |v| format!("{:#?}", v));
+                let flags = get_flags_section(&signature, &help_style, |v| match v {
+                    FormatterValue::DefaultValue(value) => format!("{value:#?}"),
+                    FormatterValue::CodeString(text) => text.to_string(),
+                });
                 write!(help, "{flags}")
             })
             .and_then(|_| writeln!(help, "\nParameters:"))

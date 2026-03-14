@@ -3,9 +3,9 @@ use nu_engine::command_prelude::*;
 use std::cmp::Ordering;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathMedian;
 
-impl Command for SubCommand {
+impl Command for MathMedian {
     fn name(&self) -> &str {
         "math median"
     }
@@ -55,15 +55,15 @@ impl Command for SubCommand {
         run_with_function(call, input, median)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Compute the median of a list of numbers",
+                description: "Compute the median of a list of numbers.",
                 example: "[3 8 9 12 12 15] | math median",
                 result: Some(Value::test_float(10.5)),
             },
             Example {
-                description: "Compute the medians of the columns of a table",
+                description: "Compute the medians of the columns of a table.",
                 example: "[{a: 1 b: 3} {a: 2 b: -1} {a: -3 b: 5}] | math median",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
@@ -71,7 +71,7 @@ impl Command for SubCommand {
                 })),
             },
             Example {
-                description: "Find the median of a list of file sizes",
+                description: "Find the median of a list of file sizes.",
                 example: "[5KB 10MB 200B] | math median",
                 result: Some(Value::test_filesize(5 * 1_000)),
             },
@@ -85,54 +85,35 @@ enum Pick {
 }
 
 pub fn median(values: &[Value], span: Span, head: Span) -> Result<Value, ShellError> {
-    let take = if values.len() % 2 == 0 {
+    let mut sorted = values
+        .iter()
+        .filter(|x| !x.as_float().is_ok_and(f64::is_nan))
+        .collect::<Vec<_>>();
+
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+
+    let take = if sorted.len().is_multiple_of(2) {
         Pick::MedianAverage
     } else {
         Pick::Median
     };
 
-    let mut sorted = vec![];
-
-    for item in values {
-        sorted.push(item.clone());
-    }
-
-    if let Some(Err(values)) = values
-        .windows(2)
-        .map(|elem| {
-            if elem[0].partial_cmp(&elem[1]).is_none() {
-                return Err(ShellError::OperatorMismatch {
-                    op_span: head,
-                    lhs_ty: elem[0].get_type().to_string(),
-                    lhs_span: elem[0].span(),
-                    rhs_ty: elem[1].get_type().to_string(),
-                    rhs_span: elem[1].span(),
-                });
-            }
-            Ok(elem[0].partial_cmp(&elem[1]).unwrap_or(Ordering::Equal))
-        })
-        .find(|elem| elem.is_err())
-    {
-        return Err(values);
-    }
-
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-
     match take {
         Pick::Median => {
-            let idx = (values.len() as f64 / 2.0).floor() as usize;
-            let out = sorted
+            let idx = sorted.len() / 2;
+            Ok(sorted
                 .get(idx)
                 .ok_or_else(|| ShellError::UnsupportedInput {
                     msg: "Empty input".to_string(),
                     input: "value originates from here".into(),
                     msg_span: head,
                     input_span: span,
-                })?;
-            Ok(out.clone())
+                })?
+                .to_owned()
+                .to_owned())
         }
         Pick::MedianAverage => {
-            let idx_end = values.len() / 2;
+            let idx_end = sorted.len() / 2;
             let idx_start = idx_end - 1;
 
             let left = sorted
@@ -143,7 +124,8 @@ pub fn median(values: &[Value], span: Span, head: Span) -> Result<Value, ShellEr
                     msg_span: head,
                     input_span: span,
                 })?
-                .clone();
+                .to_owned()
+                .to_owned();
 
             let right = sorted
                 .get(idx_end)
@@ -153,7 +135,8 @@ pub fn median(values: &[Value], span: Span, head: Span) -> Result<Value, ShellEr
                     msg_span: head,
                     input_span: span,
                 })?
-                .clone();
+                .to_owned()
+                .to_owned();
 
             average(&[left, right], span, head)
         }
@@ -165,9 +148,28 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathMedian)
+    }
 
-        test_examples(SubCommand {})
+    #[test]
+    fn test_median_with_nan_values() {
+        // Test case: [NaN, NaN, 1.0, 2.0, 3.0, 4.0]
+        // values.len() = 6, sorted = [1.0, 2.0, 3.0, 4.0], sorted.len() = 4
+        // Correct median of [1.0, 2.0, 3.0, 4.0] is (2.0 + 3.0) / 2 = 2.5
+        // Bug: using values.len() would give idx_end = 3, returning avg(3.0, 4.0) = 3.5
+        // Fix: using sorted.len() gives idx_end = 2, returning avg(2.0, 3.0) = 2.5
+        let span = Span::test_data();
+        let values = vec![
+            Value::test_float(f64::NAN),
+            Value::test_float(f64::NAN),
+            Value::test_float(1.0),
+            Value::test_float(2.0),
+            Value::test_float(3.0),
+            Value::test_float(4.0),
+        ];
+
+        let result = median(&values, span, span).unwrap();
+        assert_eq!(result, Value::test_float(2.5));
     }
 }

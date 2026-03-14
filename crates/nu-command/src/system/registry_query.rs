@@ -1,7 +1,8 @@
 use nu_engine::command_prelude::*;
 
-use windows::{core::PCWSTR, Win32::System::Environment::ExpandEnvironmentStringsW};
-use winreg::{enums::*, types::FromRegValue, RegKey};
+use nu_protocol::shell_error::io::IoError;
+use windows::{Win32::System::Environment::ExpandEnvironmentStringsW, core::PCWSTR};
+use winreg::{RegKey, enums::*, types::FromRegValue};
 
 #[derive(Clone)]
 pub struct RegistryQuery;
@@ -14,23 +15,23 @@ impl Command for RegistryQuery {
     fn signature(&self) -> Signature {
         Signature::build("registry query")
             .input_output_types(vec![(Type::Nothing, Type::Any)])
-            .switch("hkcr", "query the hkey_classes_root hive", None)
-            .switch("hkcu", "query the hkey_current_user hive", None)
-            .switch("hklm", "query the hkey_local_machine hive", None)
-            .switch("hku", "query the hkey_users hive", None)
-            .switch("hkpd", "query the hkey_performance_data hive", None)
-            .switch("hkpt", "query the hkey_performance_text hive", None)
-            .switch("hkpnls", "query the hkey_performance_nls_text hive", None)
-            .switch("hkcc", "query the hkey_current_config hive", None)
-            .switch("hkdd", "query the hkey_dyn_data hive", None)
+            .switch("hkcr", "Query the hkey_classes_root hive.", None)
+            .switch("hkcu", "Query the hkey_current_user hive.", None)
+            .switch("hklm", "Query the hkey_local_machine hive.", None)
+            .switch("hku", "Query the hkey_users hive.", None)
+            .switch("hkpd", "Query the hkey_performance_data hive.", None)
+            .switch("hkpt", "Query the hkey_performance_text hive.", None)
+            .switch("hkpnls", "Query the hkey_performance_nls_text hive.", None)
+            .switch("hkcc", "Query the hkey_current_config hive.", None)
+            .switch("hkdd", "Query the hkey_dyn_data hive.", None)
             .switch(
                 "hkculs",
-                "query the hkey_current_user_local_settings hive",
+                "Query the hkey_current_user_local_settings hive.",
                 None,
             )
             .switch(
                 "no-expand",
-                "do not expand %ENV% placeholders in REG_EXPAND_SZ",
+                "Do not expand %ENV% placeholders in REG_EXPAND_SZ.",
                 Some('u'),
             )
             .required("key", SyntaxShape::String, "Registry key to query.")
@@ -60,7 +61,7 @@ impl Command for RegistryQuery {
         registry_query(engine_state, stack, call)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Query the HKEY_CURRENT_USER hive",
@@ -90,7 +91,9 @@ fn registry_query(
     let registry_value: Option<Spanned<String>> = call.opt(engine_state, stack, 1)?;
 
     let reg_hive = get_reg_hive(engine_state, stack, call)?;
-    let reg_key = reg_hive.open_subkey(registry_key.item)?;
+    let reg_key = reg_hive
+        .open_subkey(registry_key.item)
+        .map_err(|err| IoError::new(err, *registry_key_span, None))?;
 
     if registry_value.is_none() {
         let mut reg_values = vec![];
@@ -181,7 +184,7 @@ fn get_reg_hive(
                 msg: "Entered unreachable code".into(),
                 label: "Unknown registry hive".into(),
                 span: call.head,
-            })
+            });
         }
     };
     Ok(RegKey::predef(hkey))

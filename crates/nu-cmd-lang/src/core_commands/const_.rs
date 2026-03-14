@@ -17,7 +17,11 @@ impl Command for Const {
         Signature::build("const")
             .input_output_types(vec![(Type::Nothing, Type::Nothing)])
             .allow_variants_without_examples(true)
-            .required("const_name", SyntaxShape::VarWithOptType, "Constant name.")
+            .required(
+                "const_name",
+                SyntaxShape::VarWithOptType,
+                "The constant name to create.",
+            )
             .required(
                 "initial_value",
                 SyntaxShape::Keyword(b"=".to_vec(), Box::new(SyntaxShape::MathExpression)),
@@ -41,38 +45,33 @@ impl Command for Const {
 
     fn run(
         &self,
-        engine_state: &EngineState,
-        stack: &mut Stack,
-        call: &Call,
+        _engine_state: &EngineState,
+        _stack: &mut Stack,
+        _call: &Call,
         _input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         // This is compiled specially by the IR compiler. The code here is never used when
         // running in IR mode.
-        let call = call.assert_ast_call()?;
-        let var_id = if let Some(id) = call.positional_nth(0).and_then(|pos| pos.as_var()) {
-            id
-        } else {
-            return Err(ShellError::NushellFailedSpanned {
-                msg: "Could not get variable".to_string(),
-                label: "variable not added by the parser".to_string(),
-                span: call.head,
-            });
-        };
-
-        if let Some(constval) = &engine_state.get_var(var_id).const_val {
-            stack.add_var(var_id, constval.clone());
-
-            Ok(PipelineData::empty())
-        } else {
-            Err(ShellError::NushellFailedSpanned {
-                msg: "Missing Constant".to_string(),
-                label: "constant not added by the parser".to_string(),
-                span: call.head,
-            })
-        }
+        eprintln!(
+            "Tried to execute 'run' for the 'const' command: this code path should never be reached in IR mode"
+        );
+        unreachable!()
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn run_const(
+        &self,
+        _working_set: &StateWorkingSet,
+        _call: &Call,
+        _input: PipelineData,
+    ) -> Result<PipelineData, ShellError> {
+        Ok(PipelineData::empty())
+    }
+
+    fn is_const(&self) -> bool {
+        true
+    }
+
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Create a new parse-time constant.",
@@ -80,7 +79,7 @@ impl Command for Const {
                 result: None,
             },
             Example {
-                description: "Create a composite constant value",
+                description: "Create a composite constant value.",
                 example: "const x = { a: 10, b: 20 }",
                 result: None,
             },
@@ -95,10 +94,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Const {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Const)
     }
 
     #[test]

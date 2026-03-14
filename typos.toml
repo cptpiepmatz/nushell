@@ -1,6 +1,7 @@
 [files]
 extend-exclude = [
     ".git/",
+    "crates/nu-command/tests/commands/table.rs",
     "crates/nu-cmd-extra/assets/228_themes.json",
     "tests/fixtures/formats/",
 ]
@@ -18,12 +19,18 @@ extend-ignore-re = [
     "0x\\[ba be\\]",
     "\\)BaR'",
     "fo�.txt",
+    "ue",
 ]
 
 [type.rust.extend-words]
 nd = "nd"
+typ = "typ"
 numer = "numer"
 styl = "styl"
 
 [default.extend-identifiers]
+ratatui = "ratatui"
+enabled_indented_mutiline_value = "enabled_indented_mutiline_value"
+
+[default.extend-words]
 ratatui = "ratatui"

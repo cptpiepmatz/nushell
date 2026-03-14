@@ -1,5 +1,6 @@
-use crate::repl::tests::{fail_test, run_test, run_test_contains, run_test_with_env, TestResult};
+use crate::repl::tests::{TestResult, fail_test, run_test, run_test_contains, run_test_with_env};
 use nu_test_support::{nu, nu_repl_code};
+use rstest::rstest;
 use std::collections::HashMap;
 
 #[test]
@@ -92,6 +93,16 @@ fn range_iteration1() -> TestResult {
 #[test]
 fn range_iteration2() -> TestResult {
     run_test("4..1 | each { |y| $y + 100 } | get 3", "101")
+}
+
+#[test]
+fn range_ends_with_duration_suffix_variable_name() -> TestResult {
+    run_test("let runs = 10; 1..$runs | math sum", "55")
+}
+
+#[test]
+fn range_ends_with_filesize_suffix_variable_name() -> TestResult {
+    run_test("let sizekb = 10; 1..$sizekb | math sum", "55")
 }
 
 #[test]
@@ -557,10 +568,26 @@ fn starts_with_operator_succeeds() -> TestResult {
 }
 
 #[test]
+fn not_starts_with_operator_succeeds() -> TestResult {
+    run_test(
+        r#"[Moe Larry Curly] | where $it not-starts-with L | str join"#,
+        "MoeCurly",
+    )
+}
+
+#[test]
 fn ends_with_operator_succeeds() -> TestResult {
     run_test(
         r#"[Moe Larry Curly] | where $it ends-with ly | str join"#,
         "Curly",
+    )
+}
+
+#[test]
+fn not_ends_with_operator_succeeds() -> TestResult {
+    run_test(
+        r#"[Moe Larry Curly] | where $it not-ends-with y | str join"#,
+        "Moe",
     )
 }
 
@@ -609,10 +636,33 @@ fn single_value_row_condition() -> TestResult {
 }
 
 #[test]
+fn row_condition_non_boolean() -> TestResult {
+    fail_test(r#"[1 2 3] | where 1"#, "expected bool")
+}
+
+#[test]
 fn performance_nested_lists() -> TestResult {
     // Parser used to be exponential on deeply nested lists
     // TODO: Add a timeout
     fail_test(r#"[[[[[[[[[[[[[[[[[[[[[[[[[[[["#, "Unexpected end of code")
+}
+
+#[test]
+fn performance_nested_modules() -> TestResult {
+    // Parser used to be exponential on deeply nested modules
+    // TODO: Add a timeout
+    fail_test(
+        r#"
+module foo { module foo { module foo { module foo {
+module foo { module foo { module foo { module foo {
+module foo { module foo { module foo { module foo {
+module foo { module foo { module foo { module foo {
+module foo { module foo { module foo { module foo {
+module foo { module foo { module foo { module foo {
+module foo { module foo { module foo { module foo {
+ use bar.nu }}}}}}}}}}}}}}}}}}}}}}}}}}}}"#,
+        "module bar.nu not found",
+    )
 }
 
 #[test]
@@ -663,7 +713,7 @@ fn comment_in_multiple_pipelines() -> TestResult {
 
 #[test]
 fn date_literal() -> TestResult {
-    run_test(r#"2022-09-10 | date to-record | get day"#, "10")
+    run_test(r#"2022-09-10 | into record | get day"#, "10")
 }
 
 #[test]
@@ -713,40 +763,45 @@ fn unbalanced_parens2() -> TestResult {
     fail_test(r#"("("))"#, "unbalanced ( and )")
 }
 
-#[test]
-fn plugin_use_with_string_literal() -> TestResult {
-    fail_test(
-        r#"plugin use 'nu-plugin-math'"#,
-        "Plugin registry file not set",
-    )
-}
+#[cfg(feature = "plugin")]
+mod plugin_tests {
+    use super::*;
 
-#[test]
-fn plugin_use_with_string_constant() -> TestResult {
-    let input = "\
-const file = 'nu-plugin-math'
-plugin use $file
-";
-    // should not fail with `not a constant`
-    fail_test(input, "Plugin registry file not set")
-}
+    #[test]
+    fn plugin_use_with_string_literal() -> TestResult {
+        fail_test(
+            r#"plugin use 'nu-plugin-math'"#,
+            "Plugin registry file not set",
+        )
+    }
 
-#[test]
-fn plugin_use_with_string_variable() -> TestResult {
-    let input = "\
-let file = 'nu-plugin-math'
-plugin use $file
-";
-    fail_test(input, "Value is not a parse-time constant")
-}
+    #[test]
+    fn plugin_use_with_string_constant() -> TestResult {
+        let input = "\
+            const file = 'nu-plugin-math'
+            plugin use $file
+            ";
+        // should not fail with `not a constant`
+        fail_test(input, "Plugin registry file not set")
+    }
 
-#[test]
-fn plugin_use_with_non_string_constant() -> TestResult {
-    let input = "\
-const file = 6
-plugin use $file
-";
-    fail_test(input, "expected string, found int")
+    #[test]
+    fn plugin_use_with_string_variable() -> TestResult {
+        let input = "\
+            let file = 'nu-plugin-math'
+            plugin use $file
+            ";
+        fail_test(input, "Value is not a parse-time constant")
+    }
+
+    #[test]
+    fn plugin_use_with_non_string_constant() -> TestResult {
+        let input = "\
+            const file = 6
+            plugin use $file
+            ";
+        fail_test(input, "expected string, found int")
+    }
 }
 
 #[test]
@@ -780,13 +835,19 @@ fn duration_with_faulty_number() -> TestResult {
 }
 
 #[test]
+#[env(NU_TEST_LOCALE_OVERRIDE = "en_US.utf8")]
+#[env(LANG = "en_US.UTF-8")]
+#[env(LANGUAGE = "en")]
 fn filesize_with_underscores_1() -> TestResult {
-    run_test("420_mb", "400.5 MiB")
+    run_test("420_MB", "420.0 MB")
 }
 
 #[test]
+#[env(NU_TEST_LOCALE_OVERRIDE = "en_US.utf8")]
+#[env(LANG = "en_US.UTF-8")]
+#[env(LANGUAGE = "en")]
 fn filesize_with_underscores_2() -> TestResult {
-    run_test("1_000_000B", "976.6 KiB")
+    run_test("1_000_000B", "1.0 MB")
 }
 
 #[test]
@@ -802,6 +863,151 @@ fn filesize_is_not_hex() -> TestResult {
 #[test]
 fn let_variable_type_mismatch() -> TestResult {
     fail_test(r#"let x: int = "foo""#, "expected int, found string")
+}
+
+#[test]
+fn let_variable_table_runtime_cast() -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["enforce-runtime-annotations".to_string()],
+        r#"let x: table = ([[a]; [1]] | to nuon | from nuon); $x | describe"#,
+    );
+
+    // Type::Any should be accepted by compatible types (record can convert to table)
+    assert!(outcome.out.contains("table<a: int>"));
+    Ok(())
+}
+
+#[test]
+fn let_variable_table_runtime_mismatch() -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["enforce-runtime-annotations".to_string()],
+        r#"mut x: table<b: int> = ([[b]; [1]]  | to nuon | from nuon); $x = [[a]; [1]]"#,
+    );
+
+    // This conversion should fail due to a key mismatch
+    assert!(
+        outcome
+            .err
+            .contains("does not operate between 'table<b: int>' and 'table<a: int>'")
+    );
+    Ok(())
+}
+
+#[test]
+fn mut_variable_table_runtime_mismatch() -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["enforce-runtime-annotations".to_string()],
+        r#"mut x: table<b: int> = ([[b]; [1]]  | to nuon | from nuon); $x = [[a]; [1]]"#,
+    );
+
+    assert!(
+        outcome
+            .err
+            .contains("does not operate between 'table<b: int>' and 'table<a: int>'")
+    );
+    Ok(())
+}
+
+#[test]
+fn let_variable_record_runtime_cast() -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["enforce-runtime-annotations".to_string()],
+        r#"let x: record<a: int> = ({a: 1} | to nuon | from nuon); $x | describe"#,
+    );
+    // Records from Type::Any sources should be convertible to tables when field types match
+    assert!(outcome.out.contains("record<a: int>"));
+    Ok(())
+}
+
+#[test]
+fn let_variable_record_runtime_mismatch() -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["enforce-runtime-annotations".to_string()],
+        r#"let x: record<b: int> = ({a: 1} | to nuon | from nuon); $x | describe"#,
+    );
+
+    // This conversion should fail due to a key mismatch
+    assert!(
+        outcome
+            .err
+            .contains("can't convert record<a: int> to record<b: int>")
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::string("a", "list<record<b: int>>")]
+#[case::string_int("a.0", "record<b: int>")]
+#[case::string_int_string("a.0.b", "int")]
+#[case::string_string_int("a.b.0", "int")]
+fn let_assign_record_cell_path_to_wrong_type(
+    #[case] cell_path: &str,
+    #[case] inferred_type: &str,
+) -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["cell-path-types".to_string()],
+        format!("let foo = {{a: [{{b: 1}}]}}; let bar: string = $foo.{cell_path}", ),
+    );
+    assert!(
+        outcome
+            .err
+            .contains(&format!("expected string, found {inferred_type}"))
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::int("0", "record<a: record<b: list<int>>>")]
+#[case::int("0.a", "record<b: list<int>>")]
+#[case::int("0.a.b", "list<int>")]
+#[case::int("0.a.b.0", "int")]
+#[case::string("a", "list<record<b: list<int>>>")]
+#[case::string_int("a.0", "record<b: list<int>>")]
+#[case::string_int_string("a.0.b", "list<int>")]
+#[case::string_string("a.b", "list<list<int>>")]
+#[case::string_string_int("a.b.0", "list<int>")]
+#[case::string_string_int_int("a.b.0.0", "int")]
+fn let_assign_list_cell_path_to_wrong_type(
+    #[case] cell_path: &str,
+    #[case] inferred_type: &str,
+) -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["cell-path-types".to_string()],
+        format!("let foo = [{{a: {{b: [1]}}}}]; let bar: string = $foo.{cell_path}", ),
+    );
+    assert!(
+        outcome
+            .err
+            .contains(&format!("expected string, found {inferred_type}"))
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::int("0", "record<a: record<b: list<int>>>")]
+#[case::int_string("0.a", "record<b: list<int>>")]
+#[case::int_string_string("0.a.b", "list<int>")]
+#[case::int_string_string_int("0.a.b.0", "int")]
+#[case::string("a", "list<record<b: list<int>>>")]
+#[case::string_int("a.0", "record<b: list<int>>")]
+#[case::string_int_string("a.0.b", "list<int>")]
+#[case::string_string("a.b", "list<list<int>>")]
+#[case::string_string_int("a.b.0", "list<int>")]
+#[case::string_string_int_int("a.b.0.0", "int")]
+fn let_assign_table_cell_path_to_wrong_type(
+    #[case] cell_path: &str,
+    #[case] inferred_type: &str,
+) -> TestResult {
+    let outcome = nu!(
+        experimental: vec!["cell-path-types".to_string()],
+        format!("let foo = [[a]; [{{b: [1]}}]]; let bar: string = $foo.{cell_path}", ),
+    );
+    assert!(
+        outcome
+            .err
+            .contains(&format!("expected string, found {inferred_type}"))
+    );
+    Ok(())
 }
 
 #[test]
@@ -971,6 +1177,19 @@ fn record_missing_value() -> TestResult {
 }
 
 #[test]
+fn record_type_inferred() -> TestResult {
+    fail_test(
+        r#"let foo: string = { 1: 1 }"#,
+        "expected string, found record<1: int>",
+    )
+}
+
+#[test]
+fn record_force_string_key_names() -> TestResult {
+    run_test(r#"{1kb: 1}.1kb"#, "1")
+}
+
+#[test]
 fn def_requires_body_closure() -> TestResult {
     fail_test("def a [] (echo 4)", "expected definition body closure")
 }
@@ -1011,4 +1230,80 @@ fn not_panic_with_recursive_call() {
         "nu recursive_func_with_alias.nu"
     );
     assert!(result.status.success());
+}
+
+// https://github.com/nushell/nushell/issues/16040
+#[test]
+fn external_argument_with_subexpressions() -> TestResult {
+    run_test(r#"^echo foo( ('bar') | $in ++ 'baz' )"#, "foobarbaz")?;
+    run_test(r#"^echo foo( 'bar' )('baz')"#, "foobarbaz")?;
+    run_test(r#"^echo ")('foo')(""#, ")('foo')(")?;
+    fail_test(r#"^echo foo( 'bar'"#, "Unexpected end of code")
+}
+
+// https://github.com/nushell/nushell/issues/16332
+#[test]
+fn quote_escape_but_not_env_shorthand() -> TestResult {
+    run_test(r#""\"=foo""#, "\"=foo")
+}
+
+// https://github.com/nushell/nushell/issues/16586
+#[test]
+fn redefine_def_should_not_panic() -> TestResult {
+    fail_test(r#"def def (=a|s)>"#, "Unclosed delimiter")
+}
+
+#[test]
+fn table_literal_column_var() -> TestResult {
+    run_test(
+        r#"
+            let column_name = 'column0'
+            let tbl = [[ $column_name column1 ]; [ foo bar ] [ baz car ] [ far fit ]]
+            $tbl.column0.0
+        "#,
+        "foo",
+    )
+}
+
+#[test]
+fn table_literal_column_var_parse_err() -> TestResult {
+    fail_test(
+        r#"
+            let column_name = {a: 123}
+            let tbl = [[ $column_name column1 ]; [ foo bar ] [ baz car ] [ far fit ]]
+            $tbl.column0.0
+        "#,
+        "must be a string",
+    )
+}
+
+#[test]
+fn table_literal_column_var_shell_err() -> TestResult {
+    fail_test(
+        r#"
+            let column_name = echo {a: 123}
+            let tbl = [[ $column_name column1 ]; [ foo bar ] [ baz car ] [ far fit ]]
+            $tbl.column0.0
+        "#,
+        "can't convert",
+    )
+}
+
+#[rstest]
+#[case::piped_let_assignment("null | let nu: nothing")]
+#[case::piped_let_assignment("null | let $in")]
+#[case::const_assignment("const env: nothing = null")]
+#[case::mut_assignment("mut nu = null")]
+#[case::for_loop("for nu in [] {}")]
+#[case::for_loop_with_type("for $in: int in [] {}")]
+#[case::match_pattern_list("match [1] {[$in] => $in}")]
+#[case::match_pattern_list_rest("match [1] {[..$env] => $in}")]
+#[case::match_pattern_record("{a: {b: 3}} | match $in {{a: { $nu }} => 10 }")]
+fn reserved_variable_name_checking(#[case] code: &str) -> TestResult {
+    fail_test(code, "already a builtin variable")
+}
+
+#[test]
+fn allow_it_as_variable_name() -> TestResult {
+    run_test("let it = 3; [1 2 3 4] | where $it > 2 | length", "2")
 }

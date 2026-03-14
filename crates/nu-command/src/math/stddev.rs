@@ -3,9 +3,9 @@ use crate::math::utils::run_with_function;
 use nu_engine::command_prelude::*;
 
 #[derive(Clone)]
-pub struct SubCommand;
+pub struct MathStddev;
 
-impl Command for SubCommand {
+impl Command for MathStddev {
     fn name(&self) -> &str {
         "math stddev"
     }
@@ -14,12 +14,13 @@ impl Command for SubCommand {
         Signature::build("math stddev")
             .input_output_types(vec![
                 (Type::List(Box::new(Type::Number)), Type::Number),
+                (Type::Range, Type::Number),
                 (Type::table(), Type::record()),
                 (Type::record(), Type::record()),
             ])
             .switch(
                 "sample",
-                "calculate sample standard deviation (i.e. using N-1 as the denominator)",
+                "Calculate sample standard deviation (i.e. using N-1 as the denominator).",
                 Some('s'),
             )
             .allow_variants_without_examples(true)
@@ -53,6 +54,18 @@ impl Command for SubCommand {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let sample = call.has_flag(engine_state, stack, "sample")?;
+        let name = call.head;
+        let span = input.span().unwrap_or(name);
+        let input: PipelineData = match input.try_expand_range() {
+            Err(_) => {
+                return Err(ShellError::IncorrectValue {
+                    msg: "Range must be bounded".to_string(),
+                    val_span: span,
+                    call_span: name,
+                });
+            }
+            Ok(val) => val,
+        };
         run_with_function(call, input, compute_stddev(sample))
     }
 
@@ -63,23 +76,35 @@ impl Command for SubCommand {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let sample = call.has_flag_const(working_set, "sample")?;
+        let name = call.head;
+        let span = input.span().unwrap_or(name);
+        let input: PipelineData = match input.try_expand_range() {
+            Err(_) => {
+                return Err(ShellError::IncorrectValue {
+                    msg: "Range must be bounded".to_string(),
+                    val_span: span,
+                    call_span: name,
+                });
+            }
+            Ok(val) => val,
+        };
         run_with_function(call, input, compute_stddev(sample))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Compute the standard deviation of a list of numbers",
+                description: "Compute the standard deviation of a list of numbers.",
                 example: "[1 2 3 4 5] | math stddev",
                 result: Some(Value::test_float(std::f64::consts::SQRT_2)),
             },
             Example {
-                description: "Compute the sample standard deviation of a list of numbers",
+                description: "Compute the sample standard deviation of a list of numbers.",
                 example: "[1 2 3 4 5] | math stddev --sample",
                 result: Some(Value::test_float(1.5811388300841898)),
             },
             Example {
-                description: "Compute the standard deviation of each column in a table",
+                description: "Compute the standard deviation of each column in a table.",
                 example: "[[a b]; [1 2] [3 4]] | math stddev",
                 result: Some(Value::test_record(record! {
                     "a" => Value::test_int(1),
@@ -108,9 +133,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(SubCommand {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(MathStddev)
     }
 }

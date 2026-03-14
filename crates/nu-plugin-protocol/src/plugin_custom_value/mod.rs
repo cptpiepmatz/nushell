@@ -1,6 +1,6 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, path::Path};
 
-use nu_protocol::{ast::Operator, CustomValue, ShellError, Span, Value};
+use nu_protocol::{CustomValue, ShellError, Span, Spanned, Value, ast::Operator, casing::Casing};
 use nu_utils::SharedCow;
 
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,7 @@ impl CustomValue for PluginCustomValue {
         _self_span: Span,
         _index: usize,
         _path_span: Span,
+        _optional: bool,
     ) -> Result<Value, ShellError> {
         panic!("follow_path_int() not available on plugin custom value without source");
     }
@@ -72,6 +73,8 @@ impl CustomValue for PluginCustomValue {
         _self_span: Span,
         _column_name: String,
         _path_span: Span,
+        _optional: bool,
+        _casing: Casing,
     ) -> Result<Value, ShellError> {
         panic!("follow_path_string() not available on plugin custom value without source");
     }
@@ -88,6 +91,15 @@ impl CustomValue for PluginCustomValue {
         _right: &Value,
     ) -> Result<Value, ShellError> {
         panic!("operation() not available on plugin custom value without source");
+    }
+
+    fn save(
+        &self,
+        _path: Spanned<&Path>,
+        _value_span: Span,
+        _save_span: Span,
+    ) -> Result<(), ShellError> {
+        panic!("save() not available on plugin custom value without source");
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -169,7 +181,7 @@ impl PluginCustomValue {
         value.recurse_mut(&mut |value| {
             let span = value.span();
             match value {
-                Value::Custom { ref val, .. } => {
+                Value::Custom { val, .. } => {
                     if val.as_any().downcast_ref::<PluginCustomValue>().is_some() {
                         // Already a PluginCustomValue
                         Ok(())
@@ -190,7 +202,7 @@ impl PluginCustomValue {
         value.recurse_mut(&mut |value| {
             let span = value.span();
             match value {
-                Value::Custom { ref val, .. } => {
+                Value::Custom { val, .. } => {
                     if let Some(val) = val.as_any().downcast_ref::<PluginCustomValue>() {
                         let deserialized = val.deserialize_to_custom_value(span)?;
                         *value = Value::custom(deserialized, span);
@@ -210,7 +222,7 @@ impl PluginCustomValue {
         value.recurse_mut(&mut |value| {
             let span = value.span();
             match value {
-                Value::Custom { ref val, .. } => {
+                Value::Custom { val, .. } => {
                     *value = val.to_base_value(span)?;
                     Ok(())
                 }

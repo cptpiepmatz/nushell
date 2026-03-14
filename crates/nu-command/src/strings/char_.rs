@@ -1,16 +1,9 @@
-use indexmap::{indexmap, IndexMap};
+use indexmap::{IndexMap, indexmap};
 use nu_engine::command_prelude::*;
-
-use nu_protocol::Signals;
+use nu_protocol::{Parameter, Signals};
+use nu_utils::consts::{ENV_PATH_SEPARATOR_CHAR, LINE_SEPARATOR_CHAR};
 use std::collections::HashSet;
 use std::sync::LazyLock;
-
-// Character used to separate directories in a Path Environment variable on windows is ";"
-#[cfg(target_family = "windows")]
-const ENV_PATH_SEPARATOR_CHAR: char = ';';
-// Character used to separate directories in a Path Environment variable on linux/mac/unix is ":"
-#[cfg(not(target_family = "windows"))]
-const ENV_PATH_SEPARATOR_CHAR: char = ':';
 
 #[derive(Clone)]
 pub struct Char;
@@ -59,6 +52,9 @@ static CHAR_MAP: LazyLock<IndexMap<&'static str, String>> = LazyLock::new(|| {
         "path_sep" => std::path::MAIN_SEPARATOR.to_string(),
         "psep" => std::path::MAIN_SEPARATOR.to_string(),
         "separator" => std::path::MAIN_SEPARATOR.to_string(),
+        "eol" => LINE_SEPARATOR_CHAR.to_string(),
+        "lsep" => LINE_SEPARATOR_CHAR.to_string(),
+        "line_sep" => LINE_SEPARATOR_CHAR.to_string(),
         "esep" => ENV_PATH_SEPARATOR_CHAR.to_string(),
         "env_sep" => ENV_PATH_SEPARATOR_CHAR.to_string(),
         "tilde" => '~'.to_string(),                                // ~
@@ -150,10 +146,16 @@ static CHAR_MAP: LazyLock<IndexMap<&'static str, String>> = LazyLock::new(|| {
     }
 });
 
+static CHAR_NAMES: LazyLock<Vec<&'static str>> =
+    LazyLock::new(|| CHAR_MAP.keys().copied().collect());
+
 static NO_OUTPUT_CHARS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         // If the character is in the this set, we don't output it to prevent
         // the broken of `char --list` command table format and alignment.
+        "nul",
+        "null_byte",
+        "zero_byte",
         "newline",
         "enter",
         "nl",
@@ -163,6 +165,9 @@ static NO_OUTPUT_CHARS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "crlf",
         "bel",
         "backspace",
+        "lsep",
+        "line_sep",
+        "eol",
     ]
     .into_iter()
     .collect()
@@ -176,15 +181,15 @@ impl Command for Char {
     fn signature(&self) -> Signature {
         Signature::build("char")
             .input_output_types(vec![(Type::Nothing, Type::Any)])
-            .optional(
-                "character",
-                SyntaxShape::Any,
-                "The name of the character to output.",
-            )
+            .param(Parameter::Optional(
+                PositionalArg::new("character", SyntaxShape::Any)
+                    .desc("The name of the character to output.")
+                    .completion(Completion::new_list(&CHAR_NAMES)),
+            ))
             .rest("rest", SyntaxShape::Any, "Multiple Unicode bytes.")
-            .switch("list", "List all supported character names", Some('l'))
-            .switch("unicode", "Unicode string i.e. 1f378", Some('u'))
-            .switch("integer", "Create a codepoint from an integer", Some('i'))
+            .switch("list", "List all supported character names.", Some('l'))
+            .switch("unicode", "Unicode string i.e. 1f378.", Some('u'))
+            .switch("integer", "Create a codepoint from an integer.", Some('i'))
             .allow_variants_without_examples(true)
             .category(Category::Strings)
     }
@@ -201,7 +206,7 @@ impl Command for Char {
         vec!["line break", "newline", "Unicode"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Output newline",
@@ -437,9 +442,7 @@ mod tests {
     use super::Char;
 
     #[test]
-    fn examples_work_as_expected() {
-        use crate::test_examples;
-
-        test_examples(Char {})
+    fn examples_work_as_expected() -> nu_test_support::Result {
+        nu_test_support::test().examples(Char)
     }
 }

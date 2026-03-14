@@ -1,9 +1,7 @@
-#[allow(deprecated)]
-use nu_engine::{command_prelude::*, current_dir};
+use nu_engine::command_prelude::*;
 use nu_protocol::NuGlob;
 use uu_mkdir::mkdir;
-#[cfg(not(windows))]
-use uucore::mode;
+use uucore::{localized_help_template, translate};
 
 #[derive(Clone)]
 pub struct UMkdir;
@@ -11,12 +9,12 @@ pub struct UMkdir;
 const IS_RECURSIVE: bool = true;
 const DEFAULT_MODE: u32 = 0o777;
 
-#[cfg(not(windows))]
+#[cfg(target_family = "unix")]
 fn get_mode() -> u32 {
-    !mode::get_umask() & DEFAULT_MODE
+    !nu_system::get_umask() & DEFAULT_MODE
 }
 
-#[cfg(windows)]
+#[cfg(not(target_family = "unix"))]
 fn get_mode() -> u32 {
     DEFAULT_MODE
 }
@@ -44,7 +42,7 @@ impl Command for UMkdir {
             )
             .switch(
                 "verbose",
-                "print a message for each created directory.",
+                "Print a message for each created directory.",
                 Some('v'),
             )
             .category(Category::FileSystem)
@@ -57,8 +55,10 @@ impl Command for UMkdir {
         call: &Call,
         _input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
-        #[allow(deprecated)]
-        let cwd = current_dir(engine_state, stack)?;
+        // setup the uutils error translation
+        let _ = localized_help_template("mkdir");
+
+        let cwd = engine_state.cwd(Some(stack))?.into_std_path_buf();
         let mut directories = call
             .rest::<Spanned<NuGlob>>(engine_state, stack, 0)?
             .into_iter()
@@ -74,30 +74,58 @@ impl Command for UMkdir {
             });
         }
 
+        let config = uu_mkdir::Config {
+            recursive: IS_RECURSIVE,
+            mode: get_mode(),
+            verbose: is_verbose,
+            set_security_context: false,
+            context: None,
+        };
+
+        let mut verbose_out = String::new();
         for dir in directories {
-            if let Err(error) = mkdir(&dir, IS_RECURSIVE, get_mode(), is_verbose) {
+            if let Err(error) = mkdir(&dir, &config) {
                 return Err(ShellError::GenericError {
-                    error: format!("{}", error),
-                    msg: format!("{}", error),
+                    error: format!("{error}"),
+                    msg: translate!(&error.to_string()),
                     span: None,
                     help: None,
                     inner: vec![],
                 });
             }
+            if is_verbose {
+                verbose_out.push_str(
+                    format!(
+                        "{} ",
+                        &dir.as_path()
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    )
+                    .as_str(),
+                );
+            }
         }
 
-        Ok(PipelineData::empty())
+        if is_verbose {
+            Ok(PipelineData::value(
+                Value::string(verbose_out.trim(), call.head),
+                None,
+            ))
+        } else {
+            Ok(PipelineData::empty())
+        }
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Make a directory named foo",
+                description: "Make a directory named foo.",
                 example: "mkdir foo",
                 result: None,
             },
             Example {
-                description: "Make multiple directories and show the paths created",
+                description: "Make multiple directories and show the paths created.",
                 example: "mkdir -v foo/bar foo2",
                 result: None,
             },

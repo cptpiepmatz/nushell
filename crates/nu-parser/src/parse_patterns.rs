@@ -2,12 +2,12 @@
 
 use crate::{
     lex, lite_parse,
-    parser::{is_variable, parse_value},
+    parser::{ensure_not_reserved_variable_name, is_variable, parse_value},
 };
 use nu_protocol::{
+    ParseError, Span, SyntaxShape, Type, VarId,
     ast::{MatchPattern, Pattern},
     engine::StateWorkingSet,
-    ParseError, Span, SyntaxShape, Type, VarId,
 };
 pub fn garbage(span: Span) -> MatchPattern {
     MatchPattern {
@@ -54,8 +54,10 @@ fn parse_variable_pattern_helper(working_set: &mut StateWorkingSet, span: Span) 
         if let Some(var_id) = working_set.find_variable_in_current_frame(bytes) {
             Some(var_id)
         } else {
-            let var_id = working_set.add_variable(bytes.to_vec(), span, Type::Any, false);
+            let name = bytes.to_vec();
+            ensure_not_reserved_variable_name(working_set, &name, span);
 
+            let var_id = working_set.add_variable(name, span, Type::Any, false);
             Some(var_id)
         }
     } else {
@@ -99,7 +101,7 @@ pub fn parse_list_pattern(working_set: &mut StateWorkingSet, span: Span) -> Matc
         working_set.error(err);
     }
 
-    let (output, err) = lite_parse(&output);
+    let (output, err) = lite_parse(&output, working_set);
     if let Some(err) = err {
         working_set.error(err);
     }

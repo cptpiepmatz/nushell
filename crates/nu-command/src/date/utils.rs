@@ -1,5 +1,5 @@
 use chrono::{DateTime, FixedOffset, Local, LocalResult, TimeZone};
-use nu_protocol::{record, ShellError, Span, Value};
+use nu_protocol::{ShellError, Span, Value, record};
 
 pub(crate) fn parse_date_from_string(
     input: &str,
@@ -9,7 +9,11 @@ pub(crate) fn parse_date_from_string(
         Ok((native_dt, fixed_offset)) => {
             let offset = match fixed_offset {
                 Some(offset) => offset,
-                None => *(Local::now().offset()),
+                None => *Local
+                    .from_local_datetime(&native_dt)
+                    .single()
+                    .unwrap_or_default()
+                    .offset(),
             };
             match offset.from_local_datetime(&native_dt) {
                 LocalResult::Single(d) => Ok(d),
@@ -105,8 +109,7 @@ pub(crate) fn generate_strftime_list(head: Span, show_parse_only_formats: bool) 
         },
         FormatSpecification {
             spec: "%W",
-            description:
-                "Same as %U, but week 1 starts with the first Monday in that year instead.",
+            description: "Same as %U, but week 1 starts with the first Monday in that year instead.",
         },
         FormatSpecification {
             spec: "%G",
@@ -222,8 +225,7 @@ pub(crate) fn generate_strftime_list(head: Span, show_parse_only_formats: bool) 
         },
         FormatSpecification {
             spec: "%Z",
-            description:
-                "Local time zone name. Skips all non-whitespace characters during parsing.",
+            description: "Local time zone name. Skips all non-whitespace characters during parsing.",
         },
         FormatSpecification {
             spec: "%z",
@@ -246,6 +248,14 @@ pub(crate) fn generate_strftime_list(head: Span, show_parse_only_formats: bool) 
             description: "UNIX timestamp, the number of seconds since 1970-01-01",
         },
         FormatSpecification {
+            spec: "%J",
+            description: "Joined date format. Same as %Y%m%d.",
+        },
+        FormatSpecification {
+            spec: "%Q",
+            description: "Sequential time format. Same as %H%M%S.",
+        },
+        FormatSpecification {
             spec: "%t",
             description: "Literal tab (\\t).",
         },
@@ -262,10 +272,17 @@ pub(crate) fn generate_strftime_list(head: Span, show_parse_only_formats: bool) 
     let mut records = specifications
         .iter()
         .map(|s| {
+            // Handle custom format specifiers that aren't supported by chrono
+            let example = match s.spec {
+                "%J" => now.format("%Y%m%d").to_string(),
+                "%Q" => now.format("%H%M%S").to_string(),
+                _ => now.format(s.spec).to_string(),
+            };
+
             Value::record(
                 record! {
                     "Specification" => Value::string(s.spec, head),
-                    "Example" => Value::string(now.format(s.spec).to_string(), head),
+                    "Example" => Value::string(example, head),
                     "Description" => Value::string(s.description, head),
                 },
                 head,

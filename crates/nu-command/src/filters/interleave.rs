@@ -1,5 +1,5 @@
-use nu_engine::{command_prelude::*, ClosureEvalOnce};
-use nu_protocol::engine::Closure;
+use nu_engine::{ClosureEvalOnce, command_prelude::*};
+use nu_protocol::{engine::Closure, shell_error::io::IoError};
 use std::{sync::mpsc, thread};
 
 #[derive(Clone)]
@@ -52,7 +52,7 @@ using `zip { ... } | flatten` instead."#
             .category(Category::Filters)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "seq 1 50 | wrap a | interleave { seq 1 50 | wrap b }",
@@ -120,7 +120,7 @@ interleave
             .into_iter()
             .chain(closures.into_iter().map(|closure| {
                 ClosureEvalOnce::new(engine_state, stack, closure)
-                    .run_with_input(PipelineData::Empty)
+                    .run_with_input(PipelineData::empty())
             }))
             .try_for_each(|stream| {
                 stream.and_then(|stream| {
@@ -137,10 +137,7 @@ interleave
                             }
                         })
                         .map(|_| ())
-                        .map_err(|err| ShellError::IOErrorSpanned {
-                            msg: err.to_string(),
-                            span: head,
-                        })
+                        .map_err(|err| IoError::new(err, head, None).into())
                 })
             })?;
 
@@ -156,9 +153,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Interleave {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Interleave)
     }
 }

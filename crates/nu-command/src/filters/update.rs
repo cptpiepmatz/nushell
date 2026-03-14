@@ -1,4 +1,4 @@
-use nu_engine::{command_prelude::*, ClosureEval, ClosureEvalOnce};
+use nu_engine::{ClosureEval, ClosureEvalOnce, command_prelude::*};
 use nu_protocol::ast::PathMember;
 
 #[derive(Clone)]
@@ -54,10 +54,10 @@ When updating a specific index, the closure will instead be run once. The first 
         update(engine_state, stack, call, input)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Update a column value",
+                description: "Update a column value.",
                 example: "{'name': 'nu', 'stars': 5} | update name 'Nushell'",
                 result: Some(Value::test_record(record! {
                     "name" =>  Value::test_string("Nushell"),
@@ -65,81 +65,63 @@ When updating a specific index, the closure will instead be run once. The first 
                 })),
             },
             Example {
-                description: "Use a closure to alter each value in the 'authors' column to a single string",
+                description: "Use a closure to alter each value in the 'authors' column to a single string.",
                 example: "[[project, authors]; ['nu', ['Andrés', 'JT', 'Yehuda']]] | update authors {|row| $row.authors | str join ',' }",
-                result: Some(Value::test_list(
-                    vec![Value::test_record(record! {
-                        "project" => Value::test_string("nu"),
-                        "authors" => Value::test_string("Andrés,JT,Yehuda"),
-                    })],
-                )),
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "project" => Value::test_string("nu"),
+                    "authors" => Value::test_string("Andrés,JT,Yehuda"),
+                })])),
             },
             Example {
-                description: "Implicitly use the `$in` value in a closure to update 'authors'",
+                description: "Implicitly use the `$in` value in a closure to update 'authors'.",
                 example: "[[project, authors]; ['nu', ['Andrés', 'JT', 'Yehuda']]] | update authors { str join ',' }",
-                result: Some(Value::test_list(
-                    vec![Value::test_record(record! {
-                        "project" => Value::test_string("nu"),
-                        "authors" => Value::test_string("Andrés,JT,Yehuda"),
-                    })],
-                )),
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "project" => Value::test_string("nu"),
+                    "authors" => Value::test_string("Andrés,JT,Yehuda"),
+                })])),
             },
             Example {
-                description: "Update a value at an index in a list",
+                description: "Update a value at an index in a list.",
                 example: "[1 2 3] | update 1 4",
-                result: Some(Value::test_list(
-                    vec![Value::test_int(1), Value::test_int(4), Value::test_int(3)]
-                )),
+                result: Some(Value::test_list(vec![
+                    Value::test_int(1),
+                    Value::test_int(4),
+                    Value::test_int(3),
+                ])),
             },
             Example {
-                description: "Use a closure to compute a new value at an index",
+                description: "Use a closure to compute a new value at an index.",
                 example: "[1 2 3] | update 1 {|i| $i + 2 }",
-                result: Some(Value::test_list(
-                    vec![Value::test_int(1), Value::test_int(4), Value::test_int(3)]
-                )),
+                result: Some(Value::test_list(vec![
+                    Value::test_int(1),
+                    Value::test_int(4),
+                    Value::test_int(3),
+                ])),
             },
         ]
     }
 }
 
-fn update(
+fn update_recursive(
     engine_state: &EngineState,
     stack: &mut Stack,
-    call: &Call,
+    head_span: Span,
+    replacement: Value,
     input: PipelineData,
+    cell_paths: &[PathMember],
 ) -> Result<PipelineData, ShellError> {
-    let head = call.head;
-    let cell_path: CellPath = call.req(engine_state, stack, 0)?;
-    let replacement: Value = call.req(engine_state, stack, 1)?;
-
     match input {
         PipelineData::Value(mut value, metadata) => {
             if let Value::Closure { val, .. } = replacement {
-                match (cell_path.members.first(), &mut value) {
-                    (Some(PathMember::String { .. }), Value::List { vals, .. }) => {
-                        let mut closure = ClosureEval::new(engine_state, stack, *val);
-                        for val in vals {
-                            update_value_by_closure(
-                                val,
-                                &mut closure,
-                                head,
-                                &cell_path.members,
-                                false,
-                            )?;
-                        }
-                    }
-                    (first, _) => {
-                        update_single_value_by_closure(
-                            &mut value,
-                            ClosureEvalOnce::new(engine_state, stack, *val),
-                            head,
-                            &cell_path.members,
-                            matches!(first, Some(PathMember::Int { .. })),
-                        )?;
-                    }
-                }
+                update_single_value_by_closure(
+                    &mut value,
+                    ClosureEvalOnce::new(engine_state, stack, *val),
+                    head_span,
+                    cell_paths,
+                    false,
+                )?;
             } else {
-                value.update_data_at_cell_path(&cell_path.members, replacement)?;
+                value.update_data_at_cell_path(cell_paths, replacement)?;
             }
             Ok(value.into_pipeline_data_with_metadata(metadata))
         }
@@ -148,10 +130,10 @@ fn update(
                 &PathMember::Int {
                     val,
                     span: path_span,
-                    ..
+                    optional,
                 },
                 path,
-            )) = cell_path.members.split_first()
+            )) = cell_paths.split_first()
             {
                 let mut stream = stream.into_iter();
                 let mut pre_elems = vec![];
@@ -159,6 +141,15 @@ fn update(
                 for idx in 0..=val {
                     if let Some(v) = stream.next() {
                         pre_elems.push(v);
+                    } else if optional {
+                        return Ok(pre_elems
+                            .into_iter()
+                            .chain(stream)
+                            .into_pipeline_data_with_metadata(
+                                head_span,
+                                engine_state.signals().clone(),
+                                metadata,
+                            ));
                     } else if idx == 0 {
                         return Err(ShellError::AccessEmptyContent { span: path_span });
                     } else {
@@ -176,7 +167,7 @@ fn update(
                     update_single_value_by_closure(
                         value,
                         ClosureEvalOnce::new(engine_state, stack, *val),
-                        head,
+                        head_span,
                         path,
                         true,
                     )?;
@@ -188,52 +179,77 @@ fn update(
                     .into_iter()
                     .chain(stream)
                     .into_pipeline_data_with_metadata(
-                        head,
+                        head_span,
                         engine_state.signals().clone(),
                         metadata,
                     ))
+            } else if let Some(new_cell_paths) = Value::try_put_int_path_member_on_top(cell_paths) {
+                update_recursive(
+                    engine_state,
+                    stack,
+                    head_span,
+                    replacement,
+                    PipelineData::ListStream(stream, metadata),
+                    &new_cell_paths,
+                )
             } else if let Value::Closure { val, .. } = replacement {
                 let mut closure = ClosureEval::new(engine_state, stack, *val);
+                let cell_paths = cell_paths.to_vec();
                 let stream = stream.map(move |mut value| {
-                    let err = update_value_by_closure(
-                        &mut value,
-                        &mut closure,
-                        head,
-                        &cell_path.members,
-                        false,
-                    );
+                    let err =
+                        update_value_by_closure(&mut value, &mut closure, head_span, &cell_paths);
 
                     if let Err(e) = err {
-                        Value::error(e, head)
+                        Value::error(e, head_span)
                     } else {
                         value
                     }
                 });
-
-                Ok(PipelineData::ListStream(stream, metadata))
+                Ok(PipelineData::list_stream(stream, metadata))
             } else {
+                let cell_paths = cell_paths.to_vec();
                 let stream = stream.map(move |mut value| {
-                    if let Err(e) =
-                        value.update_data_at_cell_path(&cell_path.members, replacement.clone())
+                    if let Err(e) = value.update_data_at_cell_path(&cell_paths, replacement.clone())
                     {
-                        Value::error(e, head)
+                        Value::error(e, head_span)
                     } else {
                         value
                     }
                 });
 
-                Ok(PipelineData::ListStream(stream, metadata))
+                Ok(PipelineData::list_stream(stream, metadata))
             }
         }
         PipelineData::Empty => Err(ShellError::IncompatiblePathAccess {
             type_name: "empty pipeline".to_string(),
-            span: head,
+            span: head_span,
         }),
         PipelineData::ByteStream(stream, ..) => Err(ShellError::IncompatiblePathAccess {
             type_name: stream.type_().describe().into(),
-            span: head,
+            span: head_span,
         }),
     }
+}
+
+fn update(
+    engine_state: &EngineState,
+    stack: &mut Stack,
+    call: &Call,
+    input: PipelineData,
+) -> Result<PipelineData, ShellError> {
+    let head = call.head;
+    let cell_path: CellPath = call.req(engine_state, stack, 0)?;
+    let replacement: Value = call.req(engine_state, stack, 1)?;
+    let input = input.into_stream_or_original(engine_state);
+
+    update_recursive(
+        engine_state,
+        stack,
+        head,
+        replacement,
+        input,
+        &cell_path.members,
+    )
 }
 
 fn update_value_by_closure(
@@ -241,19 +257,21 @@ fn update_value_by_closure(
     closure: &mut ClosureEval,
     span: Span,
     cell_path: &[PathMember],
-    first_path_member_int: bool,
 ) -> Result<(), ShellError> {
-    let value_at_path = value.clone().follow_cell_path(cell_path, false)?;
+    let value_at_path = value.follow_cell_path(cell_path)?;
 
-    let arg = if first_path_member_int {
-        &value_at_path
-    } else {
-        &*value
-    };
+    // Don't run the closure for optional paths that don't exist
+    let is_optional = cell_path.iter().any(|member| match member {
+        PathMember::String { optional, .. } => *optional,
+        PathMember::Int { optional, .. } => *optional,
+    });
+    if is_optional && matches!(value_at_path.as_ref(), Value::Nothing { .. }) {
+        return Ok(());
+    }
 
     let new_value = closure
-        .add_arg(arg.clone())
-        .run_with_input(value_at_path.into_pipeline_data())?
+        .add_arg(value.clone())
+        .run_with_input(value_at_path.into_owned().into_pipeline_data())?
         .into_value(span)?;
 
     value.update_data_at_cell_path(cell_path, new_value)
@@ -264,19 +282,31 @@ fn update_single_value_by_closure(
     closure: ClosureEvalOnce,
     span: Span,
     cell_path: &[PathMember],
-    first_path_member_int: bool,
+    cell_value_as_arg: bool,
 ) -> Result<(), ShellError> {
-    let value_at_path = value.clone().follow_cell_path(cell_path, false)?;
+    let value_at_path = value.follow_cell_path(cell_path)?;
 
-    let arg = if first_path_member_int {
-        &value_at_path
+    // Don't run the closure for optional paths that don't exist
+    let is_optional = cell_path.iter().any(|member| match member {
+        PathMember::String { optional, .. } => *optional,
+        PathMember::Int { optional, .. } => *optional,
+    });
+    if is_optional && matches!(value_at_path.as_ref(), Value::Nothing { .. }) {
+        return Ok(());
+    }
+
+    // FIXME: this leads to inconsistent behaviors between
+    // `{a: b} | update a {|x| print $x}` and
+    // `[{a: b}] | update 0.a {|x| print $x}`
+    let arg = if cell_value_as_arg {
+        value_at_path.as_ref()
     } else {
         &*value
     };
 
     let new_value = closure
         .add_arg(arg.clone())
-        .run_with_input(value_at_path.into_pipeline_data())?
+        .run_with_input(value_at_path.into_owned().into_pipeline_data())?
         .into_value(span)?;
 
     value.update_data_at_cell_path(cell_path, new_value)
@@ -287,9 +317,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Update {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Update)
     }
 }

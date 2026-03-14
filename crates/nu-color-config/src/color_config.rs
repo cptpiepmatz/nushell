@@ -1,6 +1,7 @@
 use crate::{
+    NuStyle,
     nu_style::{color_from_hex, lookup_style},
-    parse_nustyle, NuStyle,
+    parse_nustyle,
 };
 use nu_ansi_term::Style;
 use nu_protocol::{Record, Value};
@@ -32,7 +33,9 @@ pub fn get_color_map(colors: &HashMap<String, Value>) -> HashMap<String, Style> 
 fn parse_map_entry(hm: &mut HashMap<String, Style>, key: &str, value: &Value) {
     let value = match value {
         Value::String { val, .. } => Some(lookup_ansi_color_style(val)),
-        Value::Record { val, .. } => get_style_from_value(val).map(parse_nustyle),
+        Value::Record { val, .. } => {
+            get_style_from_value(val).and_then(|ns| parse_nustyle(ns).ok())
+        }
         _ => None,
     };
     if let Some(value) = value {
@@ -67,11 +70,7 @@ fn get_style_from_value(record: &Record) -> Option<NuStyle> {
         }
     }
 
-    if was_set {
-        Some(style)
-    } else {
-        None
-    }
+    if was_set { Some(style) } else { None }
 }
 
 fn color_string_to_nustyle(color_string: &str) -> Style {
@@ -85,14 +84,14 @@ fn color_string_to_nustyle(color_string: &str) -> Style {
         Err(_) => return Style::default(),
     };
 
-    parse_nustyle(nu_style)
+    parse_nustyle(nu_style).unwrap_or_else(|_| Style::default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use nu_ansi_term::{Color, Style};
-    use nu_protocol::{record, Span, Value};
+    use nu_protocol::{Span, Value, record};
 
     #[test]
     fn test_color_string_to_nustyle_empty_string() {

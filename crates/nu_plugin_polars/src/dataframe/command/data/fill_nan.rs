@@ -1,12 +1,11 @@
 use crate::{
-    dataframe::values::{Column, NuDataFrame, NuExpression},
-    values::{cant_convert_err, CustomValueSupport, PolarsPluginObject, PolarsPluginType},
     PolarsPlugin,
+    dataframe::values::{Column, NuDataFrame, NuExpression},
+    values::{CustomValueSupport, PolarsPluginObject, PolarsPluginType, cant_convert_err},
 };
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Type,
-    Value,
+    Category, Example, LabeledError, PipelineData, ShellError, Signature, Span, SyntaxShape, Value,
 };
 
 #[derive(Clone)]
@@ -28,16 +27,22 @@ impl PluginCommand for LazyFillNA {
             .required(
                 "fill",
                 SyntaxShape::Any,
-                "Expression to use to fill the NAN values",
+                "Expression to use to fill the NAN values.",
             )
-            .input_output_type(
-                Type::Custom("dataframe".into()),
-                Type::Custom("dataframe".into()),
-            )
+            .input_output_types(vec![
+                (
+                    PolarsPluginType::NuDataFrame.into(),
+                    PolarsPluginType::NuDataFrame.into(),
+                ),
+                (
+                    PolarsPluginType::NuLazyFrame.into(),
+                    PolarsPluginType::NuLazyFrame.into(),
+                ),
+            ])
             .category(Category::Custom("lazyframe".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "Fills the NaN values with 0",
@@ -91,6 +96,7 @@ impl PluginCommand for LazyFillNA {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let fill: Value = call.req(0)?;
         let value = input.into_value(call.head)?;
 
@@ -119,6 +125,7 @@ impl PluginCommand for LazyFillNA {
             )),
         }
         .map_err(LabeledError::from)
+        .map(|pd| pd.set_metadata(metadata))
     }
 }
 

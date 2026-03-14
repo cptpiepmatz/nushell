@@ -1,9 +1,7 @@
+use crate::{TableOutput, TableTheme, clean_charset, colorize_space_str, string_wrap};
 use nu_color_config::{Alignment, StyleComputer, TextStyle};
 use nu_protocol::{Config, FooterMode, ShellError, Span, TableMode, TrimStrategy, Value};
-
-use terminal_size::{terminal_size, Height, Width};
-
-use crate::{clean_charset, colorize_space_str, string_wrap, TableOutput, TableTheme};
+use nu_utils::terminal_size;
 
 pub type NuText = (String, TextStyle);
 pub type TableResult = Result<Option<TableOutput>, ShellError>;
@@ -73,10 +71,9 @@ pub fn nu_value_to_string_clean(val: &Value, cfg: &Config, style_comp: &StyleCom
     (text, style)
 }
 
-pub fn error_sign(style_computer: &StyleComputer) -> (String, TextStyle) {
+pub fn error_sign(text: String, style_computer: &StyleComputer) -> (String, TextStyle) {
     // Though holes are not the same as null, the closure for "empty" is passed a null anyway.
 
-    let text = String::from("❎");
     let style = style_computer.compute("empty", &Value::nothing(Span::unknown()));
     (text, TextStyle::with_style(Alignment::Center, style))
 }
@@ -124,9 +121,9 @@ pub fn get_value_style(value: &Value, config: &Config, style_computer: &StyleCom
     }
 }
 
-pub fn get_empty_style(style_computer: &StyleComputer) -> NuText {
+pub fn get_empty_style(text: String, style_computer: &StyleComputer) -> NuText {
     (
-        String::from("❎"),
+        text,
         TextStyle::with_style(
             Alignment::Right,
             style_computer.compute("empty", &Value::nothing(Span::unknown())),
@@ -189,6 +186,8 @@ pub fn load_theme(mode: TableMode) -> TableTheme {
         TableMode::Restructured => TableTheme::restructured(),
         TableMode::AsciiRounded => TableTheme::ascii_rounded(),
         TableMode::BasicCompact => TableTheme::basic_compact(),
+        TableMode::Single => TableTheme::single(),
+        TableMode::Double => TableTheme::double(),
     }
 }
 
@@ -211,10 +210,9 @@ fn need_footer(config: &Config, count_records: u64) -> bool {
         // Calculate the screen height and row count, if screen height is larger than row count, don't show footer
         FooterMode::Auto => {
             let (_width, height) = match terminal_size() {
-                Some((w, h)) => (Width(w.0).0 as u64, Height(h.0).0 as u64),
-                None => (Width(0).0 as u64, Height(0).0 as u64),
+                Ok((w, h)) => (w as u64, h as u64),
+                _ => (0, 0),
             };
-
             height <= count_records
         }
     }

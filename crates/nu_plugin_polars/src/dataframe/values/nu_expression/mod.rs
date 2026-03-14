@@ -1,14 +1,15 @@
 mod custom_value;
 
-use nu_protocol::{record, ShellError, Span, Value};
+use crate::values::{NuSelector, NuSelectorCustomValue};
+use nu_protocol::{ShellError, Span, Value, record};
 use polars::{
     chunked_array::cast::CastOptions,
-    prelude::{col, AggExpr, Expr, Literal},
+    prelude::{AggExpr, Expr, Literal, col},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-use crate::{Cacheable, PolarsPlugin};
+use crate::{Cacheable, PolarsPlugin, values::NuDataFrame};
 
 pub use self::custom_value::NuExpressionCustomValue;
 
@@ -123,9 +124,34 @@ impl ExtractedExpr {
     fn extract_exprs(plugin: &PolarsPlugin, value: Value) -> Result<ExtractedExpr, ShellError> {
         match value {
             Value::String { val, .. } => Ok(ExtractedExpr::Single(col(val.as_str()))),
-            Value::Custom { .. } => NuExpression::try_from_value(plugin, &value)
-                .map(NuExpression::into_polars)
-                .map(ExtractedExpr::Single),
+            Value::Custom { .. } => {
+                // Try NuExpression first
+                if let Ok(expr) = NuExpression::try_from_value(plugin, &value) {
+                    return Ok(ExtractedExpr::Single(expr.into_polars()));
+                }
+                // Try NuSelector as fallback
+                if let Ok(selector) = NuSelector::try_from_value(plugin, &value) {
+                    return Ok(ExtractedExpr::Single(Expr::Selector(
+                        selector.into_polars(),
+                    )));
+                }
+                Err(ShellError::CantConvert {
+                    to_type: "expression".into(),
+                    from_type: value.get_type().to_string(),
+                    span: value.span(),
+                    help: None,
+                })
+            }
+            Value::Record { val, .. } => val
+                .iter()
+                .map(|(key, value)| {
+                    NuExpression::try_from_value(plugin, value)
+                        .map(NuExpression::into_polars)
+                        .map(|expr| expr.alias(key))
+                        .map(ExtractedExpr::Single)
+                })
+                .collect::<Result<Vec<ExtractedExpr>, ShellError>>()
+                .map(ExtractedExpr::List),
             Value::List { vals, .. } => vals
                 .into_iter()
                 .map(|x| Self::extract_exprs(plugin, x))
@@ -157,19 +183,6 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
             },
             span,
         )),
-        Expr::Columns(columns) => {
-            let value = columns
-                .iter()
-                .map(|col| Value::string(col.to_string(), span))
-                .collect();
-            Ok(Value::record(
-                record! {
-                    "expr" => Value::string("columns", span),
-                    "value" => Value::list(value, span),
-                },
-                span,
-            ))
-        }
         Expr::Literal(literal) => Ok(Value::record(
             record! {
                 "expr" => Value::string("literal", span),
@@ -207,10 +220,13 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
                 | AggExpr::Last(expr)
                 | AggExpr::Mean(expr)
                 | AggExpr::Implode(expr)
-                | AggExpr::Count(expr, _)
+                | AggExpr::Count { input: expr, .. }
                 | AggExpr::Sum(expr)
                 | AggExpr::AggGroups(expr)
                 | AggExpr::Std(expr, _)
+                | AggExpr::Item { input: expr, .. }
+                | AggExpr::FirstNonNull(expr)
+                | AggExpr::LastNonNull(expr)
                 | AggExpr::Var(expr, _) => expr_to_value(expr.as_ref(), span),
                 AggExpr::Quantile {
                     expr,
@@ -238,11 +254,7 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
             record! { "expr" => Value::string("count", span) },
             span,
         )),
-        Expr::Wildcard => Ok(Value::record(
-            record! { "expr" => Value::string("wildcard", span) },
-            span,
-        )),
-        Expr::Explode(expr) => Ok(Value::record(
+        Expr::Explode { input: expr, .. } => Ok(Value::record(
             record! { "expr" => expr_to_value(expr.as_ref(), span)? },
             span,
         )),
@@ -250,18 +262,6 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
             record! { "expr" => expr_to_value(expr.as_ref(), span)? },
             span,
         )),
-        Expr::Nth(i) => Ok(Value::record(
-            record! { "expr" => Value::int(*i, span) },
-            span,
-        )),
-        Expr::DtypeColumn(dtypes) => {
-            let vals = dtypes
-                .iter()
-                .map(|d| Value::string(format!("{d}"), span))
-                .collect();
-
-            Ok(Value::list(vals, span))
-        }
         Expr::Sort { expr, options } => Ok(Value::record(
             record! {
                 "expr" => expr_to_value(expr.as_ref(), span)?,
@@ -292,11 +292,14 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
         Expr::Gather {
             expr,
             idx,
-            returns_scalar: _,
+            returns_scalar,
+            null_on_oob,
         } => Ok(Value::record(
             record! {
                 "expr" => expr_to_value(expr.as_ref(), span)?,
                 "idx" => expr_to_value(idx.as_ref(), span)?,
+                "null_on_oob" => Value::bool(*null_on_oob, span),
+                "returns_scalar" => Value::bool(*returns_scalar, span)
             },
             span,
         )),
@@ -341,49 +344,17 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
             },
             span,
         )),
-        Expr::Exclude(expr, excluded) => {
-            let excluded = excluded
-                .iter()
-                .map(|e| Value::string(format!("{e:?}"), span))
-                .collect();
-
-            Ok(Value::record(
-                record! {
-                    "expr" => expr_to_value(expr.as_ref(), span)?,
-                    "excluded" => Value::list(excluded, span),
-                },
-                span,
-            ))
-        }
-        Expr::RenameAlias { expr, function } => Ok(Value::record(
+        Expr::RenameAlias { expr, .. } => Ok(Value::record(
             record! {
                 "expr" => expr_to_value(expr.as_ref(), span)?,
-                "function" => Value::string(format!("{function:?}"), span),
             },
             span,
         )),
         Expr::AnonymousFunction {
             input,
             function,
-            output_type,
             options,
-        } => {
-            let input: Result<Vec<Value>, ShellError> =
-                input.iter().map(|e| expr_to_value(e, span)).collect();
-            Ok(Value::record(
-                record! {
-                    "input" => Value::list(input?, span),
-                    "function" => Value::string(format!("{function:?}"), span),
-                    "output_type" => Value::string(format!("{output_type:?}"), span),
-                    "options" => Value::string(format!("{options:?}"), span),
-                },
-                span,
-            ))
-        }
-        Expr::Function {
-            input,
-            function,
-            options,
+            fmt_str,
         } => {
             let input: Result<Vec<Value>, ShellError> =
                 input.iter().map(|e| expr_to_value(e, span)).collect();
@@ -392,15 +363,27 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
                     "input" => Value::list(input?, span),
                     "function" => Value::string(format!("{function:?}"), span),
                     "options" => Value::string(format!("{options:?}"), span),
+                    "fmt_str" => Value::string(format!("{fmt_str:?}"), span),
                 },
                 span,
             ))
         }
-        Expr::Window {
+        Expr::Function { input, function } => {
+            let input: Result<Vec<Value>, ShellError> =
+                input.iter().map(|e| expr_to_value(e, span)).collect();
+            Ok(Value::record(
+                record! {
+                    "input" => Value::list(input?, span),
+                    "function" => Value::string(format!("{function:?}"), span),
+                },
+                span,
+            ))
+        }
+        Expr::Over {
             function,
             partition_by,
             order_by,
-            options,
+            mapping,
         } => {
             let partition_by: Result<Vec<Value>, ShellError> = partition_by
                 .iter()
@@ -428,7 +411,7 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
                             Value::nothing(span)
                         }
                     },
-                    "options" => Value::string(format!("{options:?}"), span),
+                    "mapping" => Value::string(format!("{mapping:?}"), span),
                 },
                 span,
             ))
@@ -439,16 +422,13 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
             msg_span: span,
             input_span: Span::unknown(),
         }),
-        // the parameter polars_plan::dsl::selector::Selector is not publicly exposed.
-        // I am not sure what we can meaningfully do with this at this time.
-        Expr::Selector(_) => Err(ShellError::UnsupportedInput {
-            msg: "Expressions of type Selector to Nu Values is not yet supported".to_string(),
-            input: format!("Expression is {expr:?}"),
-            msg_span: span,
-            input_span: Span::unknown(),
-        }),
-        Expr::IndexColumn(_) => Err(ShellError::UnsupportedInput {
-            msg: "Expressions of type IndexColumn to Nu Values is not yet supported".to_string(),
+        Expr::Selector(selector) => {
+            // Convert Selector to NuSelector and then to Value
+            let nu_selector = NuSelector::from(selector.clone());
+            nu_selector.to_value(span)
+        }
+        Expr::Eval { .. } => Err(ShellError::UnsupportedInput {
+            msg: "Expressions of type Eval to Nu Value is not yet supported".to_string(),
             input: format!("Expression is {expr:?}"),
             msg_span: span,
             input_span: Span::unknown(),
@@ -462,6 +442,62 @@ pub fn expr_to_value(expr: &Expr, span: Span) -> Result<Value, ShellError> {
                 record!(
                     "fields" => Value::list(fields, span)
                 ),
+                span,
+            ))
+        }
+        Expr::DataTypeFunction(func) => Ok(Value::record(
+            record! {
+                "expr" => Value::string("data_type_function", span),
+                "value" => Value::string(format!("{func:?}"), span),
+            },
+            span,
+        )),
+        Expr::Element => Ok(Value::record(
+            record! {
+                "expr" => Value::string("element", span),
+            },
+            span,
+        )),
+        Expr::Rolling {
+            function,
+            index_column,
+            period,
+            offset,
+            closed_window,
+        } => Ok(Value::record(
+            record! {
+                "function" => expr_to_value(function, span)?,
+                "index_column" => expr_to_value(index_column, span)?,
+                "period" => Value::string(format!("{period}"), span),
+                "offset" => Value::string(format!("{offset}"), span),
+                "closed_window" => Value::string(format!("{closed_window:?}"), span),
+            },
+            span,
+        )),
+        Expr::StructEval { expr, evaluation } => {
+            let fields: Vec<Value> = evaluation
+                .iter()
+                .map(|expr| expr_to_value(expr, span))
+                .collect::<Result<Vec<Value>, ShellError>>()?;
+
+            Ok(Value::record(
+                record! {
+                    "expr" => expr_to_value(expr.as_ref(), span)?,
+                    "evaluation" => Value::list(fields, span),
+                },
+                span,
+            ))
+        }
+        Expr::Display { inputs, fmt_str } => {
+            let inputs = inputs
+                .iter()
+                .map(|e| expr_to_value(e, span))
+                .collect::<Result<Vec<Value>, ShellError>>()?;
+            Ok(Value::record(
+                record! {
+                    "inputs" => Value::list(inputs, span),
+                    "fmt_str" => Value::string(fmt_str.to_string(), span),
+                },
                 span,
             ))
         }
@@ -510,6 +546,9 @@ impl CustomValueSupport for NuExpression {
             Value::Custom { val, .. } => {
                 if let Some(cv) = val.as_any().downcast_ref::<Self::CV>() {
                     Self::try_from_custom_value(plugin, cv)
+                } else if let Some(cv) = val.as_any().downcast_ref::<NuSelectorCustomValue>() {
+                    let selector = NuSelector::try_from_custom_value(plugin, cv)?;
+                    Ok(selector.into_expr())
                 } else {
                     Err(ShellError::CantConvert {
                         to_type: Self::get_type_static().to_string(),
@@ -523,6 +562,38 @@ impl CustomValueSupport for NuExpression {
             Value::Int { val, .. } => Ok(val.to_owned().lit().into()),
             Value::Bool { val, .. } => Ok(val.to_owned().lit().into()),
             Value::Float { val, .. } => Ok(val.to_owned().lit().into()),
+            Value::Date { val, .. } => val
+                .to_owned()
+                .timestamp_nanos_opt()
+                .ok_or_else(|| ShellError::GenericError {
+                    error: "Integer overflow".into(),
+                    msg: "Provided datetime in nanoseconds is too large for i64".into(),
+                    span: Some(value.span()),
+                    help: None,
+                    inner: vec![],
+                })
+                .map(|nanos| -> NuExpression {
+                    nanos
+                        .lit()
+                        .strict_cast(polars::prelude::DataType::Datetime(
+                            polars::prelude::TimeUnit::Nanoseconds,
+                            None,
+                        ))
+                        .into()
+                }),
+            Value::Duration { val, .. } => Ok(val
+                .to_owned()
+                .lit()
+                .strict_cast(polars::prelude::DataType::Duration(
+                    polars::prelude::TimeUnit::Nanoseconds,
+                ))
+                .into()),
+            Value::List { vals, .. } => {
+                NuDataFrame::try_from_iter(plugin, vals.iter().cloned(), None).and_then(|ndf| {
+                    let series = ndf.as_series(value.span())?;
+                    Ok(series.lit().into())
+                })
+            }
             x => Err(ShellError::CantConvert {
                 to_type: "lazy expression".into(),
                 from_type: x.get_type().to_string(),
@@ -536,6 +607,7 @@ impl CustomValueSupport for NuExpression {
         match value {
             Value::Custom { val, .. } => val.as_any().downcast_ref::<Self::CV>().is_some(),
             Value::List { vals, .. } => vals.iter().all(Self::can_downcast),
+            Value::Record { val, .. } => val.iter().all(|(_, value)| Self::can_downcast(value)),
             Value::String { .. } | Value::Int { .. } | Value::Bool { .. } | Value::Float { .. } => {
                 true
             }

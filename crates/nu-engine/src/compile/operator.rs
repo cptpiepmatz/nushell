@@ -1,13 +1,25 @@
 use nu_protocol::{
+    ENV_VARIABLE_ID, IntoSpanned, RegId, Span, Spanned, Value,
     ast::{Assignment, Boolean, CellPath, Expr, Expression, Math, Operator, PathMember, Pattern},
     engine::StateWorkingSet,
     ir::{Instruction, Literal},
-    IntoSpanned, RegId, Span, Spanned, Value, ENV_VARIABLE_ID,
 };
 use nu_utils::IgnoreCaseExt;
 
-use super::{compile_expression, BlockBuilder, CompileError, RedirectModes};
+use super::{BlockBuilder, CompileError, RedirectModes, compile_expression};
 
+/// Compile a binary operation (arithmetic, comparison, boolean, or assignment).
+///
+/// # Arguments
+/// * `working_set` - The state working set for symbol resolution
+/// * `builder` - The IR block builder
+/// * `lhs` - Left-hand side expression
+/// * `op` - The operator with span information
+/// * `rhs` - Right-hand side expression
+/// * `span` - Span for the entire binary operation
+/// * `in_reg` - Optional input register for `$in` variable access in subexpressions
+/// * `out_reg` - Output register for the result
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_binary_op(
     working_set: &StateWorkingSet,
     builder: &mut BlockBuilder,
@@ -15,6 +27,7 @@ pub(crate) fn compile_binary_op(
     op: Spanned<Operator>,
     rhs: &Expression,
     span: Span,
+    in_reg: Option<RegId>,
     out_reg: RegId,
 ) -> Result<(), CompileError> {
     if let Operator::Assignment(assign_op) = op.item {
@@ -27,6 +40,7 @@ pub(crate) fn compile_binary_op(
                 decomposed_op.into_spanned(op.span),
                 rhs,
                 span,
+                in_reg,
                 out_reg,
             )?;
         } else {
@@ -49,12 +63,19 @@ pub(crate) fn compile_binary_op(
         // Not an assignment: just do the binary op
         let lhs_reg = out_reg;
 
+        // Pass in_reg to lhs if it uses $in
+        let lhs_in_reg = if lhs.has_in_variable(working_set) {
+            in_reg
+        } else {
+            None
+        };
+
         compile_expression(
             working_set,
             builder,
             lhs,
             RedirectModes::value(lhs.span),
-            None,
+            lhs_in_reg,
             lhs_reg,
         )?;
 
@@ -70,6 +91,8 @@ pub(crate) fn compile_binary_op(
                     Boolean::Xor => unreachable!(),
                 };
 
+                // Before match against lhs_reg, it's important to collect it first to get a concrete value if there is a subexpression.
+                builder.push(Instruction::Collect { src_dst: lhs_reg }.into_spanned(lhs.span))?;
                 // Short-circuit to return `lhs_reg`. `match` op does not consume `lhs_reg`.
                 let short_circuit_label = builder.label(None);
                 builder.r#match(
@@ -82,12 +105,20 @@ pub(crate) fn compile_binary_op(
                 // If the match failed then this was not the short-circuit value, so we have to run
                 // the RHS expression
                 let rhs_reg = builder.next_register()?;
+
+                // Pass in_reg to rhs if it uses $in
+                let rhs_in_reg = if rhs.has_in_variable(working_set) {
+                    in_reg
+                } else {
+                    None
+                };
+
                 compile_expression(
                     working_set,
                     builder,
                     rhs,
                     RedirectModes::value(rhs.span),
-                    None,
+                    rhs_in_reg,
                     rhs_reg,
                 )?;
 
@@ -107,15 +138,21 @@ pub(crate) fn compile_binary_op(
                 builder.set_label(short_circuit_label, builder.here())?;
             }
             _ => {
-                // Any other operator, via `binary-op`
                 let rhs_reg = builder.next_register()?;
+
+                // Pass in_reg to rhs if it uses $in
+                let rhs_in_reg = if rhs.has_in_variable(working_set) {
+                    in_reg
+                } else {
+                    None
+                };
 
                 compile_expression(
                     working_set,
                     builder,
                     rhs,
                     RedirectModes::value(rhs.span),
-                    None,
+                    rhs_in_reg,
                     rhs_reg,
                 )?;
 
@@ -150,11 +187,11 @@ pub(crate) fn compile_binary_op(
 pub(crate) fn decompose_assignment(assignment: Assignment) -> Option<Operator> {
     match assignment {
         Assignment::Assign => None,
-        Assignment::PlusAssign => Some(Operator::Math(Math::Plus)),
-        Assignment::ConcatAssign => Some(Operator::Math(Math::Concat)),
-        Assignment::MinusAssign => Some(Operator::Math(Math::Minus)),
+        Assignment::AddAssign => Some(Operator::Math(Math::Add)),
+        Assignment::SubtractAssign => Some(Operator::Math(Math::Subtract)),
         Assignment::MultiplyAssign => Some(Operator::Math(Math::Multiply)),
         Assignment::DivideAssign => Some(Operator::Math(Math::Divide)),
+        Assignment::ConcatenateAssign => Some(Operator::Math(Math::Concatenate)),
     }
 }
 
@@ -340,11 +377,14 @@ pub(crate) fn compile_load_env(
             .into_spanned(span),
         )?,
         [PathMember::Int { span, .. }, ..] => {
-            return Err(CompileError::AccessEnvByInt { span: *span })
+            return Err(CompileError::AccessEnvByInt { span: *span });
         }
-        [PathMember::String {
-            val: key, optional, ..
-        }, tail @ ..] => {
+        [
+            PathMember::String {
+                val: key, optional, ..
+            },
+            tail @ ..,
+        ] => {
             let key = builder.data(key)?;
 
             builder.push(if *optional {

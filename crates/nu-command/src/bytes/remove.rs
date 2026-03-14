@@ -1,4 +1,4 @@
-use nu_cmd_base::input_handler::{operate, CmdArgument};
+use nu_cmd_base::input_handler::{CmdArgument, operate};
 use nu_engine::command_prelude::*;
 
 struct Arguments {
@@ -35,13 +35,13 @@ impl Command for BytesRemove {
                 SyntaxShape::CellPath,
                 "For a data structure input, remove bytes from data at the given cell paths.",
             )
-            .switch("end", "remove from end of binary", Some('e'))
-            .switch("all", "remove occurrences of finding binary", Some('a'))
+            .switch("end", "Remove from end of binary.", Some('e'))
+            .switch("all", "Remove occurrences of finding binary.", Some('a'))
             .category(Category::Bytes)
     }
 
     fn description(&self) -> &str {
-        "Remove bytes."
+        "Remove specified bytes from the input."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -73,49 +73,47 @@ impl Command for BytesRemove {
             all: call.has_flag(engine_state, stack, "all")?,
         };
 
-        operate(remove, arg, input, call.head, engine_state.signals())
+        operate(remove, arg, input, call.head, engine_state.signals()).map(|pipeline| {
+            // image/png with some bytes removed is likely not a valid image/png anymore
+            let metadata = pipeline.metadata().map(|m| m.with_content_type(None));
+            pipeline.set_metadata(metadata)
+        })
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Remove contents",
+                description: "Remove contents.",
                 example: "0x[10 AA FF AA FF] | bytes remove 0x[10 AA]",
-                result: Some(Value::test_binary (
-                    vec![0xFF, 0xAA, 0xFF],
-                )),
+                result: Some(Value::test_binary(vec![0xFF, 0xAA, 0xFF])),
             },
             Example {
-                description: "Remove all occurrences of find binary in record field",
+                description: "Remove all occurrences of find binary in record field.",
                 example: "{ data: 0x[10 AA 10 BB 10] } | bytes remove --all 0x[10] data",
                 result: Some(Value::test_record(record! {
                     "data" => Value::test_binary(vec![0xAA, 0xBB])
                 })),
             },
             Example {
-                description: "Remove occurrences of find binary from end",
+                description: "Remove occurrences of find binary from end.",
                 example: "0x[10 AA 10 BB CC AA 10] | bytes remove --end 0x[10]",
-                result: Some(Value::test_binary (
-                    vec![0x10, 0xAA, 0x10, 0xBB, 0xCC, 0xAA],
-                )),
+                result: Some(Value::test_binary(vec![0x10, 0xAA, 0x10, 0xBB, 0xCC, 0xAA])),
             },
             Example {
-                description: "Remove find binary from end not found",
+                description: "Remove find binary from end not found.",
                 example: "0x[10 AA 10 BB CC AA 10] | bytes remove --end 0x[11]",
-                result: Some(Value::test_binary (
-                    vec![0x10, 0xAA, 0x10, 0xBB, 0xCC, 0xAA, 0x10],
-                )),
+                result: Some(Value::test_binary(vec![
+                    0x10, 0xAA, 0x10, 0xBB, 0xCC, 0xAA, 0x10,
+                ])),
             },
             Example {
-                description: "Remove all occurrences of find binary in table",
+                description: "Remove all occurrences of find binary in table.",
                 example: "[[ColA ColB ColC]; [0x[11 12 13] 0x[14 15 16] 0x[17 18 19]]] | bytes remove 0x[11] ColA ColC",
-                result: Some(Value::test_list (
-                    vec![Value::test_record(record! {
-                        "ColA" => Value::test_binary ( vec![0x12, 0x13],),
-                        "ColB" => Value::test_binary ( vec![0x14, 0x15, 0x16],),
-                        "ColC" => Value::test_binary ( vec![0x17, 0x18, 0x19],),
-                    })],
-                )),
+                result: Some(Value::test_list(vec![Value::test_record(record! {
+                    "ColA" => Value::test_binary ( vec![0x12, 0x13],),
+                    "ColB" => Value::test_binary ( vec![0x14, 0x15, 0x16],),
+                    "ColC" => Value::test_binary ( vec![0x17, 0x18, 0x19],),
+                })])),
             },
         ]
     }
@@ -195,9 +193,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(BytesRemove {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(BytesRemove)
     }
 }

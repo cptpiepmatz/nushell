@@ -12,9 +12,9 @@ impl Command for IsTerminal {
     fn signature(&self) -> Signature {
         Signature::build("is-terminal")
             .input_output_type(Type::Nothing, Type::Bool)
-            .switch("stdin", "Check if stdin is a terminal", Some('i'))
-            .switch("stdout", "Check if stdout is a terminal", Some('o'))
-            .switch("stderr", "Check if stderr is a terminal", Some('e'))
+            .switch("stdin", "Check if stdin is a terminal.", Some('i'))
+            .switch("stdout", "Check if stdout is a terminal.", Some('o'))
+            .switch("stderr", "Check if stderr is a terminal.", Some('e'))
             .category(Category::Platform)
     }
 
@@ -22,7 +22,7 @@ impl Command for IsTerminal {
         "Check if stdin, stdout, or stderr is a terminal."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: r#"Return "terminal attached" if standard input is attached to a terminal, and "no terminal" if not."#,
             example: r#"if (is-terminal --stdin) { "terminal attached" } else { "no terminal" }"#,
@@ -63,7 +63,7 @@ impl Command for IsTerminal {
             }
         };
 
-        Ok(PipelineData::Value(
+        Ok(PipelineData::value(
             Value::bool(is_terminal, call.head),
             None,
         ))

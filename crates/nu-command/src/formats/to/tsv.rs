@@ -22,13 +22,13 @@ impl Command for ToTsv {
             ])
             .switch(
                 "noheaders",
-                "do not output the column names as the first row",
+                "Do not output the column names as the first row.",
                 Some('n'),
             )
             .named(
                 "columns",
                 SyntaxShape::List(SyntaxShape::String.into()),
-                "the names (in order) of the columns to use",
+                "The names (in order) of the columns to use.",
                 None,
             )
             .category(Category::Formats)
@@ -38,20 +38,20 @@ impl Command for ToTsv {
         "Convert table into .tsv text."
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                description: "Outputs a TSV string representing the contents of this table",
+                description: "Outputs a TSV string representing the contents of this table.",
                 example: "[[foo bar]; [1 2]] | to tsv",
                 result: Some(Value::test_string("foo\tbar\n1\t2\n")),
             },
             Example {
-                description: "Outputs a TSV string representing the contents of this record",
+                description: "Outputs a TSV string representing the contents of this record.",
                 example: "{a: 1 b: 2} | to tsv",
                 result: Some(Value::test_string("a\tb\n1\t2\n")),
             },
             Example {
-                description: "Outputs a TSV stream with column names pre-determined",
+                description: "Outputs a TSV stream with column names pre-determined.",
                 example: "[[foo bar baz]; [1 2 3]] | to tsv --columns [baz foo]",
                 result: Some(Value::test_string("baz\tfoo\n3\t1\n")),
             },
@@ -107,10 +107,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ToTsv {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ToTsv)
     }
 
     #[test]
@@ -132,16 +130,14 @@ mod test {
             .merge_delta(delta)
             .expect("Error merging delta");
 
-        let cmd = "{a: 1 b: 2} | to tsv | metadata | get content_type";
+        let cmd = "{a: 1 b: 2} | to tsv | metadata | get content_type | $in";
         let result = eval_pipeline_without_terminal_expression(
             cmd,
             std::env::temp_dir().as_ref(),
             &mut engine_state,
         );
         assert_eq!(
-            Value::test_record(
-                record!("content_type" => Value::test_string("text/tab-separated-values"))
-            ),
+            Value::test_string("text/tab-separated-values"),
             result.expect("There should be a result")
         );
     }

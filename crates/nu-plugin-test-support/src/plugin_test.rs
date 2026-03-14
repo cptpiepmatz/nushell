@@ -8,10 +8,11 @@ use nu_plugin::{Plugin, PluginCommand};
 use nu_plugin_engine::{PluginCustomValueWithSource, PluginSource, WithSource};
 use nu_plugin_protocol::PluginCustomValue;
 use nu_protocol::{
+    CustomValue, Example, IntoSpanned as _, LabeledError, PipelineData, ShellError, Signals, Span,
+    Value,
     debugger::WithoutDebug,
     engine::{EngineState, Stack, StateWorkingSet},
-    report_shell_error, CustomValue, Example, IntoSpanned as _, LabeledError, PipelineData,
-    ShellError, Signals, Span, Value,
+    report_shell_error,
 };
 
 use crate::{diff::diff_by_line, fake_register::fake_register};
@@ -104,7 +105,7 @@ impl PluginTest {
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let mut working_set = StateWorkingSet::new(&self.engine_state);
-        let fname = format!("entry #{}", self.entry_num);
+        let fname = format!("repl_entry #{}", self.entry_num);
         self.entry_num += 1;
 
         // Parse the source code
@@ -118,7 +119,7 @@ impl PluginTest {
                 working_set
                     .parse_errors
                     .iter()
-                    .map(LabeledError::from_diagnostic),
+                    .map(|i| LabeledError::from_diagnostic(i).into()),
             );
             Some(ShellError::LabeledError(error.into()))
         } else {
@@ -136,10 +137,9 @@ impl PluginTest {
 
         // Serialize custom values in the input
         let source = self.source.clone();
-        let input = if matches!(input, PipelineData::ByteStream(..)) {
-            input
-        } else {
-            input.map(
+        let input = match input {
+            input @ PipelineData::ByteStream(..) => input,
+            input => input.map(
                 move |mut value| {
                     let result = PluginCustomValue::serialize_custom_values_in(&mut value)
                         // Make sure to mark them with the source so they pass correctly, too.
@@ -152,16 +152,16 @@ impl PluginTest {
                     }
                 },
                 &Signals::empty(),
-            )?
+            )?,
         };
 
         // Eval the block with the input
         let mut stack = Stack::new().collect_value();
-        let data = eval_block::<WithoutDebug>(&self.engine_state, &mut stack, &block, input)?;
-        if matches!(data, PipelineData::ByteStream(..)) {
-            Ok(data)
-        } else {
-            data.map(
+        let data = eval_block::<WithoutDebug>(&self.engine_state, &mut stack, &block, input)
+            .map(|p| p.body)?;
+        match data {
+            data @ PipelineData::ByteStream(..) => Ok(data),
+            data => data.map(
                 |mut value| {
                     // Make sure to deserialize custom values
                     let result = PluginCustomValueWithSource::remove_source_in(&mut value)
@@ -172,7 +172,7 @@ impl PluginTest {
                     }
                 },
                 &Signals::empty(),
-            )
+            ),
         }
     }
 
@@ -193,7 +193,7 @@ impl PluginTest {
     /// # }
     /// ```
     pub fn eval(&mut self, nu_source: &str) -> Result<PipelineData, ShellError> {
-        self.eval_with(nu_source, PipelineData::Empty)
+        self.eval_with(nu_source, PipelineData::empty())
     }
 
     /// Test a list of plugin examples. Prints an error for each failing example.
@@ -242,8 +242,46 @@ impl PluginTest {
                         // Check for equality with the result
                         if !self.value_eq(expectation, &value)? {
                             // If they're not equal, print a diff of the debug format
-                            let expectation_formatted = format!("{:#?}", expectation);
-                            let value_formatted = format!("{:#?}", value);
+                            let (expectation_formatted, value_formatted) =
+                                match (expectation, &value) {
+                                    (
+                                        Value::Custom { val: ex_val, .. },
+                                        Value::Custom { val: v_val, .. },
+                                    ) => {
+                                        // We have to serialize both custom values before handing them to the plugin
+                                        let expectation_serialized =
+                                            PluginCustomValue::serialize_from_custom_value(
+                                                ex_val.as_ref(),
+                                                expectation.span(),
+                                            )?
+                                            .with_source(self.source.clone());
+
+                                        let value_serialized =
+                                            PluginCustomValue::serialize_from_custom_value(
+                                                v_val.as_ref(),
+                                                expectation.span(),
+                                            )?
+                                            .with_source(self.source.clone());
+
+                                        let persistent =
+                                            self.source.persistent(None)?.get_plugin(None)?;
+                                        let expectation_base = persistent
+                                            .custom_value_to_base_value(
+                                                expectation_serialized
+                                                    .into_spanned(expectation.span()),
+                                            )?;
+                                        let value_base = persistent.custom_value_to_base_value(
+                                            value_serialized.into_spanned(value.span()),
+                                        )?;
+
+                                        (
+                                            format!("{expectation_base:#?}"),
+                                            format!("{value_base:#?}"),
+                                        )
+                                    }
+                                    _ => (format!("{expectation:#?}"), format!("{value:#?}")),
+                                };
+
                             let diff = diff_by_line(&expectation_formatted, &value_formatted);
                             failed_header();
                             eprintln!("{} {}", bold.paint("Result:"), diff);
@@ -252,7 +290,7 @@ impl PluginTest {
                     Err(err) => {
                         // Report the error
                         failed_header();
-                        report_shell_error(&self.engine_state, &err);
+                        report_shell_error(None, &self.engine_state, &err);
                     }
                 }
             }

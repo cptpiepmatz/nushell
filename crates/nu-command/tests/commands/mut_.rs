@@ -1,4 +1,6 @@
+use nu_test_support::fs::Stub::EmptyFile;
 use nu_test_support::nu;
+use nu_test_support::playground::Playground;
 use rstest::rstest;
 
 #[test]
@@ -12,18 +14,22 @@ fn mut_variable() {
 #[case("mut in = 3")]
 #[case("mut in: int = 3")]
 fn mut_name_builtin_var(#[case] assignment: &str) {
-    assert!(nu!(assignment)
-        .err
-        .contains("'in' is the name of a builtin Nushell variable"));
+    assert!(
+        nu!(assignment)
+            .err
+            .contains("'in' is the name of a builtin Nushell variable")
+    );
 }
 
 #[test]
 fn mut_name_builtin_var_with_dollar() {
     let actual = nu!("mut $env = 3");
 
-    assert!(actual
-        .err
-        .contains("'env' is the name of a builtin Nushell variable"))
+    assert!(
+        actual
+            .err
+            .contains("'env' is the name of a builtin Nushell variable")
+    )
 }
 
 #[test]
@@ -63,9 +69,37 @@ fn mut_multiply_assign() {
 
 #[test]
 fn mut_divide_assign() {
+    let actual = nu!("mut y: number = 8; $y /= 2; $y");
+
+    assert_eq!(actual.out, "4.0");
+}
+
+#[test]
+fn mut_divide_assign_should_error() {
     let actual = nu!("mut y = 8; $y /= 2; $y");
 
-    assert_eq!(actual.out, "4");
+    assert!(actual.err.contains("parser::operator_incompatible_types"));
+}
+
+#[test]
+fn mut_subtract_assign_should_error() {
+    let actual = nu!("mut x = (date now); $x -= 2019-05-10");
+
+    assert!(actual.err.contains("parser::operator_incompatible_types"));
+}
+
+#[test]
+fn mut_assign_number() {
+    let actual = nu!("mut x: number = 1; $x = 2.0; $x");
+
+    assert_eq!(actual.out, "2.0");
+}
+
+#[test]
+fn mut_assign_glob() {
+    let actual = nu!(r#"mut x: glob = ""; $x = "meow"; $x"#);
+
+    assert_eq!(actual.out, "meow");
 }
 
 #[test]
@@ -97,10 +131,14 @@ fn mut_path_upsert_list() {
 }
 
 #[test]
-fn mut_path_operator_assign() {
-    let actual = nu!("mut a = {b:1}; $a.b += 3; $a.b -= 2; $a.b *= 10; $a.b /= 4; $a.b");
+fn mut_path_operator_assign_should_error_enforce_runtime() {
+    // should error on the division
+    let actual = nu!(
+        experimental: vec!["enforce-runtime-annotations".to_string()],
+        "mut a: record<b: int> = {b:1}; $a.b += 3; $a.b -= 2; $a.b *= 10; $a.b /= 4; $a.b",
+    );
 
-    assert_eq!(actual.out, "5");
+    assert!(actual.err.contains("nu::shell::cant_convert"));
 }
 
 #[test]
@@ -117,7 +155,7 @@ fn mut_value_with_if() {
 
 #[test]
 fn mut_value_with_match() {
-    let actual = nu!("mut a = 3; $a = match 3 { 1 => { 'yes!' }, _ => { 'no!' } }; echo $a");
+    let actual = nu!("mut a = 'maybe?'; $a = match 3 { 1 => { 'yes!' }, _ => { 'no!' } }; echo $a");
     assert_eq!(actual.out, "no!");
 }
 
@@ -125,6 +163,16 @@ fn mut_value_with_match() {
 fn mut_glob_type() {
     let actual = nu!("mut x: glob = 'aa'; $x | describe");
     assert_eq!(actual.out, "glob");
+}
+
+#[test]
+fn mut_typed_glob_expands_in_ls() {
+    Playground::setup("mut_glob_ls", |dirs, sandbox| {
+        sandbox.with_files(&[EmptyFile("a.toml"), EmptyFile("b.toml"), EmptyFile("c.txt")]);
+
+        let actual = nu!(cwd: dirs.test(), r#"mut x: glob = "*.toml"; ls $x | length"#);
+        assert_eq!(actual.out, "2");
+    })
 }
 
 #[test]
@@ -152,9 +200,11 @@ fn def_should_not_mutate_mut() {
 #[test]
 fn assign_to_non_mut_variable_raises_parse_error() {
     let actual = nu!("let x = 3; $x = 4");
-    assert!(actual
-        .err
-        .contains("parser::assignment_requires_mutable_variable"));
+    assert!(
+        actual
+            .err
+            .contains("parser::assignment_requires_mutable_variable")
+    );
 
     let actual = nu!("mut x = 3; x = 5");
     assert!(actual.err.contains("parser::assignment_requires_variable"));

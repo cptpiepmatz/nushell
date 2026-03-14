@@ -41,24 +41,8 @@ fn do_with_semicolon_break_on_failed_external() {
 }
 
 #[test]
-fn ignore_shell_errors_works_for_external_with_semicolon() {
-    let actual = nu!(r#"do -s { open asdfasdf.txt }; "text""#);
-
-    assert!(actual.err.contains("Deprecated option"));
-    assert_eq!(actual.out, "text");
-}
-
-#[test]
-fn ignore_program_errors_works_for_external_with_semicolon() {
-    let actual = nu!(r#"do -p { nu -n -c 'exit 1' }; "text""#);
-
-    assert!(actual.err.contains("Deprecated option"));
-    assert_eq!(actual.out, "text");
-}
-
-#[test]
 fn ignore_error_should_work_for_external_command() {
-    let actual = nu!(r#"do -i { nu --testbin fail asdf }; echo post"#);
+    let actual = nu!(r#"do -i { nu --testbin fail 1 }; echo post"#);
 
     assert_eq!(actual.err, "");
     assert_eq!(actual.out, "post");
@@ -71,16 +55,22 @@ fn ignore_error_works_with_list_stream() {
 }
 
 #[test]
-fn run_closure_with_it_using() {
-    let actual = nu!(r#"let x = {let it = 3; $it}; do $x"#);
+fn run_closure_with_do_using() {
+    let actual = nu!(r#"let x = {let var = 3; $var}; do $x"#);
     assert!(actual.err.is_empty());
     assert_eq!(actual.out, "3");
 }
 
 #[test]
-fn waits_for_external() {
-    let actual = nu!(r#"do -p { nu -c 'sleep 1sec; print before; exit 1'}; print after"#);
+fn required_argument_type_checked() {
+    let actual = nu!(r#"do {|x: string| $x} 4"#);
+    assert!(actual.out.is_empty());
+    assert!(actual.err.contains("nu::shell::cant_convert"));
+}
 
-    assert!(actual.err.contains("Deprecated option"));
-    assert_eq!(actual.out, "beforeafter");
+#[test]
+fn optional_argument_type_checked() {
+    let actual = nu!(r#"do {|x?: string| $x} 4"#);
+    assert_eq!(actual.out, "");
+    assert!(actual.err.contains("nu::shell::cant_convert"));
 }

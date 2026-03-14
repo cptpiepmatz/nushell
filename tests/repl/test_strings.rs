@@ -1,4 +1,4 @@
-use crate::repl::tests::{fail_test, run_test, TestResult};
+use crate::repl::tests::{TestResult, fail_test, run_test};
 
 #[test]
 fn cjk_in_substrings() -> TestResult {
@@ -20,7 +20,7 @@ fn string_in_string() -> TestResult {
 
 #[test]
 fn non_string_in_string() -> TestResult {
-    fail_test(r#"42 in 'abc'"#, "is not supported")
+    fail_test(r#"42 in 'abc'"#, "nu::parser::operator_incompatible_types")
 }
 
 #[test]
@@ -32,14 +32,16 @@ fn string_in_record() -> TestResult {
 fn non_string_in_record() -> TestResult {
     fail_test(
         r#"4 in ('{ "a": 13, "b": 14 }' | from json)"#,
-        "mismatch during operation",
+        "nu::shell::operator_incompatible_types",
     )
 }
 
 #[test]
 fn unbalance_string() -> TestResult {
     fail_test(r#""aaaab"cc"#, "invalid characters")?;
-    fail_test(r#"'aaaab'cc"#, "invalid characters")
+    fail_test(r#"'aaaab'cc"#, "invalid characters")?;
+    fail_test(r#"$"aaaab"cc"#, "invalid characters")?;
+    fail_test(r#"$'aaaab'cc"#, "invalid characters")
 }
 
 #[test]
@@ -55,6 +57,11 @@ fn string_in_valuestream() -> TestResult {
 #[test]
 fn single_tick_interpolation() -> TestResult {
     run_test(r#"$'(3 + 4)'"#, "7")
+}
+
+#[test]
+fn unclosed_interpolation_subexpression() -> TestResult {
+    fail_test("$\"foo (2 + 3\"", "unclosed )")
 }
 
 #[test]

@@ -1,22 +1,24 @@
 use crate::test_util::TestCaseExt;
 
 use super::{EngineInterfaceManager, ReceivedPluginCall};
-use nu_plugin_core::{interface_test_util::TestCase, Interface, InterfaceManager};
+use nu_engine::command_prelude::IoError;
+use nu_plugin_core::{Interface, InterfaceManager, interface_test_util::TestCase};
 use nu_plugin_protocol::{
-    test_util::{expected_test_custom_value, test_plugin_custom_value, TestCustomValue},
     ByteStreamInfo, CallInfo, CustomValueOp, EngineCall, EngineCallId, EngineCallResponse,
     EvaluatedCall, ListStreamInfo, PipelineDataHeader, PluginCall, PluginCallResponse,
     PluginCustomValue, PluginInput, PluginOutput, Protocol, ProtocolInfo, StreamData,
+    test_util::{TestCustomValue, expected_test_custom_value, test_plugin_custom_value},
 };
 use nu_protocol::{
-    engine::Closure, BlockId, ByteStreamType, Config, CustomValue, IntoInterruptiblePipelineData,
-    LabeledError, PipelineData, PluginSignature, ShellError, Signals, Span, Spanned, Value, VarId,
+    BlockId, ByteStreamType, Config, CustomValue, IntoInterruptiblePipelineData, LabeledError,
+    PipelineData, PluginSignature, ShellError, Signals, Span, Spanned, Value, VarId,
+    engine::Closure, shell_error,
 };
 use std::{
     collections::HashMap,
     sync::{
-        mpsc::{self, TryRecvError},
         Arc,
+        mpsc::{self, TryRecvError},
     },
 };
 
@@ -88,9 +90,12 @@ fn manager_consume_all_exits_after_streams_and_interfaces_are_dropped() -> Resul
 }
 
 fn test_io_error() -> ShellError {
-    ShellError::IOError {
-        msg: "test io error".into(),
-    }
+    ShellError::Io(IoError::new_with_additional_context(
+        shell_error::io::ErrorKind::from_std(std::io::ErrorKind::Other),
+        Span::test_data(),
+        None,
+        "test io error",
+    ))
 }
 
 fn check_test_io_error(error: &ShellError) {
@@ -538,8 +543,8 @@ fn manager_consume_call_custom_value_op_forwards_to_receiver_with_context() -> R
 }
 
 #[test]
-fn manager_consume_engine_call_response_forwards_to_subscriber_with_pipeline_data(
-) -> Result<(), ShellError> {
+fn manager_consume_engine_call_response_forwards_to_subscriber_with_pipeline_data()
+-> Result<(), ShellError> {
     let mut manager = TestCase::new().engine();
     set_default_protocol_info(&mut manager)?;
 
@@ -578,7 +583,7 @@ fn manager_consume_engine_call_response_forwards_to_subscriber_with_pipeline_dat
 fn manager_prepare_pipeline_data_deserializes_custom_values() -> Result<(), ShellError> {
     let manager = TestCase::new().engine();
 
-    let data = manager.prepare_pipeline_data(PipelineData::Value(
+    let data = manager.prepare_pipeline_data(PipelineData::value(
         Value::test_custom_value(Box::new(test_plugin_custom_value())),
         None,
     ))?;
@@ -685,7 +690,7 @@ fn interface_write_response_with_value() -> Result<(), ShellError> {
     let test = TestCase::new();
     let interface = test.engine().interface_for_context(33);
     interface
-        .write_response(Ok::<_, ShellError>(PipelineData::Value(
+        .write_response(Ok::<_, ShellError>(PipelineData::value(
             Value::test_int(6),
             None,
         )))?
@@ -765,10 +770,10 @@ fn interface_write_response_with_stream() -> Result<(), ShellError> {
 fn interface_write_response_with_error() -> Result<(), ShellError> {
     let test = TestCase::new();
     let interface = test.engine().interface_for_context(35);
-    let labeled_error = LabeledError::new("this is an error").with_help("a test error");
-    interface
-        .write_response(Err(labeled_error.clone()))?
-        .write()?;
+    let error: ShellError = LabeledError::new("this is an error")
+        .with_help("a test error")
+        .into();
+    interface.write_response(Err(error.clone()))?.write()?;
 
     let written = test.next_written().expect("nothing written");
 
@@ -776,7 +781,7 @@ fn interface_write_response_with_error() -> Result<(), ShellError> {
         PluginOutput::CallResponse(id, response) => {
             assert_eq!(35, id, "id");
             match response {
-                PluginCallResponse::Error(err) => assert_eq!(labeled_error, err),
+                PluginCallResponse::Error(err) => assert_eq!(error, err),
                 _ => panic!("unexpected response: {response:?}"),
             }
         }
@@ -896,9 +901,9 @@ fn interface_get_plugin_config() -> Result<(), ShellError> {
 
     start_fake_plugin_call_responder(manager, 2, |id| {
         if id == 0 {
-            EngineCallResponse::PipelineData(PipelineData::Empty)
+            EngineCallResponse::PipelineData(PipelineData::empty())
         } else {
-            EngineCallResponse::PipelineData(PipelineData::Value(Value::test_int(2), None))
+            EngineCallResponse::PipelineData(PipelineData::value(Value::test_int(2), None))
         }
     });
 
@@ -1033,7 +1038,7 @@ fn interface_eval_closure_with_stream() -> Result<(), ShellError> {
     let interface = manager.interface_for_context(0);
 
     start_fake_plugin_call_responder(manager, 1, |_| {
-        EngineCallResponse::PipelineData(PipelineData::Value(Value::test_int(2), None))
+        EngineCallResponse::PipelineData(PipelineData::value(Value::test_int(2), None))
     });
 
     let result = interface
@@ -1046,7 +1051,7 @@ fn interface_eval_closure_with_stream() -> Result<(), ShellError> {
                 span: Span::test_data(),
             },
             vec![Value::test_string("test")],
-            PipelineData::Empty,
+            PipelineData::empty(),
             true,
             false,
         )?
@@ -1095,7 +1100,7 @@ fn interface_prepare_pipeline_data_serializes_custom_values() -> Result<(), Shel
     let interface = TestCase::new().engine().get_interface();
 
     let data = interface.prepare_pipeline_data(
-        PipelineData::Value(
+        PipelineData::value(
             Value::test_custom_value(Box::new(expected_test_custom_value())),
             None,
         ),

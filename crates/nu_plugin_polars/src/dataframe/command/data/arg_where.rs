@@ -1,7 +1,7 @@
 use crate::{
-    dataframe::values::{Column, NuDataFrame, NuExpression},
-    values::CustomValueSupport,
     PolarsPlugin,
+    dataframe::values::{Column, NuDataFrame, NuExpression},
+    values::{CustomValueSupport, PolarsPluginType},
 };
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
@@ -25,12 +25,12 @@ impl PluginCommand for ExprArgWhere {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .required("column name", SyntaxShape::Any, "Expression to evaluate")
-            .input_output_type(Type::Any, Type::Custom("expression".into()))
+            .required("column name", SyntaxShape::Any, "Expression to evaluate.")
+            .input_output_type(Type::Any, PolarsPluginType::NuExpression.into())
             .category(Category::Custom("expression".into()))
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
             description: "Return a dataframe where the value match the expression",
             example: "let df = ([[a b]; [one 1] [two 2] [three 3]] | polars into-df);
@@ -58,13 +58,15 @@ impl PluginCommand for ExprArgWhere {
         plugin: &Self::Plugin,
         engine: &EngineInterface,
         call: &EvaluatedCall,
-        _input: PipelineData,
+        input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
+        let metadata = input.metadata();
         let value: Value = call.req(0)?;
         let expr = NuExpression::try_from_value(plugin, &value)?;
         let expr: NuExpression = arg_where(expr.into_polars()).into();
         expr.to_pipeline_data(plugin, engine, call.head)
             .map_err(LabeledError::from)
+            .map(|pd| pd.set_metadata(metadata))
     }
 }
 

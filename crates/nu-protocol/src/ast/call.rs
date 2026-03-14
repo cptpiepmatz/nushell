@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ast::Expression, engine::StateWorkingSet, eval_const::eval_constant, DeclId, FromValue,
-    ShellError, Span, Spanned, Value,
+    DeclId, FromValue, ShellError, Span, Spanned, Value, ast::Expression, engine::StateWorkingSet,
+    eval_const::eval_constant,
 };
 
 /// Parsed command arguments
@@ -76,6 +76,15 @@ pub enum ExternalArgument {
     Spread(Expression),
 }
 
+impl ExternalArgument {
+    pub fn expr(&self) -> &Expression {
+        match self {
+            ExternalArgument::Regular(expr) => expr,
+            ExternalArgument::Spread(expr) => expr,
+        }
+    }
+}
+
 /// Parsed call of a `Command`
 ///
 /// As we also implement some internal keywords in terms of the `Command` trait, this type stores the passed arguments as [`Expression`].
@@ -119,7 +128,8 @@ impl Call {
 
     pub fn named_iter(
         &self,
-    ) -> impl Iterator<Item = &(Spanned<String>, Option<Spanned<String>>, Option<Expression>)> {
+    ) -> impl DoubleEndedIterator<Item = &(Spanned<String>, Option<Spanned<String>>, Option<Expression>)>
+    {
         self.arguments.iter().filter_map(|arg| match arg {
             Argument::Named(named) => Some(named),
             Argument::Positional(_) => None,
@@ -212,8 +222,12 @@ impl Call {
         self.parser_info.insert(name, val)
     }
 
+    pub fn set_kth_argument(&mut self, k: usize, arg: Argument) -> bool {
+        self.arguments.get_mut(k).map(|a| *a = arg).is_some()
+    }
+
     pub fn get_flag_expr(&self, flag_name: &str) -> Option<&Expression> {
-        for name in self.named_iter() {
+        for name in self.named_iter().rev() {
             if flag_name == name.0.item {
                 return name.2.as_ref();
             }
@@ -223,7 +237,7 @@ impl Call {
     }
 
     pub fn get_named_arg(&self, flag_name: &str) -> Option<Spanned<String>> {
-        for name in self.named_iter() {
+        for name in self.named_iter().rev() {
             if flag_name == name.0.item {
                 return Some(name.0.clone());
             }
@@ -306,6 +320,7 @@ impl Call {
             if spread {
                 match result {
                     Value::List { mut vals, .. } => output.append(&mut vals),
+                    Value::Nothing { .. } => (),
                     _ => return Err(ShellError::CannotSpreadAsList { span: expr.span }),
                 }
             } else {

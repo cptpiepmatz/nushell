@@ -32,9 +32,9 @@ impl Command for ScopeVariables {
         Ok(Value::list(scope_data.collect_vars(head), head).into_pipeline_data())
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            description: "Show the variables in the current scope",
+            description: "Show the variables in the current scope.",
             example: "scope variables",
             result: None,
         }]
@@ -46,9 +46,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(ScopeVariables {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(ScopeVariables)
     }
 }

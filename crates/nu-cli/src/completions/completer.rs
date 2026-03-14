@@ -1,24 +1,179 @@
 use crate::completions::{
-    CommandCompletion, Completer, CompletionOptions, CustomCompletion, DirectoryCompletion,
-    DotNuCompletion, FileCompletion, FlagCompletion, OperatorCompletion, VariableCompletion,
+    ArgValueCompletion, AttributableCompletion, AttributeCompletion, CellPathCompletion,
+    CommandCompletion, Completer, CompletionOptions, CustomCompletion, FileCompletion,
+    FlagCompletion, OperatorCompletion, VariableCompletion, base::SemanticSuggestion,
 };
-use nu_color_config::{color_record_to_nustyle, lookup_ansi_color_style};
-use nu_engine::eval_block;
-use nu_parser::{flatten_pipeline_element, parse, FlatShape};
+use nu_parser::parse;
 use nu_protocol::{
-    debugger::WithoutDebug,
-    engine::{Closure, EngineState, Stack, StateWorkingSet},
-    PipelineData, Span, Value,
+    CommandWideCompleter, Completion, GetSpan, Signature, Span,
+    ast::{
+        Argument, Block, Expr, Expression, FindMapResult, PipelineRedirection, RedirectionTarget,
+        Traverse,
+    },
+    engine::{ArgType, EngineState, Stack, StateWorkingSet},
 };
 use reedline::{Completer as ReedlineCompleter, Suggestion};
-use std::{str, sync::Arc};
+use std::borrow::Cow;
+use std::sync::Arc;
 
-use super::base::{SemanticSuggestion, SuggestionKind};
+use super::{StaticCompletion, custom_completions::CommandWideCompletion};
+
+/// Used as the function `f` in find_map Traverse
+///
+/// returns the inner-most pipeline_element of interest
+/// i.e. the one that contains given position and needs completion
+fn find_pipeline_element_by_position<'a>(
+    expr: &'a Expression,
+    working_set: &'a StateWorkingSet,
+    pos: usize,
+) -> FindMapResult<&'a Expression> {
+    // skip the entire expression if the position is not in it
+    if !expr.span.contains(pos) {
+        return FindMapResult::Stop;
+    }
+    let closure = |expr: &'a Expression| find_pipeline_element_by_position(expr, working_set, pos);
+    match &expr.expr {
+        Expr::RowCondition(block_id)
+        | Expr::Subexpression(block_id)
+        | Expr::Block(block_id)
+        | Expr::Closure(block_id) => {
+            let block = working_set.get_block(*block_id);
+            // check redirection target for sub blocks before diving recursively into them
+            check_redirection_in_block(block.as_ref(), pos)
+                .map(FindMapResult::Found)
+                .unwrap_or_default()
+        }
+        Expr::Call(call) => call
+            .arguments
+            .iter()
+            .find_map(|arg| arg.expr().and_then(|e| e.find_map(working_set, &closure)))
+            // if no inner call/external_call found, then this is the inner-most one
+            .or(Some(expr))
+            .map(FindMapResult::Found)
+            .unwrap_or_default(),
+        Expr::ExternalCall(head, arguments) => arguments
+            .iter()
+            .find_map(|arg| arg.expr().find_map(working_set, &closure))
+            .or_else(|| {
+                // For aliased external_call, the span of original external command head should fail the
+                // contains(pos) check, thus avoiding recursion into its head expression.
+                // See issue #7648 for details.
+                let span = working_set.get_span(head.span_id);
+                if span.contains(pos) {
+                    // This is for complicated external head expressions, e.g. `^(echo<tab> foo)`
+                    head.as_ref().find_map(working_set, &closure)
+                } else {
+                    None
+                }
+            })
+            .or(Some(expr))
+            .map(FindMapResult::Found)
+            .unwrap_or_default(),
+        // complete the operator
+        Expr::BinaryOp(lhs, _, rhs) => lhs
+            .find_map(working_set, &closure)
+            .or_else(|| rhs.find_map(working_set, &closure))
+            .or(Some(expr))
+            .map(FindMapResult::Found)
+            .unwrap_or_default(),
+        Expr::FullCellPath(fcp) => fcp
+            .head
+            .find_map(working_set, &closure)
+            .map(FindMapResult::Found)
+            // e.g. use std/util [<tab>
+            .or_else(|| {
+                (fcp.head.span.contains(pos) && matches!(fcp.head.expr, Expr::List(_)))
+                    .then_some(FindMapResult::Continue)
+            })
+            .or(Some(FindMapResult::Found(expr)))
+            .unwrap_or_default(),
+        Expr::Var(_) => FindMapResult::Found(expr),
+        Expr::AttributeBlock(ab) => ab
+            .attributes
+            .iter()
+            .map(|attr| &attr.expr)
+            .chain(Some(ab.item.as_ref()))
+            .find_map(|expr| expr.find_map(working_set, &closure))
+            .or(Some(expr))
+            .map(FindMapResult::Found)
+            .unwrap_or_default(),
+        _ => FindMapResult::Continue,
+    }
+}
+
+/// Helper function to extract file-path expression from redirection target
+fn check_redirection_target(target: &RedirectionTarget, pos: usize) -> Option<&Expression> {
+    let expr = target.expr();
+    expr.and_then(|expression| {
+        if let Expr::String(_) = expression.expr
+            && expression.span.contains(pos)
+        {
+            expr
+        } else {
+            None
+        }
+    })
+}
+
+/// For redirection target completion
+/// https://github.com/nushell/nushell/issues/16827
+fn check_redirection_in_block(block: &Block, pos: usize) -> Option<&Expression> {
+    block.pipelines.iter().find_map(|pipeline| {
+        pipeline.elements.iter().find_map(|element| {
+            element.redirection.as_ref().and_then(|redir| match redir {
+                PipelineRedirection::Single { target, .. } => check_redirection_target(target, pos),
+                PipelineRedirection::Separate { out, err } => check_redirection_target(out, pos)
+                    .or_else(|| check_redirection_target(err, pos)),
+            })
+        })
+    })
+}
+
+/// Before completion, an additional character `a` is added to the source as a placeholder for correct parsing results.
+/// This function helps to strip it
+fn strip_placeholder_if_any<'a>(
+    working_set: &'a StateWorkingSet,
+    span: &Span,
+    strip: bool,
+) -> (Span, &'a [u8]) {
+    let new_span = if strip {
+        let new_end = std::cmp::max(span.end - 1, span.start);
+        Span::new(span.start, new_end)
+    } else {
+        span.to_owned()
+    };
+    let prefix = working_set.get_span_contents(new_span);
+    (new_span, prefix)
+}
 
 #[derive(Clone)]
 pub struct NuCompleter {
     engine_state: Arc<EngineState>,
     stack: Stack,
+}
+
+/// Common arguments required for Completer
+pub(crate) struct Context<'a> {
+    pub working_set: &'a StateWorkingSet<'a>,
+    pub span: Span,
+    pub prefix: &'a [u8],
+    pub offset: usize,
+}
+
+impl Context<'_> {
+    pub(crate) fn new<'a>(
+        working_set: &'a StateWorkingSet,
+        span: Span,
+        prefix: &'a [u8],
+        offset: usize,
+    ) -> Context<'a> {
+        Context {
+            working_set,
+            span,
+            prefix,
+            offset,
+        }
+    }
 }
 
 impl NuCompleter {
@@ -29,19 +184,558 @@ impl NuCompleter {
         }
     }
 
-    pub fn fetch_completions_at(&mut self, line: &str, pos: usize) -> Vec<SemanticSuggestion> {
-        self.completion_helper(line, pos)
+    pub fn fetch_completions_at(&self, line: &str, pos: usize) -> Vec<SemanticSuggestion> {
+        let mut working_set = StateWorkingSet::new(&self.engine_state);
+        let offset = working_set.next_span_start();
+        // TODO: Callers should be trimming the line themselves
+        let line = if line.len() > pos { &line[..pos] } else { line };
+        let block = parse(
+            &mut working_set,
+            Some("completer"),
+            // Add a placeholder `a` to the end
+            format!("{line}a").as_bytes(),
+            false,
+        );
+        self.fetch_completions_by_block(block, &working_set, pos, offset, line, true)
+    }
+
+    /// For completion in LSP server.
+    /// We don't truncate the contents in order
+    /// to complete the definitions after the cursor.
+    ///
+    /// And we avoid the placeholder to reuse the parsed blocks
+    /// cached while handling other LSP requests, e.g. diagnostics
+    pub fn fetch_completions_within_file(
+        &self,
+        filename: &str,
+        pos: usize,
+        contents: &str,
+    ) -> Vec<SemanticSuggestion> {
+        let mut working_set = StateWorkingSet::new(&self.engine_state);
+        let block = parse(&mut working_set, Some(filename), contents.as_bytes(), false);
+        let Some(file_span) = working_set.get_span_for_filename(filename) else {
+            return vec![];
+        };
+        let offset = file_span.start;
+        self.fetch_completions_by_block(block.clone(), &working_set, pos, offset, contents, false)
+    }
+
+    fn fetch_completions_by_block(
+        &self,
+        block: Arc<Block>,
+        working_set: &StateWorkingSet,
+        pos: usize,
+        offset: usize,
+        contents: &str,
+        extra_placeholder: bool,
+    ) -> Vec<SemanticSuggestion> {
+        // Adjust offset so that the spans of the suggestions will start at the right
+        // place even with `only_buffer_difference: true`
+        let mut pos_to_search = pos + offset;
+        if !extra_placeholder {
+            pos_to_search = pos_to_search.saturating_sub(1);
+        }
+        let Some(element_expression) = block
+            .find_map(working_set, &|expr: &Expression| {
+                find_pipeline_element_by_position(expr, working_set, pos_to_search)
+            })
+            .or_else(|| check_redirection_in_block(block.as_ref(), pos_to_search))
+        else {
+            return vec![];
+        };
+
+        // text of element_expression
+        let start_offset = element_expression.span.start - offset;
+        let Some(text) = contents.get(start_offset..pos) else {
+            return vec![];
+        };
+        self.complete_by_expression(
+            working_set,
+            element_expression,
+            offset,
+            pos_to_search,
+            text,
+            extra_placeholder,
+        )
+    }
+
+    /// Complete given the expression of interest
+    /// Usually, the expression is get from `find_pipeline_element_by_position`
+    ///
+    /// # Arguments
+    /// * `offset` - start offset of current working_set span
+    /// * `pos` - cursor position, should be > offset
+    /// * `prefix_str` - all the text before the cursor, within the `element_expression`
+    /// * `strip` - whether to strip the extra placeholder from a span
+    fn complete_by_expression(
+        &self,
+        working_set: &StateWorkingSet,
+        element_expression: &Expression,
+        offset: usize,
+        pos: usize,
+        prefix_str: &str,
+        strip: bool,
+    ) -> Vec<SemanticSuggestion> {
+        let mut suggestions: Vec<SemanticSuggestion> = vec![];
+
+        match &element_expression.expr {
+            Expr::Var(_) => {
+                return self.variable_names_completion_helper(
+                    working_set,
+                    element_expression.span,
+                    offset,
+                    strip,
+                );
+            }
+            Expr::FullCellPath(full_cell_path) => {
+                // e.g. `$e<tab>` parsed as FullCellPath
+                // but `$e.<tab>` without placeholder should be taken as cell_path
+                if full_cell_path.tail.is_empty() && !prefix_str.ends_with('.') {
+                    return self.variable_names_completion_helper(
+                        working_set,
+                        element_expression.span,
+                        offset,
+                        strip,
+                    );
+                } else {
+                    let mut cell_path_completer = CellPathCompletion {
+                        full_cell_path,
+                        position: if strip { pos - 1 } else { pos },
+                    };
+                    let ctx = Context::new(working_set, Span::unknown(), &[], offset);
+                    return self.process_completion(&mut cell_path_completer, &ctx);
+                }
+            }
+            Expr::BinaryOp(lhs, op, _) => {
+                if op.span.contains(pos) {
+                    let mut operator_completions = OperatorCompletion {
+                        left_hand_side: lhs.as_ref(),
+                    };
+                    let (new_span, prefix) = strip_placeholder_if_any(working_set, &op.span, strip);
+                    let ctx = Context::new(working_set, new_span, prefix, offset);
+                    let results = self.process_completion(&mut operator_completions, &ctx);
+                    if !results.is_empty() {
+                        return results;
+                    }
+                }
+            }
+            Expr::AttributeBlock(ab) => {
+                if let Some(span) = ab.attributes.iter().find_map(|attr| {
+                    let span = attr.expr.span;
+                    span.contains(pos).then_some(span)
+                }) {
+                    let (new_span, prefix) = strip_placeholder_if_any(working_set, &span, strip);
+                    let ctx = Context::new(working_set, new_span, prefix, offset);
+                    return self.process_completion(&mut AttributeCompletion, &ctx);
+                };
+                let span = ab.item.span;
+                if span.contains(pos) {
+                    let (new_span, prefix) = strip_placeholder_if_any(working_set, &span, strip);
+                    let ctx = Context::new(working_set, new_span, prefix, offset);
+                    return self.process_completion(&mut AttributableCompletion, &ctx);
+                }
+            }
+
+            // NOTE: user defined internal commands can have any length
+            // e.g. `def "foo -f --ff bar"`, complete by line text
+            // instead of relying on the parsing result in that case
+            Expr::Call(_) | Expr::ExternalCall(_, _) => {
+                let need_externals = !prefix_str.contains(' ');
+                let need_internals = !prefix_str.starts_with('^');
+                let mut span = element_expression.span;
+                if !need_internals {
+                    span.start += 1;
+                };
+                suggestions.extend(self.command_completion_helper(
+                    working_set,
+                    span,
+                    offset,
+                    need_internals,
+                    need_externals,
+                    strip,
+                ))
+            }
+            _ => (),
+        }
+
+        // unfinished argument completion for commands
+        match &element_expression.expr {
+            Expr::Call(call) => {
+                let signature = working_set.get_decl(call.decl_id).signature();
+                // NOTE: the argument to complete is not necessarily the last one
+                // for lsp completion, we don't trim the text,
+                // so that `def`s after pos can be completed
+                let mut positional_arg_index = 0;
+
+                for (arg_idx, arg) in call.arguments.iter().enumerate() {
+                    let span = arg.span();
+
+                    // Skip arguments before the cursor
+                    if !span.contains(pos) {
+                        match arg {
+                            Argument::Named(_) => (),
+                            _ => positional_arg_index += 1,
+                        }
+                        continue;
+                    }
+
+                    // Context defaults to the whole argument, needs adjustments for specific situations
+                    let (new_span, prefix) = strip_placeholder_if_any(working_set, &span, strip);
+                    let ctx = Context::new(working_set, new_span, prefix, offset);
+                    let flag_completion_helper = |ctx: Context| {
+                        let mut flag_completions = FlagCompletion {
+                            decl_id: call.decl_id,
+                        };
+                        let mut res = self.process_completion(&mut flag_completions, &ctx);
+                        // For external command wrappers, which are parsed as internal calls,
+                        // also try command-wide completion for flag names
+                        // TODO: duplication?
+                        let command_wide_ctx = Context::new(working_set, span, b"", offset);
+                        res.extend(
+                            self.command_wide_completion_helper(
+                                &signature,
+                                element_expression,
+                                &command_wide_ctx,
+                                strip,
+                            )
+                            .1,
+                        );
+                        res
+                    };
+
+                    // Basically 2 kinds of argument completions for now:
+                    // 1. Flag name: 2 sources combined:
+                    //    * Signature based internal flags
+                    //    * Command-wide external flags
+                    // 2. Flag value/positional: try the followings in order:
+                    //    1. Custom completion
+                    //    2. Command-wide completion
+                    //    3. Dynamic completion defined in trait `Command`
+                    //    4. Type-based default completion
+                    //    5. Fallback(file) completion
+                    match arg {
+                        // Flag value completion
+                        Argument::Named((name, short, Some(val))) if val.span.contains(pos) => {
+                            // for `--foo ..a|` and `--foo=..a|` (`|` represents the cursor), the
+                            // arg span should be trimmed:
+                            // - split the given span with `predicate` (b == '=' || b == ' '), and
+                            //   take the rightmost part:
+                            //   - "--foo ..a" => ["--foo", "..a"] => "..a"
+                            //   - "--foo=..a" => ["--foo", "..a"] => "..a"
+                            // - strip placeholder (`a`) if present
+                            let mut new_span = val.span;
+                            if strip {
+                                new_span.end = new_span.end.saturating_sub(1);
+                            }
+                            let prefix = working_set.get_span_contents(new_span);
+                            let ctx = Context::new(working_set, new_span, prefix, offset);
+
+                            // If we're completing the value of the flag,
+                            // search for the matching custom completion decl_id (long or short)
+                            let flag = signature.get_long_flag(&name.item).or_else(|| {
+                                short.as_ref().and_then(|s| {
+                                    signature.get_short_flag(s.item.chars().next().unwrap_or('_'))
+                                })
+                            });
+                            // Prioritize custom completion results over everything else
+                            if let Some(custom_completer) = flag.and_then(|f| f.completion) {
+                                suggestions.splice(
+                                    0..0,
+                                    self.custom_completion_helper(
+                                        custom_completer,
+                                        prefix_str,
+                                        &ctx,
+                                        if strip { pos } else { pos + 1 },
+                                    ),
+                                );
+                                // Fallback completion is already handled in `CustomCompletion`
+                                return suggestions;
+                            }
+
+                            // Try command-wide completion if specified by attributes
+                            // NOTE: `CommandWideCompletion` handles placeholder stripping internally
+                            let command_wide_ctx = Context::new(working_set, val.span, b"", offset);
+                            let (need_fallback, command_wide_res) = self
+                                .command_wide_completion_helper(
+                                    &signature,
+                                    element_expression,
+                                    &command_wide_ctx,
+                                    strip,
+                                );
+                            suggestions.splice(0..0, command_wide_res);
+                            if !need_fallback {
+                                return suggestions;
+                            }
+
+                            let mut flag_value_completion = ArgValueCompletion {
+                                arg_type: ArgType::Flag(Cow::from(name.as_ref().item.as_str())),
+                                // flag value doesn't need to fallback, just fill a
+                                // temp value false.
+                                need_fallback: false,
+                                completer: self,
+                                call,
+                                arg_idx,
+                                pos,
+                                strip,
+                            };
+                            suggestions.splice(
+                                0..0,
+                                self.process_completion(&mut flag_value_completion, &ctx),
+                            );
+                            return suggestions;
+                        }
+                        // Flag name completion
+                        Argument::Named((_, _, None)) => {
+                            suggestions.splice(0..0, flag_completion_helper(ctx));
+                        }
+                        // Edge case of lsp completion where the cursor is at the flag name,
+                        // with a flag value next to it.
+                        Argument::Named((_, _, Some(val))) => {
+                            // Span/prefix calibration
+                            let mut new_span = Span::new(span.start, val.span.start);
+                            let raw_prefix = working_set.get_span_contents(new_span);
+                            let prefix = raw_prefix.trim_ascii_end();
+                            let mut prefix = prefix.strip_suffix(b"=").unwrap_or(prefix);
+                            new_span.end = new_span
+                                .end
+                                .saturating_sub(raw_prefix.len() - prefix.len())
+                                .max(span.start);
+
+                            // Currently never reachable
+                            if strip {
+                                new_span.end = new_span.end.saturating_sub(1).max(span.start);
+                                prefix = prefix[..prefix.len() - 1].as_ref();
+                            }
+
+                            let ctx = Context::new(working_set, new_span, prefix, offset);
+                            suggestions.splice(0..0, flag_completion_helper(ctx));
+                        }
+                        Argument::Unknown(_) if prefix.starts_with(b"-") => {
+                            suggestions.splice(0..0, flag_completion_helper(ctx));
+                        }
+                        // only when `strip` == false
+                        Argument::Positional(_) if prefix == b"-" => {
+                            suggestions.splice(0..0, flag_completion_helper(ctx));
+                        }
+                        Argument::Positional(_) => {
+                            // Prioritize custom completion results over everything else
+                            if let Some(custom_completer) = signature
+                                // For positional arguments, check PositionalArg
+                                // Find the right positional argument by index
+                                .get_positional(positional_arg_index)
+                                .and_then(|pos_arg| pos_arg.completion.clone())
+                            {
+                                suggestions.splice(
+                                    0..0,
+                                    self.custom_completion_helper(
+                                        custom_completer,
+                                        prefix_str,
+                                        &ctx,
+                                        if strip { pos } else { pos + 1 },
+                                    ),
+                                );
+                                // Fallback completion is already handled in `CustomCompletion`
+                                return suggestions;
+                            }
+
+                            // Try command-wide completion if specified by attributes
+                            let command_wide_ctx = Context::new(working_set, span, b"", offset);
+                            let (need_fallback, command_wide_res) = self
+                                .command_wide_completion_helper(
+                                    &signature,
+                                    element_expression,
+                                    &command_wide_ctx,
+                                    strip,
+                                );
+                            suggestions.splice(0..0, command_wide_res);
+                            if !need_fallback {
+                                return suggestions;
+                            }
+
+                            // Default argument value completion
+                            let mut positional_value_completion = ArgValueCompletion {
+                                // arg_type: ArgType::Positional(positional_arg_index - 1),
+                                arg_type: ArgType::Positional(positional_arg_index),
+                                need_fallback: suggestions.is_empty(),
+                                completer: self,
+                                call,
+                                arg_idx,
+                                pos,
+                                strip,
+                            };
+
+                            suggestions.splice(
+                                0..0,
+                                self.process_completion(&mut positional_value_completion, &ctx),
+                            );
+                            return suggestions;
+                        }
+                        _ => (),
+                    }
+                    break;
+                }
+            }
+            Expr::ExternalCall(head, arguments) => {
+                for (i, arg) in arguments.iter().enumerate() {
+                    let span = arg.expr().span;
+                    if span.contains(pos) {
+                        // e.g. `sudo l<tab>`
+                        // HACK: judge by index 0 is not accurate
+                        if i == 0 {
+                            let external_cmd = working_set.get_span_contents(head.span);
+                            if external_cmd == b"sudo" || external_cmd == b"doas" {
+                                let commands = self.command_completion_helper(
+                                    working_set,
+                                    span,
+                                    offset,
+                                    true,
+                                    true,
+                                    strip,
+                                );
+                                // flags of sudo/doas can still be completed by external completer
+                                if !commands.is_empty() {
+                                    return commands;
+                                }
+                            }
+                        }
+
+                        // resort to external completer set in config
+                        let completion = self
+                            .engine_state
+                            .get_config()
+                            .completions
+                            .external
+                            .completer
+                            .as_ref()
+                            .map(|closure| {
+                                CommandWideCompletion::closure(closure, element_expression, strip)
+                            });
+
+                        if let Some(mut completion) = completion {
+                            let ctx = Context::new(working_set, span, b"", offset);
+                            let results = self.process_completion(&mut completion, &ctx);
+
+                            // Prioritize external results over (sub)commands
+                            suggestions.splice(0..0, results);
+
+                            if !completion.need_fallback {
+                                return suggestions;
+                            }
+                        }
+
+                        // for external path arguments with spaces, please check issue #15790
+                        if suggestions.is_empty() {
+                            let (new_span, prefix) =
+                                strip_placeholder_if_any(working_set, &span, strip);
+                            let ctx = Context::new(working_set, new_span, prefix, offset);
+                            return self.process_completion(&mut FileCompletion, &ctx);
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => (),
+        }
+
+        // if no suggestions yet, fallback to file completion
+        if suggestions.is_empty() {
+            let (new_span, prefix) =
+                strip_placeholder_if_any(working_set, &element_expression.span, strip);
+            let ctx = Context::new(working_set, new_span, prefix, offset);
+            suggestions.extend(self.process_completion(&mut FileCompletion, &ctx));
+        }
+        suggestions
+    }
+
+    fn variable_names_completion_helper(
+        &self,
+        working_set: &StateWorkingSet,
+        span: Span,
+        offset: usize,
+        strip: bool,
+    ) -> Vec<SemanticSuggestion> {
+        let (new_span, prefix) = strip_placeholder_if_any(working_set, &span, strip);
+        if !prefix.starts_with(b"$") {
+            return vec![];
+        }
+        let ctx = Context::new(working_set, new_span, prefix, offset);
+        self.process_completion(&mut VariableCompletion, &ctx)
+    }
+
+    fn command_completion_helper(
+        &self,
+        working_set: &StateWorkingSet,
+        span: Span,
+        offset: usize,
+        internals: bool,
+        externals: bool,
+        strip: bool,
+    ) -> Vec<SemanticSuggestion> {
+        let config = self.engine_state.get_config();
+        let mut command_completions = CommandCompletion {
+            internals,
+            externals: !internals || (externals && config.completions.external.enable),
+        };
+        let (new_span, prefix) = strip_placeholder_if_any(working_set, &span, strip);
+        let ctx = Context::new(working_set, new_span, prefix, offset);
+        self.process_completion(&mut command_completions, &ctx)
+    }
+
+    fn custom_completion_helper(
+        &self,
+        custom_completion: Completion,
+        input: &str,
+        ctx: &Context,
+        pos: usize,
+    ) -> Vec<SemanticSuggestion> {
+        match custom_completion {
+            Completion::Command(decl_id) => {
+                let mut completer =
+                    CustomCompletion::new(decl_id, input.into(), pos - ctx.offset, FileCompletion);
+                self.process_completion(&mut completer, ctx)
+            }
+            Completion::List(list) => {
+                let mut completer = StaticCompletion::new(list);
+                self.process_completion(&mut completer, ctx)
+            }
+        }
+    }
+
+    fn command_wide_completion_helper(
+        &self,
+        signature: &Signature,
+        element_expression: &Expression,
+        ctx: &Context,
+        strip: bool,
+    ) -> (bool, Vec<SemanticSuggestion>) {
+        let completion = match signature.complete {
+            Some(CommandWideCompleter::Command(decl_id)) => {
+                CommandWideCompletion::command(ctx.working_set, decl_id, element_expression, strip)
+            }
+            Some(CommandWideCompleter::External) => self
+                .engine_state
+                .get_config()
+                .completions
+                .external
+                .completer
+                .as_ref()
+                .map(|closure| CommandWideCompletion::closure(closure, element_expression, strip)),
+            None => None,
+        };
+
+        if let Some(mut completion) = completion {
+            let res = self.process_completion(&mut completion, ctx);
+            (completion.need_fallback, res)
+        } else {
+            (true, vec![])
+        }
     }
 
     // Process the completion for a given completer
-    fn process_completion<T: Completer>(
+    pub(crate) fn process_completion<T: Completer>(
         &self,
         completer: &mut T,
-        working_set: &StateWorkingSet,
-        prefix: &[u8],
-        new_span: Span,
-        offset: usize,
-        pos: usize,
+        ctx: &Context,
     ) -> Vec<SemanticSuggestion> {
         let config = self.engine_state.get_config();
 
@@ -49,502 +743,26 @@ impl NuCompleter {
             case_sensitive: config.completions.case_sensitive,
             match_algorithm: config.completions.algorithm.into(),
             sort: config.completions.sort,
-            ..Default::default()
         };
 
         completer.fetch(
-            working_set,
+            ctx.working_set,
             &self.stack,
-            prefix,
-            new_span,
-            offset,
-            pos,
+            String::from_utf8_lossy(ctx.prefix),
+            ctx.span,
+            ctx.offset,
             &options,
         )
-    }
-
-    fn external_completion(
-        &self,
-        closure: &Closure,
-        spans: &[String],
-        offset: usize,
-        span: Span,
-    ) -> Option<Vec<SemanticSuggestion>> {
-        let block = self.engine_state.get_block(closure.block_id);
-        let mut callee_stack = self
-            .stack
-            .captures_to_stack_preserve_out_dest(closure.captures.clone());
-
-        // Line
-        if let Some(pos_arg) = block.signature.required_positional.first() {
-            if let Some(var_id) = pos_arg.var_id {
-                callee_stack.add_var(
-                    var_id,
-                    Value::list(
-                        spans
-                            .iter()
-                            .map(|it| Value::string(it, Span::unknown()))
-                            .collect(),
-                        Span::unknown(),
-                    ),
-                );
-            }
-        }
-
-        let result = eval_block::<WithoutDebug>(
-            &self.engine_state,
-            &mut callee_stack,
-            block,
-            PipelineData::empty(),
-        );
-
-        match result.and_then(|data| data.into_value(span)) {
-            Ok(value) => {
-                if let Value::List { vals, .. } = value {
-                    let result =
-                        map_value_completions(vals.iter(), Span::new(span.start, span.end), offset);
-
-                    return Some(result);
-                }
-            }
-            Err(err) => println!("failed to eval completer block: {err}"),
-        }
-
-        None
-    }
-
-    fn completion_helper(&mut self, line: &str, pos: usize) -> Vec<SemanticSuggestion> {
-        let mut working_set = StateWorkingSet::new(&self.engine_state);
-        let offset = working_set.next_span_start();
-        // TODO: Callers should be trimming the line themselves
-        let line = if line.len() > pos { &line[..pos] } else { line };
-        // Adjust offset so that the spans of the suggestions will start at the right
-        // place even with `only_buffer_difference: true`
-        let fake_offset = offset + line.len() - pos;
-        let pos = offset + line.len();
-        let initial_line = line.to_string();
-        let mut line = line.to_string();
-        line.push('a');
-
-        let config = self.engine_state.get_config();
-
-        let output = parse(&mut working_set, Some("completer"), line.as_bytes(), false);
-
-        for pipeline in &output.pipelines {
-            for pipeline_element in &pipeline.elements {
-                let flattened = flatten_pipeline_element(&working_set, pipeline_element);
-                let mut spans: Vec<String> = vec![];
-
-                for (flat_idx, flat) in flattened.iter().enumerate() {
-                    let is_passthrough_command = spans
-                        .first()
-                        .filter(|content| content.as_str() == "sudo" || content.as_str() == "doas")
-                        .is_some();
-                    // Read the current spam to string
-                    let current_span = working_set.get_span_contents(flat.0).to_vec();
-                    let current_span_str = String::from_utf8_lossy(&current_span);
-
-                    let is_last_span = pos >= flat.0.start && pos < flat.0.end;
-
-                    // Skip the last 'a' as span item
-                    if is_last_span {
-                        let offset = pos - flat.0.start;
-                        if offset == 0 {
-                            spans.push(String::new())
-                        } else {
-                            let mut current_span_str = current_span_str.to_string();
-                            current_span_str.remove(offset);
-                            spans.push(current_span_str);
-                        }
-                    } else {
-                        spans.push(current_span_str.to_string());
-                    }
-
-                    // Complete based on the last span
-                    if is_last_span {
-                        // Context variables
-                        let most_left_var =
-                            most_left_variable(flat_idx, &working_set, flattened.clone());
-
-                        // Create a new span
-                        let new_span = Span::new(flat.0.start, flat.0.end - 1);
-
-                        // Parses the prefix. Completion should look up to the cursor position, not after.
-                        let mut prefix = working_set.get_span_contents(flat.0);
-                        let index = pos - flat.0.start;
-                        prefix = &prefix[..index];
-
-                        // Variables completion
-                        if prefix.starts_with(b"$") || most_left_var.is_some() {
-                            let mut variable_names_completer =
-                                VariableCompletion::new(most_left_var.unwrap_or((vec![], vec![])));
-
-                            let mut variable_completions = self.process_completion(
-                                &mut variable_names_completer,
-                                &working_set,
-                                prefix,
-                                new_span,
-                                fake_offset,
-                                pos,
-                            );
-
-                            let mut variable_operations_completer =
-                                OperatorCompletion::new(pipeline_element.expr.clone());
-
-                            let mut variable_operations_completions = self.process_completion(
-                                &mut variable_operations_completer,
-                                &working_set,
-                                prefix,
-                                new_span,
-                                fake_offset,
-                                pos,
-                            );
-
-                            variable_completions.append(&mut variable_operations_completions);
-                            return variable_completions;
-                        }
-
-                        // Flags completion
-                        if prefix.starts_with(b"-") {
-                            // Try to complete flag internally
-                            let mut completer = FlagCompletion::new(pipeline_element.expr.clone());
-                            let result = self.process_completion(
-                                &mut completer,
-                                &working_set,
-                                prefix,
-                                new_span,
-                                fake_offset,
-                                pos,
-                            );
-
-                            if !result.is_empty() {
-                                return result;
-                            }
-
-                            // We got no results for internal completion
-                            // now we can check if external completer is set and use it
-                            if let Some(closure) = config.completions.external.completer.as_ref() {
-                                if let Some(external_result) =
-                                    self.external_completion(closure, &spans, fake_offset, new_span)
-                                {
-                                    return external_result;
-                                }
-                            }
-                        }
-
-                        // specially check if it is currently empty - always complete commands
-                        if (is_passthrough_command && flat_idx == 1)
-                            || (flat_idx == 0 && working_set.get_span_contents(new_span).is_empty())
-                        {
-                            let mut completer = CommandCompletion::new(
-                                flattened.clone(),
-                                // flat_idx,
-                                FlatShape::String,
-                                true,
-                            );
-                            return self.process_completion(
-                                &mut completer,
-                                &working_set,
-                                prefix,
-                                new_span,
-                                fake_offset,
-                                pos,
-                            );
-                        }
-
-                        // Completions that depends on the previous expression (e.g: use, source-env)
-                        if (is_passthrough_command && flat_idx > 1) || flat_idx > 0 {
-                            if let Some(previous_expr) = flattened.get(flat_idx - 1) {
-                                // Read the content for the previous expression
-                                let prev_expr_str =
-                                    working_set.get_span_contents(previous_expr.0).to_vec();
-
-                                // Completion for .nu files
-                                if prev_expr_str == b"use"
-                                    || prev_expr_str == b"overlay use"
-                                    || prev_expr_str == b"source-env"
-                                {
-                                    let mut completer = DotNuCompletion::new();
-
-                                    return self.process_completion(
-                                        &mut completer,
-                                        &working_set,
-                                        prefix,
-                                        new_span,
-                                        fake_offset,
-                                        pos,
-                                    );
-                                } else if prev_expr_str == b"ls" {
-                                    let mut completer = FileCompletion::new();
-
-                                    return self.process_completion(
-                                        &mut completer,
-                                        &working_set,
-                                        prefix,
-                                        new_span,
-                                        fake_offset,
-                                        pos,
-                                    );
-                                } else if matches!(
-                                    previous_expr.1,
-                                    FlatShape::Float
-                                        | FlatShape::Int
-                                        | FlatShape::String
-                                        | FlatShape::List
-                                        | FlatShape::Bool
-                                        | FlatShape::Variable(_)
-                                ) {
-                                    let mut completer =
-                                        OperatorCompletion::new(pipeline_element.expr.clone());
-
-                                    let operator_suggestion = self.process_completion(
-                                        &mut completer,
-                                        &working_set,
-                                        prefix,
-                                        new_span,
-                                        fake_offset,
-                                        pos,
-                                    );
-                                    if !operator_suggestion.is_empty() {
-                                        return operator_suggestion;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Match other types
-                        match &flat.1 {
-                            FlatShape::Custom(decl_id) => {
-                                let mut completer = CustomCompletion::new(
-                                    self.stack.clone(),
-                                    *decl_id,
-                                    initial_line,
-                                );
-
-                                return self.process_completion(
-                                    &mut completer,
-                                    &working_set,
-                                    prefix,
-                                    new_span,
-                                    fake_offset,
-                                    pos,
-                                );
-                            }
-                            FlatShape::Directory => {
-                                let mut completer = DirectoryCompletion::new();
-
-                                return self.process_completion(
-                                    &mut completer,
-                                    &working_set,
-                                    prefix,
-                                    new_span,
-                                    fake_offset,
-                                    pos,
-                                );
-                            }
-                            FlatShape::Filepath | FlatShape::GlobPattern => {
-                                let mut completer = FileCompletion::new();
-
-                                return self.process_completion(
-                                    &mut completer,
-                                    &working_set,
-                                    prefix,
-                                    new_span,
-                                    fake_offset,
-                                    pos,
-                                );
-                            }
-                            flat_shape => {
-                                let mut completer = CommandCompletion::new(
-                                    flattened.clone(),
-                                    // flat_idx,
-                                    flat_shape.clone(),
-                                    false,
-                                );
-
-                                let mut out: Vec<_> = self.process_completion(
-                                    &mut completer,
-                                    &working_set,
-                                    prefix,
-                                    new_span,
-                                    fake_offset,
-                                    pos,
-                                );
-
-                                if !out.is_empty() {
-                                    return out;
-                                }
-
-                                // Try to complete using an external completer (if set)
-                                if let Some(closure) =
-                                    config.completions.external.completer.as_ref()
-                                {
-                                    if let Some(external_result) = self.external_completion(
-                                        closure,
-                                        &spans,
-                                        fake_offset,
-                                        new_span,
-                                    ) {
-                                        return external_result;
-                                    }
-                                }
-
-                                // Check for file completion
-                                let mut completer = FileCompletion::new();
-                                out = self.process_completion(
-                                    &mut completer,
-                                    &working_set,
-                                    prefix,
-                                    new_span,
-                                    fake_offset,
-                                    pos,
-                                );
-
-                                if !out.is_empty() {
-                                    return out;
-                                }
-                            }
-                        };
-                    }
-                }
-            }
-        }
-
-        vec![]
     }
 }
 
 impl ReedlineCompleter for NuCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
-        self.completion_helper(line, pos)
+        self.fetch_completions_at(line, pos)
             .into_iter()
             .map(|s| s.suggestion)
             .collect()
     }
-}
-
-// reads the most left variable returning it's name (e.g: $myvar)
-// and the depth (a.b.c)
-fn most_left_variable(
-    idx: usize,
-    working_set: &StateWorkingSet<'_>,
-    flattened: Vec<(Span, FlatShape)>,
-) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
-    // Reverse items to read the list backwards and truncate
-    // because the only items that matters are the ones before the current index
-    let mut rev = flattened;
-    rev.truncate(idx);
-    rev = rev.into_iter().rev().collect();
-
-    // Store the variables and sub levels found and reverse to correct order
-    let mut variables_found: Vec<Vec<u8>> = vec![];
-    let mut found_var = false;
-    for item in rev.clone() {
-        let result = working_set.get_span_contents(item.0).to_vec();
-
-        match item.1 {
-            FlatShape::Variable(_) => {
-                variables_found.push(result);
-                found_var = true;
-
-                break;
-            }
-            FlatShape::String => {
-                variables_found.push(result);
-            }
-            _ => {
-                break;
-            }
-        }
-    }
-
-    // If most left var was not found
-    if !found_var {
-        return None;
-    }
-
-    // Reverse the order back
-    variables_found = variables_found.into_iter().rev().collect();
-
-    // Extract the variable and the sublevels
-    let var = variables_found.first().unwrap_or(&vec![]).to_vec();
-    let sublevels: Vec<Vec<u8>> = variables_found.into_iter().skip(1).collect();
-
-    Some((var, sublevels))
-}
-
-pub fn map_value_completions<'a>(
-    list: impl Iterator<Item = &'a Value>,
-    span: Span,
-    offset: usize,
-) -> Vec<SemanticSuggestion> {
-    list.filter_map(move |x| {
-        // Match for string values
-        if let Ok(s) = x.coerce_string() {
-            return Some(SemanticSuggestion {
-                suggestion: Suggestion {
-                    value: s,
-                    span: reedline::Span {
-                        start: span.start - offset,
-                        end: span.end - offset,
-                    },
-                    ..Suggestion::default()
-                },
-                kind: Some(SuggestionKind::Type(x.get_type())),
-            });
-        }
-
-        // Match for record values
-        if let Ok(record) = x.as_record() {
-            let mut suggestion = Suggestion {
-                value: String::from(""), // Initialize with empty string
-                span: reedline::Span {
-                    start: span.start - offset,
-                    end: span.end - offset,
-                },
-                ..Suggestion::default()
-            };
-
-            // Iterate the cols looking for `value` and `description`
-            record.iter().for_each(|it| {
-                // Match `value` column
-                if it.0 == "value" {
-                    // Convert the value to string
-                    if let Ok(val_str) = it.1.coerce_string() {
-                        // Update the suggestion value
-                        suggestion.value = val_str;
-                    }
-                }
-
-                // Match `description` column
-                if it.0 == "description" {
-                    // Convert the value to string
-                    if let Ok(desc_str) = it.1.coerce_string() {
-                        // Update the suggestion value
-                        suggestion.description = Some(desc_str);
-                    }
-                }
-
-                // Match `style` column
-                if it.0 == "style" {
-                    // Convert the value to string
-                    suggestion.style = match it.1 {
-                        Value::String { val, .. } => Some(lookup_ansi_color_style(val)),
-                        Value::Record { .. } => Some(color_record_to_nustyle(it.1)),
-                        _ => None,
-                    };
-                }
-            });
-
-            return Some(SemanticSuggestion {
-                suggestion,
-                kind: Some(SuggestionKind::Type(x.get_type())),
-            });
-        }
-
-        None
-    })
-    .collect()
 }
 
 #[cfg(test)]
@@ -569,7 +787,7 @@ mod completer_tests {
             result.err().unwrap()
         );
 
-        let mut completer = NuCompleter::new(engine_state.into(), Arc::new(Stack::new()));
+        let completer = NuCompleter::new(engine_state.into(), Arc::new(Stack::new()));
         let dataset = [
             ("1 bit-sh", true, "b", vec!["bit-shl", "bit-shr"]),
             ("1.0 bit-sh", false, "b", vec![]),
@@ -589,9 +807,9 @@ mod completer_tests {
             ("ls | sudo m", true, "m", vec!["mv", "mut", "move"]),
         ];
         for (line, has_result, begins_with, expected_values) in dataset {
-            let result = completer.completion_helper(line, line.len());
+            let result = completer.fetch_completions_at(line, line.len());
             // Test whether the result is empty or not
-            assert_eq!(!result.is_empty(), has_result, "line: {}", line);
+            assert_eq!(!result.is_empty(), has_result, "line: {line}");
 
             // Test whether the result begins with the expected value
             result
@@ -606,8 +824,7 @@ mod completer_tests {
                     .filter(|x| *x)
                     .count(),
                 expected_values.len(),
-                "line: {}",
-                line
+                "line: {line}"
             );
         }
     }

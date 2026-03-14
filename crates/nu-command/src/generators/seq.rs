@@ -30,7 +30,7 @@ impl Command for Seq {
         seq(engine_state, stack, call)
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 description: "sequence 1 to 10",
@@ -195,9 +195,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_examples() {
-        use crate::test_examples;
-
-        test_examples(Seq {})
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(Seq)
     }
 }

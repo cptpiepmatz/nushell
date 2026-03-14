@@ -1,6 +1,12 @@
-#[allow(deprecated)]
-use nu_engine::{command_prelude::*, current_dir};
-use nu_protocol::{engine::StateWorkingSet, PluginRegistryFile};
+use nu_engine::command_prelude::*;
+use nu_protocol::{
+    PluginRegistryFile,
+    engine::StateWorkingSet,
+    shell_error::{
+        self,
+        io::{IoError, IoErrorExt, NotFound},
+    },
+};
 use std::{
     fs::{self, File},
     path::PathBuf,
@@ -12,10 +18,9 @@ fn get_plugin_registry_file_path(
     span: Span,
     custom_path: &Option<Spanned<String>>,
 ) -> Result<PathBuf, ShellError> {
-    #[allow(deprecated)]
-    let cwd = current_dir(engine_state, stack)?;
+    let cwd = engine_state.cwd(Some(stack))?.into_std_path_buf();
 
-    if let Some(ref custom_path) = custom_path {
+    if let Some(custom_path) = custom_path {
         Ok(nu_path::expand_path_with(&custom_path.item, cwd, true))
     } else {
         engine_state
@@ -45,21 +50,16 @@ pub(crate) fn read_plugin_file(
     // Try to read the plugin file if it exists
     if fs::metadata(&plugin_registry_file_path).is_ok_and(|m| m.len() > 0) {
         PluginRegistryFile::read_from(
-            File::open(&plugin_registry_file_path).map_err(|err| ShellError::IOErrorSpanned {
-                msg: format!(
-                    "failed to read `{}`: {}",
-                    plugin_registry_file_path.display(),
-                    err
-                ),
-                span: file_span,
-            })?,
+            File::open(&plugin_registry_file_path)
+                .map_err(|err| IoError::new(err, file_span, plugin_registry_file_path))?,
             Some(file_span),
         )
     } else if let Some(path) = custom_path {
-        Err(ShellError::FileNotFound {
-            file: path.item.clone(),
-            span: path.span,
-        })
+        Err(ShellError::Io(IoError::new(
+            shell_error::io::ErrorKind::FileNotFound,
+            path.span,
+            PathBuf::from(&path.item),
+        )))
     } else {
         Ok(PluginRegistryFile::default())
     }
@@ -80,14 +80,8 @@ pub(crate) fn modify_plugin_file(
     // Try to read the plugin file if it exists
     let mut contents = if fs::metadata(&plugin_registry_file_path).is_ok_and(|m| m.len() > 0) {
         PluginRegistryFile::read_from(
-            File::open(&plugin_registry_file_path).map_err(|err| ShellError::IOErrorSpanned {
-                msg: format!(
-                    "failed to read `{}`: {}",
-                    plugin_registry_file_path.display(),
-                    err
-                ),
-                span: file_span,
-            })?,
+            File::open(&plugin_registry_file_path)
+                .map_err(|err| IoError::new(err, file_span, plugin_registry_file_path.clone()))?,
             Some(file_span),
         )?
     } else {
@@ -98,15 +92,21 @@ pub(crate) fn modify_plugin_file(
     operate(&mut contents)?;
 
     // Save the modified file on success
+    // First, ensure the parent directory exists
+    if let Some(parent_dir) = plugin_registry_file_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|err| {
+            IoError::new(
+                err.not_found_as(NotFound::Directory),
+                file_span,
+                parent_dir.to_path_buf(),
+            )
+        })?;
+    }
+
+    // Now create the file
     contents.write_to(
-        File::create(&plugin_registry_file_path).map_err(|err| ShellError::IOErrorSpanned {
-            msg: format!(
-                "failed to create `{}`: {}",
-                plugin_registry_file_path.display(),
-                err
-            ),
-            span: file_span,
-        })?,
+        File::create(&plugin_registry_file_path)
+            .map_err(|err| IoError::new(err, file_span, plugin_registry_file_path))?,
         Some(span),
     )?;
 
@@ -119,8 +119,7 @@ pub(crate) fn canonicalize_possible_filename_arg(
     arg: &str,
 ) -> PathBuf {
     // This results in the best possible chance of a match with the plugin item
-    #[allow(deprecated)]
-    if let Ok(cwd) = nu_engine::current_dir(engine_state, stack) {
+    if let Ok(cwd) = engine_state.cwd(Some(stack)) {
         let path = nu_path::expand_path_with(arg, &cwd, true);
         // Try to canonicalize
         nu_path::locate_in_dirs(&path, &cwd, || get_plugin_dirs(engine_state, stack))

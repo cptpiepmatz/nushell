@@ -1,8 +1,10 @@
 use crate::util::{get_plugin_dirs, modify_plugin_file};
 use nu_engine::command_prelude::*;
 use nu_plugin_engine::{GetPlugin, PersistentPlugin};
-use nu_protocol::{PluginGcConfig, PluginIdentity, PluginRegistryItem, RegisteredPlugin};
-use std::sync::Arc;
+use nu_protocol::{
+    PluginGcConfig, PluginIdentity, PluginRegistryItem, RegisteredPlugin, shell_error::io::IoError,
+};
+use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub struct PluginAdd;
@@ -19,19 +21,19 @@ impl Command for PluginAdd {
             .named(
                 "plugin-config",
                 SyntaxShape::Filepath,
-                "Use a plugin registry file other than the one set in `$nu.plugin-path`",
+                "Use a plugin registry file other than the one set in `$nu.plugin-path`.",
                 None,
             )
             .named(
                 "shell",
                 SyntaxShape::Filepath,
-                "Use an additional shell program (cmd, sh, python, etc.) to run the plugin",
+                "Use an additional shell program (cmd, sh, python, etc.) to run the plugin.",
                 Some('s'),
             )
             .required(
                 "filename",
                 SyntaxShape::String,
-                "Path to the executable for the plugin",
+                "Path to the executable for the plugin.",
             )
             .category(Category::Plugin)
     }
@@ -56,7 +58,7 @@ apparent the next time `nu` is next launched with that plugin registry file.
         vec!["load", "register", "signature"]
     }
 
-    fn examples(&self) -> Vec<Example> {
+    fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
                 example: "plugin add nu_plugin_inc",
@@ -86,11 +88,19 @@ apparent the next time `nu` is next launched with that plugin registry file.
         let filename_expanded = nu_path::locate_in_dirs(&filename.item, &cwd, || {
             get_plugin_dirs(engine_state, stack)
         })
-        .err_span(filename.span)?;
+        .map_err(|err| {
+            IoError::new(
+                err.not_found_as(NotFound::File),
+                filename.span,
+                PathBuf::from(filename.item),
+            )
+        })?;
 
         let shell_expanded = shell
             .as_ref()
-            .map(|s| nu_path::canonicalize_with(&s.item, &cwd).err_span(s.span))
+            .map(|s| {
+                nu_path::absolute_with(&s.item, &cwd).map_err(|err| IoError::new(err, s.span, None))
+            })
             .transpose()?;
 
         // Parse the plugin filename so it can be used to spawn the plugin
