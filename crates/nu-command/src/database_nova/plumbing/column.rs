@@ -1,0 +1,17 @@
+use rusqlite::Column;
+
+use crate::database_nova::plumbing::decl_type::DatabaseDeclType;
+
+#[derive(Debug)]
+pub struct DatabaseColumn {
+    pub name: String,
+    pub decl_type: Option<DatabaseDeclType>,
+}
+
+impl<'s> From<Column<'s>> for DatabaseColumn {
+    fn from(column: Column<'s>) -> Self {
+        let name = column.name().into();
+        let decl_type = column.decl_type().and_then(DatabaseDeclType::from_str);
+        Self { name, decl_type }
+    }
+}

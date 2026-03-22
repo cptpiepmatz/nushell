@@ -45,7 +45,9 @@ alphanumeric-sort = { workspace = true }
 base64 = { workspace = true }
 bracoxide = { workspace = true }
 brotli = { workspace = true }
+bytemuck = { workspace = true }
 byteorder = { workspace = true }
+bytes = { workspace = true }
 bytesize = { workspace = true }
 calamine = { workspace = true, features = ["dates"] }
 chardetng = { workspace = true }
@@ -88,6 +90,7 @@ num-traits = { workspace = true }
 oem_cp = { workspace = true }
 open = { workspace = true, optional = true }
 os_pipe = { workspace = true, optional = true }
+parking_lot = { workspace = true }
 pathdiff = { workspace = true }
 percent-encoding = { workspace = true }
 print-positions = { workspace = true }
@@ -98,10 +101,11 @@ rayon = { workspace = true }
 reedline = { workspace = true, optional = true }
 roxmltree = { workspace = true }
 rusqlite = { workspace = true, features = [
-	"bundled",
 	"backup",
+	"bundled",
 	"chrono",
 	"column_decltype",
+	"serialize",
 ], optional = true }
 rustls = { workspace = true, optional = true, features = ["ring"] }
 rustls-native-certs = { workspace = true, optional = true }
@@ -117,6 +121,7 @@ sysinfo = { workspace = true }
 tabled = { workspace = true, features = ["ansi"], default-features = false }
 titlecase = { workspace = true }
 toml = { workspace = true, features = ["preserve_order"] }
+typetag = { workspace = true }
 unicode-segmentation = { workspace = true }
 update-informer = { workspace = true, optional = true }
 ureq = { workspace = true, default-features = false, features = [

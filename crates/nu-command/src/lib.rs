@@ -70,9 +70,11 @@ pub use viewers::*;
 
 #[cfg(feature = "sqlite")]
 mod database;
-
 #[cfg(feature = "sqlite")]
 pub use database::*;
+
+#[cfg(feature = "sqlite")]
+mod database_nova;
 
 #[cfg(test)]
 #[macro_use]
