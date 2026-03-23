@@ -1,21 +1,18 @@
 use nu_protocol::engine::StateWorkingSet;
 
-mod from_db;
-mod from_sqlite;
+mod from;
 mod query_db;
 mod schema;
-mod to_db;
-mod to_sqlite;
+mod to;
 
-pub use from_db::*;
-pub use from_sqlite::*;
+pub use from::*;
 pub use query_db::*;
 pub use schema::*;
-pub use to_db::*;
-pub use to_sqlite::*;
+pub use to::*;
 
 pub fn add_database_decls(working_set: &mut StateWorkingSet) {
-    working_set.add_decl(Box::new(FromSqlite));
-    working_set.add_decl(Box::new(FromDb));
-    working_set.add_decl(Box::new(ToSqlite));
+    working_set.add_decl(Box::new(FROM_SQLITE));
+    working_set.add_decl(Box::new(FROM_DB));
+    working_set.add_decl(Box::new(TO_SQLITE));
+    working_set.add_decl(Box::new(TO_DB));
 }

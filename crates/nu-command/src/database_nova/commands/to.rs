@@ -3,12 +3,17 @@ use nu_protocol::FromValue;
 
 use crate::database_nova::{plumbing::connection::DatabaseConnection, value::DatabaseSystemValue};
 
+pub const TO_SQLITE: ToSqlite = ToSqlite { name: "to sqlite" };
+pub const TO_DB: ToSqlite = ToSqlite { name: "to db" };
+
 #[derive(Debug, Clone)]
-pub struct ToSqlite;
+pub struct ToSqlite {
+    name: &'static str,
+}
 
 impl Command for ToSqlite {
     fn name(&self) -> &str {
-        "to sqlite"
+        self.name
     }
 
     fn signature(&self) -> Signature {

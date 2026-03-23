@@ -6,12 +6,18 @@ use crate::database_nova::{
     value::{DatabaseSystemValue, DatabaseValue},
 };
 
+#[rustfmt::skip]
+pub const FROM_SQLITE: FromSqlite = FromSqlite { name: "from sqlite" };
+pub const FROM_DB: FromSqlite = FromSqlite { name: "from db" };
+
 #[derive(Debug, Clone)]
-pub struct FromSqlite;
+pub struct FromSqlite {
+    name: &'static str,
+}
 
 impl Command for FromSqlite {
     fn name(&self) -> &str {
-        "from sqlite"
+        self.name
     }
 
     fn signature(&self) -> Signature {
