@@ -1,9 +1,6 @@
 use std::{borrow::Cow, fmt::Debug, path::PathBuf, string::FromUtf8Error};
 
-use nu_protocol::{
-    ShellError, Span, Type,
-    shell_error::io::IoError,
-};
+use nu_protocol::{ShellError, Span, Type, shell_error::io::IoError};
 use nu_utils::location::Location;
 
 use crate::database_nova::plumbing::{

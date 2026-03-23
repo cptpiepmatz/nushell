@@ -1,6 +1,4 @@
-use nu_protocol::{
-    DataSource, FromValue, PipelineData, Record, Span, Spanned, Value,
-};
+use nu_protocol::{DataSource, FromValue, PipelineData, Record, Span, Spanned, Value};
 use nu_utils::location::Location;
 use rusqlite::{Connection, backup::Progress};
 
@@ -50,9 +48,7 @@ impl DatabaseConnection {
     }
 
     #[track_caller]
-    pub fn open_internal(
-        storage: DatabaseStorage,
-    ) -> Result<Self, DatabaseError> {
+    pub fn open_internal(storage: DatabaseStorage) -> Result<Self, DatabaseError> {
         let location = Location::caller();
         Self::open_raw(storage).map_err(|(error, storage)| DatabaseError::OpenInternalConnection {
             storage,
@@ -103,10 +99,13 @@ impl DatabaseConnection {
         Self::open(storage, span)
     }
 
-    pub fn new_from_value<'t>(value: Value, table_name: impl AsRef<Spanned<&'t str>>, span: Span) -> Result<Self, DatabaseError> {
+    pub fn new_from_value<'t>(
+        value: Value,
+        table_name: impl AsRef<Spanned<&'t str>>,
+        span: Span,
+    ) -> Result<Self, DatabaseError> {
         let connection = Self::new_empty(span)?;
 
-        
         todo!()
     }
 
@@ -159,7 +158,7 @@ impl DatabaseConnection {
     }
 
     pub fn database_list(&self, span: Span) -> Result<DatabaseList, DatabaseError> {
-        let sql = SqlString::new_internal("PRAGMA database_list", );
+        let sql = SqlString::new_internal("PRAGMA database_list");
         let values = self.query(sql, DatabaseParams::new_empty(), span)?;
         DatabaseList::from_value(values).map_err(DatabaseError::Shell)
     }
@@ -169,9 +168,9 @@ impl DatabaseConnection {
         name: &DatabaseName,
         span: Span,
     ) -> Result<Vec<DatabaseTable>, DatabaseError> {
-        let tables_sql = SqlString::new_internal(
-            format!("SELECT name FROM {name}.sqlite_master WHERE type='table'"),
-        );
+        let tables_sql = SqlString::new_internal(format!(
+            "SELECT name FROM {name}.sqlite_master WHERE type='table'"
+        ));
         let tables = self.query(tables_sql, DatabaseParams::new_empty(), span)?;
 
         #[derive(Debug, FromValue)]
@@ -198,7 +197,7 @@ impl DatabaseConnection {
         table: &DatabaseTable,
         span: Span,
     ) -> Result<Value, DatabaseError> {
-        let sql = SqlString::new_internal(format!("SELECT * FROM {name}.{table}"), );
+        let sql = SqlString::new_internal(format!("SELECT * FROM {name}.{table}"));
         self.query(sql, DatabaseParams::new_empty(), span)
     }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nu_engine::command_prelude::*;
-use nu_protocol::{CustomValue, casing::Casing, FromValue};
+use nu_protocol::{CustomValue, FromValue, casing::Casing};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 

@@ -17,10 +17,7 @@ pub mod table;
 pub mod uri;
 pub mod value;
 
-fn nu_value_to_sql_value(
-    value: NuValue,
-    strict: bool,
-) -> Result<SqlValue, DatabaseError> {
+fn nu_value_to_sql_value(value: NuValue, strict: bool) -> Result<SqlValue, DatabaseError> {
     let decl_type = DatabaseDeclType::try_from(&value)?;
     if decl_type.as_str(strict).is_none() {
         return Err(DatabaseError::Unsupported {
@@ -36,9 +33,7 @@ fn nu_value_to_sql_value(
         NuValue::Int { val, .. } => Ok(SqlValue::Integer(val)),
         NuValue::Float { val, .. } => Ok(SqlValue::Real(val)),
         NuValue::String { val, .. } => Ok(SqlValue::Text(val)),
-        NuValue::Glob { val, no_expand, .. } => {
-            Ok(SqlValue::Text(format!("{no_expand}:{val}")))
-        }
+        NuValue::Glob { val, no_expand, .. } => Ok(SqlValue::Text(format!("{no_expand}:{val}"))),
         NuValue::Filesize { val, .. } => Ok(SqlValue::Integer(val.get())),
         NuValue::Duration { val, .. } => Ok(SqlValue::Integer(val)),
         NuValue::Date { val, .. } => Ok(SqlValue::Text(val.to_rfc3339())),

@@ -1,4 +1,7 @@
-use crate::database_nova::{error::DatabaseError, plumbing::{nu_value_to_sql_value, value::SqlValue}};
+use crate::database_nova::{
+    error::DatabaseError,
+    plumbing::{nu_value_to_sql_value, value::SqlValue},
+};
 
 pub enum DatabaseParams {
     Unnamed(Vec<SqlValue>),
@@ -11,9 +14,11 @@ impl DatabaseParams {
     }
 
     pub fn new_unnamed(
-        iter: impl ExactSizeIterator<Item = nu_protocol::Value>,
+        iter: impl Iterator<Item = nu_protocol::Value>,
     ) -> Result<Self, DatabaseError> {
-        let mut values = Vec::with_capacity(iter.len());
+        let (min, max) = iter.size_hint();
+        let capacity = max.unwrap_or(min);
+        let mut values = Vec::with_capacity(capacity);
         for value in iter {
             let value = nu_value_to_sql_value(value, false)?;
             values.push(value);
@@ -22,9 +27,11 @@ impl DatabaseParams {
     }
 
     pub fn new_named(
-        iter: impl ExactSizeIterator<Item = (String, nu_protocol::Value)>,
+        iter: impl Iterator<Item = (String, nu_protocol::Value)>,
     ) -> Result<Self, DatabaseError> {
-        let mut values = Vec::with_capacity(iter.len());
+        let (min, max) = iter.size_hint();
+        let capacity = max.unwrap_or(min);
+        let mut values = Vec::with_capacity(capacity);
         for (key, value) in iter {
             let value = nu_value_to_sql_value(value, false)?;
             values.push((key, value));

@@ -1,5 +1,8 @@
 use bytes::{Buf, Bytes};
-use rusqlite::{types::{FromSql, FromSqlResult, ToSqlOutput, Type, ValueRef}, ToSql};
+use rusqlite::{
+    ToSql,
+    types::{FromSql, FromSqlResult, ToSqlOutput, Type, ValueRef},
+};
 
 /// Replacement type for [`rusqlite::types::Value`].
 ///
@@ -10,9 +13,9 @@ use rusqlite::{types::{FromSql, FromSqlResult, ToSqlOutput, Type, ValueRef}, ToS
 /// disallowing the usage of that type.
 /// Similar to [`Value`](rusqlite::types::Value), this acts as an owned variant of
 /// [`ValueRef`](rusqlite::types::ValueRef).
-/// 
-/// The naming of this value doesn't follow the typical `Database*` schema of the 
-/// [`plumbing`](crate::database_nova::plumbing) module as it would clash with 
+///
+/// The naming of this value doesn't follow the typical `Database*` schema of the
+/// [`plumbing`](crate::database_nova::plumbing) module as it would clash with
 /// [`database_nova::value::DatabaseValue`](crate::database_nova::value::DatabaseValue).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlValue {
