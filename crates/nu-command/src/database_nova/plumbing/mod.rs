@@ -30,7 +30,7 @@ fn nu_value_to_sql_value(
     }
 
     match value {
-        // We do *not* handle booleans as integers as its hard to get them out again as booleans
+        // We do *not* handle booleans as integers as it's hard to get them out again as booleans
         // this way.
         NuValue::Bool { val, .. } => Ok(SqlValue::Text(val.to_string())),
         NuValue::Int { val, .. } => Ok(SqlValue::Integer(val)),

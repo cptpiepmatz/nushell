@@ -90,7 +90,7 @@ pub enum DatabaseError {
         span: Span,
     },
 
-    // mark this variant as deprecated to find missing pieces
+    // TODO: mark this variant as deprecated to find missing pieces
     Todo {
         msg: Cow<'static, str>,
         span: Span,

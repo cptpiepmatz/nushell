@@ -12,8 +12,8 @@ use rusqlite::{types::{FromSql, FromSqlResult, ToSqlOutput, Type, ValueRef}, ToS
 /// [`ValueRef`](rusqlite::types::ValueRef).
 /// 
 /// The naming of this value doesn't follow the typical `Database*` schema of the 
-/// [`plumbing`](crate::database_next::plumbing) module as it would clash with 
-/// [`database_next::value::DatabaseValue`](crate::database_next::value::DatabaseValue).
+/// [`plumbing`](crate::database_nova::plumbing) module as it would clash with 
+/// [`database_nova::value::DatabaseValue`](crate::database_nova::value::DatabaseValue).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlValue {
     Null,
@@ -40,7 +40,7 @@ impl SqlValue {
             SqlValue::Integer(int) => ValueRef::Integer(*int),
             SqlValue::Real(real) => ValueRef::Real(*real),
             SqlValue::Text(string) => ValueRef::Text(string.as_bytes()),
-            SqlValue::Blob(bytes) => ValueRef::Blob(&bytes),
+            SqlValue::Blob(bytes) => ValueRef::Blob(bytes),
         }
     }
 }
