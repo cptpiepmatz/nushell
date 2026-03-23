@@ -45,9 +45,9 @@ impl DatabaseTableValue {
 
         Err(DatabaseError::TableNotFound {
             name: value.name,
-            table: table,
+            table,
             tables: database_tables,
-            span: span,
+            span,
         })
     }
 }

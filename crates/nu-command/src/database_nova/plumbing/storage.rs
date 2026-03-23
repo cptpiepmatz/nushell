@@ -55,10 +55,7 @@ impl DatabaseStorage {
     }
 
     pub fn new_writable_memory(id: impl Hash, span: Span) -> Self {
-        let mut hasher = RANDOM_STATE.build_hasher();
-        id.hash(&mut hasher);
-        let id = hasher.finish();
-
+        let id = RANDOM_STATE.hash_one(id);
         let path = DatabaseUri::new(
             "file",
             format!("nu-sqlite-{id:016x}"),

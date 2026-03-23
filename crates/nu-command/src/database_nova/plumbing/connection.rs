@@ -225,7 +225,7 @@ impl DatabaseConnection {
             record.push(name, value);
         }
 
-        return Ok(Value::record(record, span));
+        Ok(Value::record(record, span))
     }
 
     pub fn storage(&self) -> &DatabaseStorage {
