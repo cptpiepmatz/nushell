@@ -238,6 +238,7 @@ webpki-roots = "1.0.6"
 [workspace.lints.clippy]
 # Warning: workspace lints affect library code as well as tests, so don't enable lints that would be too noisy in tests like that.
 # todo = "warn"
+disallowed_types = "deny"
 format_push_string = "warn"
 needless_raw_strings = "warn"
 result_large_err = "allow"

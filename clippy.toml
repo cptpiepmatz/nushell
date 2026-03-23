@@ -4,3 +4,7 @@ allow-unwrap-in-tests = true
 path = "std::time::Instant"
 reason = "WASM panics if used, use instead"
 replacement = "nu_utils::time::Instant"
+
+[[disallowed-types]]
+path = "rusqlite::types::Value"
+reason = "ValueRef into Value may panic, use `plumbing::SqlValue` instead"
