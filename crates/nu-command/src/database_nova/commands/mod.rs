@@ -14,5 +14,6 @@ pub fn add_database_decls(working_set: &mut StateWorkingSet) {
     working_set.add_decl(Box::new(FROM_SQLITE));
     working_set.add_decl(Box::new(FROM_DB));
     working_set.add_decl(Box::new(TO_SQLITE));
+    working_set.add_decl(Box::new(Schema));
     working_set.add_decl(Box::new(TO_DB));
 }
