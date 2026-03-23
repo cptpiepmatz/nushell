@@ -16,7 +16,7 @@ pub struct DatabaseSystemValue {
 }
 
 impl DatabaseSystemValue {
-    pub const TYPE_NAME: &'static str = "database-system";
+    pub const TYPE_NAME: &'static str = "sqlite-database-system";
 
     pub fn new(conn: DatabaseConnection) -> Self {
         Self {

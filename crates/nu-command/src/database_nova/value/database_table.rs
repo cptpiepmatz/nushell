@@ -20,7 +20,7 @@ pub struct DatabaseTableValue {
 }
 
 impl DatabaseTableValue {
-    pub const TYPE_NAME: &'static str = "database-table";
+    pub const TYPE_NAME: &'static str = "sqlite-database-table";
 
     pub fn is(value: &Value) -> bool {
         let Value::Custom { val, .. } = value else {

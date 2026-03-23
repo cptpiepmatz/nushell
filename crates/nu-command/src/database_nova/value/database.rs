@@ -19,7 +19,7 @@ pub struct DatabaseValue {
 }
 
 impl DatabaseValue {
-    pub const TYPE_NAME: &'static str = "database";
+    pub const TYPE_NAME: &'static str = "sqlite-database";
 
     pub fn new(
         conn: Arc<Mutex<DatabaseConnection>>,
