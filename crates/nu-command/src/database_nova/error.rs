@@ -1,6 +1,9 @@
 use std::{borrow::Cow, fmt::Debug, path::PathBuf, string::FromUtf8Error};
 
-use nu_protocol::{ShellError, Span, Type, shell_error::io::IoError};
+use nu_protocol::{
+    ShellError, Span, Type,
+    shell_error::{generic::GenericError, io::IoError},
+};
 use nu_utils::location::Location;
 
 use crate::database_nova::plumbing::{
@@ -164,29 +167,30 @@ impl From<DatabaseError> for ShellError {
                     },
                 database_list,
                 span: value_span,
-            } => ShellError::GenericError {
-                error: "Database system does not contain expected database".into(),
-                msg: format!("Could not find {:?} in database system", name.name()),
-                span: Some(value_span),
-                help: None,
-                inner: vec![match nu_protocol::did_you_mean(
-                    database_list.iter().map(|entry| &entry.name),
-                    name.name(),
-                ) {
-                    Some(suggestion) => ShellError::DidYouMeanCustom {
-                        msg: format!("Could not find {:?} in database system", name.name()),
-                        suggestion,
-                        span: name_span,
+            } => ShellError::Generic(
+                GenericError::new(
+                    "Database system does not contain expected database",
+                    format!("Could not find {:?} in database system", name.name()),
+                    value_span,
+                )
+                .with_inner([
+                    match nu_protocol::did_you_mean(
+                        database_list.iter().map(|entry| &entry.name),
+                        name.name(),
+                    ) {
+                        Some(suggestion) => ShellError::DidYouMeanCustom {
+                            msg: format!("Could not find {:?} in database system", name.name()),
+                            suggestion,
+                            span: name_span,
+                        },
+                        None => ShellError::Generic(GenericError::new(
+                            "Database not found",
+                            format!("Could not find {:?} in database system", name.name()),
+                            name_span,
+                        )),
                     },
-                    None => ShellError::GenericError {
-                        error: "Database not found".into(),
-                        msg: format!("Could not find {:?} in database system", name.name()),
-                        span: Some(name_span),
-                        help: None,
-                        inner: vec![],
-                    },
-                }],
-            },
+                ]),
+            ),
             DatabaseError::DatabaseNotFound {
                 name: DatabaseName::Internal { .. },
                 span,
@@ -204,41 +208,42 @@ impl From<DatabaseError> for ShellError {
                 table,
                 tables,
                 span: value_span,
-            } => ShellError::GenericError {
-                error: "Database does not contain expected table".into(),
-                msg: format!(
-                    "Could not find {:?}.{:?} in database",
-                    name.name(),
-                    table.as_str()
-                ),
-                span: Some(value_span),
-                help: None,
-                inner: vec![match nu_protocol::did_you_mean(
-                    tables.iter().map(|entry| entry.as_str()),
-                    table.as_str(),
-                ) {
-                    Some(suggestion) => ShellError::DidYouMeanCustom {
-                        msg: format!(
-                            "Could not find {:?}.{:?} in database",
-                            name.name(),
-                            table.as_str()
-                        ),
-                        suggestion,
-                        span: name_span,
+            } => ShellError::Generic(
+                GenericError::new(
+                    "Database does not contain expected table",
+                    format!(
+                        "Could not find {:?}.{:?} in database",
+                        name.name(),
+                        table.as_str()
+                    ),
+                    value_span,
+                )
+                .with_inner([
+                    match nu_protocol::did_you_mean(
+                        tables.iter().map(|entry| entry.as_str()),
+                        table.as_str(),
+                    ) {
+                        Some(suggestion) => ShellError::DidYouMeanCustom {
+                            msg: format!(
+                                "Could not find {:?}.{:?} in database",
+                                name.name(),
+                                table.as_str()
+                            ),
+                            suggestion,
+                            span: name_span,
+                        },
+                        None => ShellError::Generic(GenericError::new(
+                            "Table not found",
+                            format!(
+                                "Could not find {:?}.{:?} in database",
+                                name.name(),
+                                table.as_str()
+                            ),
+                            name_span,
+                        )),
                     },
-                    None => ShellError::GenericError {
-                        error: "Table not found".into(),
-                        msg: format!(
-                            "Could not find {:?}.{:?} in database",
-                            name.name(),
-                            table.as_str()
-                        ),
-                        span: Some(name_span),
-                        help: None,
-                        inner: vec![],
-                    },
-                }],
-            },
+                ]),
+            ),
             DatabaseError::TableNotFound {
                 name: DatabaseName::Internal { .. },
                 span,
@@ -261,19 +266,18 @@ impl From<DatabaseError> for ShellError {
                 call_span,
                 value_span,
                 error,
-            } => ShellError::GenericError {
-                error: "Deserializing database failed".into(),
-                msg: "Failed to deserialize database".into(),
-                span: Some(call_span),
-                help: None,
-                inner: vec![ShellError::GenericError {
-                    error: "Deserialization failed on a value".into(),
-                    msg: error.to_string(),
-                    span: Some(value_span),
-                    help: None,
-                    inner: vec![],
-                }],
-            },
+            } => ShellError::Generic(
+                GenericError::new(
+                    "Deserializing database failed",
+                    "Failed to deserialize database",
+                    call_span,
+                )
+                .with_inner([ShellError::Generic(GenericError::new(
+                    "Deserialization failed on a value",
+                    error.to_string(),
+                    value_span,
+                ))]),
+            ),
             DatabaseError::PrepareStatement { sql, span, error } => generic_error(
                 "Preparing statement failed",
                 format!("Error preparing {:?}", sql.as_str()),
