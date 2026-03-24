@@ -151,6 +151,7 @@ impl From<DatabaseError> for ShellError {
     fn from(error: DatabaseError) -> Self {
         match error {
             DatabaseError::Shell(shell_error) => shell_error,
+
             DatabaseError::OpenConnection {
                 storage,
                 span,
@@ -162,6 +163,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             ),
+
             DatabaseError::OpenInternalConnection {
                 storage,
                 location,
@@ -173,6 +175,7 @@ impl From<DatabaseError> for ShellError {
                 location,
                 error,
             ),
+
             DatabaseError::DatabaseNotFound {
                 name,
                 database_list,
@@ -203,6 +206,7 @@ impl From<DatabaseError> for ShellError {
                     .with_inner([inner]),
                 )
             }
+
             DatabaseError::TableNotFound {
                 name,
                 table,
@@ -212,24 +216,24 @@ impl From<DatabaseError> for ShellError {
                 let (name, name_site) = name.into_parts();
                 let did_you_mean =
                     nu_protocol::did_you_mean(tables.iter().map(|entry| entry.as_str()), &name);
-                let msg = format!(
-                    "Could not find {:?}.{:?} in database",
-                    name,
-                    table.as_str()
-                );
+                let msg = format!("Could not find {:?}.{:?} in database", name, table.as_str());
                 let inner = match (name_site, did_you_mean) {
-                    (ErrorSite::Span(name_span), Some(suggestion)) => ShellError::DidYouMean { suggestion, span: name_span },
-                    (site, _) => ShellError::Generic(GenericError::new_with_site("Table not found", msg.clone(), site)),
+                    (ErrorSite::Span(name_span), Some(suggestion)) => ShellError::DidYouMean {
+                        suggestion,
+                        span: name_span,
+                    },
+                    (site, _) => ShellError::Generic(GenericError::new_with_site(
+                        "Table not found",
+                        msg.clone(),
+                        site,
+                    )),
                 };
                 ShellError::Generic(
-                    GenericError::new(
-                        "Database does not contain expected table",
-                        msg,
-                        value_span,
-                    )
-                    .with_inner([inner]),
+                    GenericError::new("Database does not contain expected table", msg, value_span)
+                        .with_inner([inner]),
                 )
             }
+
             DatabaseError::Promote { path, span, error } => generic_error(
                 "nu::shell::database::promote",
                 "Promoting database connection failed",
@@ -240,6 +244,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             ),
+
             DatabaseError::Deserialize {
                 call_span,
                 value_span,
@@ -256,6 +261,7 @@ impl From<DatabaseError> for ShellError {
                     value_span,
                 ))]),
             ),
+
             DatabaseError::PrepareStatement { sql, span, error } => generic_error(
                 "nu::shell::database::prepare",
                 "Preparing statement failed",
@@ -263,6 +269,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             ),
+
             DatabaseError::ExecuteStatement { sql, span, error } => generic_error(
                 "nu::shell::database::execute",
                 "Executing statement failed",
@@ -270,6 +277,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             ),
+
             DatabaseError::QueryStatement { sql, span, error } => generic_error(
                 "nu::shell::database::query",
                 "Querying statement failed",
@@ -277,6 +285,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             ),
+
             DatabaseError::Iterate {
                 sql,
                 index,
@@ -289,6 +298,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             ),
+
             DatabaseError::Get {
                 sql,
                 index,
@@ -301,6 +311,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             ),
+
             DatabaseError::Unsupported { r#type, span } => generic_error(
                 "nu::shell::database::unsupported",
                 "Unsupported type for database",
@@ -308,6 +319,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 None,
             ),
+
             DatabaseError::Todo { msg, span } => generic_error(
                 "nu::shell::database::todo",
                 "Database To-Do",
@@ -315,7 +327,9 @@ impl From<DatabaseError> for ShellError {
                 span,
                 None,
             ),
+
             DatabaseError::Io(io_error) => ShellError::Io(io_error),
+
             // TODO: use utf8 error from shell error
             DatabaseError::FromUtf8 { span, error } => generic_error(
                 "nu::shell::database::from_utf8",
@@ -324,6 +338,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 None,
             ),
+
             DatabaseError::InvalidDeclType {
                 rusqlite_type,
                 decl_type,
