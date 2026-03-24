@@ -1,10 +1,16 @@
-use std::{borrow::Cow, fmt::Debug, path::PathBuf, string::FromUtf8Error};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display},
+    path::PathBuf,
+    string::FromUtf8Error,
+};
 
 use nu_protocol::{
     ShellError, Span, Type,
-    shell_error::{generic::GenericError, io::IoError},
+    shell_error::{ErrorSite, generic::GenericError, io::IoError},
 };
 use nu_utils::location::Location;
+use thiserror::Error;
 
 use crate::database_nova::plumbing::{
     decl_type::DatabaseDeclType, list::DatabaseList, name::DatabaseName, sql::SqlString,
@@ -111,27 +117,32 @@ pub enum DatabaseError {
 }
 
 fn generic_error(
-    error: impl ToString,
-    msg: impl ToString,
-    span: impl Into<Option<Span>>,
+    code: impl Into<Cow<'static, str>>,
+    error: impl Into<Cow<'static, str>>,
+    msg: impl Into<Cow<'static, str>>,
+    site: impl Into<ErrorSite>,
     rusqlite_error: impl Into<Option<rusqlite::Error>>,
 ) -> ShellError {
-    ShellError::GenericError {
-        error: error.to_string(),
-        msg: msg.to_string(),
-        span: span.into(),
-        help: None,
-        inner: rusqlite_error
-            .into()
-            .map(|error| ShellError::GenericError {
-                error: error.to_string(),
-                msg: "".into(),
-                span: None,
-                help: None,
-                inner: vec![],
-            })
-            .into_iter()
-            .collect(),
+    let err = GenericError::new_with_site(error, msg, site.into()).with_code(code);
+    ShellError::Generic(match rusqlite_error.into() {
+        None => err,
+        Some(rusqlite_error) => err.with_source(PlainError::new(rusqlite_error)),
+    })
+}
+
+#[derive(Debug, Error)]
+#[error("{0}")]
+struct PlainError(String);
+
+impl PlainError {
+    pub fn new(content: impl Display) -> Self {
+        let initial = content.to_string();
+        let mut chars = initial.chars();
+        let inner = match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        };
+        Self(inner)
     }
 }
 
@@ -145,6 +156,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             } => generic_error(
+                "nu::shell::database::open_connection",
                 "Open connection to database failed",
                 format!("Failed to open to {}", storage.connection_path().display()),
                 span,
@@ -152,12 +164,13 @@ impl From<DatabaseError> for ShellError {
             ),
             DatabaseError::OpenInternalConnection {
                 storage,
-                location: _, // TODO: handle this location properly
+                location, // TODO: handle this location properly
                 error,
             } => generic_error(
+                "nu::shell::database::open_connection",
                 "Open internal connection to database failed",
                 format!("Failed to open to {}", storage.connection_path().display()),
-                None,
+                location,
                 error,
             ),
             DatabaseError::DatabaseNotFound {
@@ -254,6 +267,7 @@ impl From<DatabaseError> for ShellError {
             }
             .into(),
             DatabaseError::Promote { path, span, error } => generic_error(
+                "nu::shell::database::promote",
                 "Promoting database connection failed",
                 format!(
                     "Promoting {} into in-memory database failed",
@@ -279,18 +293,21 @@ impl From<DatabaseError> for ShellError {
                 ))]),
             ),
             DatabaseError::PrepareStatement { sql, span, error } => generic_error(
+                "nu::shell::database::prepare",
                 "Preparing statement failed",
                 format!("Error preparing {:?}", sql.as_str()),
                 span,
                 error,
             ),
             DatabaseError::ExecuteStatement { sql, span, error } => generic_error(
+                "nu::shell::database::execute",
                 "Executing statement failed",
                 format!("Error executing {:?}", sql.as_str()),
                 span,
                 error,
             ),
             DatabaseError::QueryStatement { sql, span, error } => generic_error(
+                "nu::shell::database::query",
                 "Querying statement failed",
                 format!("Error querying {:?}", sql.as_str()),
                 span,
@@ -302,6 +319,7 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             } => generic_error(
+                "nu::shell::database::iterate",
                 "Iterating over database rows failed",
                 format!("Error at {index} for {:?}", sql.as_str()),
                 span,
@@ -313,22 +331,32 @@ impl From<DatabaseError> for ShellError {
                 span,
                 error,
             } => generic_error(
+                "nu::shell::database::get",
                 "Getting value from database row failed",
                 format!("Error at {index:?} for {:?}", sql.as_str()),
                 span,
                 error,
             ),
             DatabaseError::Unsupported { r#type, span } => generic_error(
+                "nu::shell::database::unsupported",
                 "Unsupported type for database",
                 format!("The type {} is not supported", r#type),
                 span,
                 None,
             ),
-            DatabaseError::Todo { msg, span } => generic_error("Database To-Do", msg, span, None),
+            DatabaseError::Todo { msg, span } => generic_error(
+                "nu::shell::database::todo",
+                "Database To-Do",
+                msg,
+                span,
+                None,
+            ),
             DatabaseError::Io(io_error) => ShellError::Io(io_error),
+            // TODO: use utf8 error from shell error
             DatabaseError::FromUtf8 { span, error } => generic_error(
+                "nu::shell::database::from_utf8",
                 "Encountered non-utf8 strings in database",
-                error,
+                error.to_string(),
                 span,
                 None,
             ),
@@ -337,6 +365,7 @@ impl From<DatabaseError> for ShellError {
                 decl_type,
                 span,
             } => generic_error(
+                "nu::shell::database::invalid_decl_type",
                 "Invalid declaration type",
                 format!("{} cannot be deserialized as {}", rusqlite_type, decl_type),
                 span,

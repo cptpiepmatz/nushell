@@ -4326,6 +4326,7 @@ dependencies = [
  "sysinfo",
  "tabled",
  "tempfile",
+ "thiserror 2.0.18",
  "titlecase",
  "toml 1.1.0+spec-1.1.0",
  "trash",

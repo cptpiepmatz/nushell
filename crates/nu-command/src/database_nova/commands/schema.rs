@@ -1,4 +1,3 @@
-
 use nu_engine::command_prelude::*;
 use nu_protocol::FromValue;
 
@@ -17,8 +16,7 @@ impl Command for Schema {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build(self.name())
-            .description(self.description())
+        Signature::build(self.name()).description(self.description())
     }
 
     fn description(&self) -> &str {
@@ -38,7 +36,7 @@ impl Command for Schema {
     ) -> Result<PipelineData, ShellError> {
         Err(ShellError::from(DatabaseError::Todo {
             msg: "implement schema command".into(),
-            span: call.head
+            span: call.head,
         }))
     }
 }
