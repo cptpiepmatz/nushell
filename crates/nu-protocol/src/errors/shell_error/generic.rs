@@ -123,6 +123,25 @@ impl GenericError {
         }
     }
 
+    /// Creates a new [`GenericError`] with an [`ErrorSite`].
+    ///
+    /// This is useful in places where the previous abstraction already uses [`ErrorSite`]s.
+    pub fn new_with_site(
+        error: impl Into<Cow<'static, str>>,
+        msg: impl Into<Cow<'static, str>>,
+        site: ErrorSite,
+    ) -> Self {
+        Self {
+            code: DEFAULT_CODE.into(),
+            error: error.into(),
+            msg: msg.into(),
+            site,
+            help: None,
+            inner: Vec::new(),
+            source: None,
+        }
+    }
+
     /// Overrides the diagnostic code for this error.
     pub fn with_code(self, code: impl Into<Cow<'static, str>>) -> Self {
         Self {
