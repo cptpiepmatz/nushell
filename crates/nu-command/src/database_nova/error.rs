@@ -164,7 +164,7 @@ impl From<DatabaseError> for ShellError {
             ),
             DatabaseError::OpenInternalConnection {
                 storage,
-                location, // TODO: handle this location properly
+                location,
                 error,
             } => generic_error(
                 "nu::shell::database::open_connection",
@@ -174,98 +174,62 @@ impl From<DatabaseError> for ShellError {
                 error,
             ),
             DatabaseError::DatabaseNotFound {
-                name:
-                    name @ DatabaseName::UserProvided {
-                        span: name_span, ..
-                    },
+                name,
                 database_list,
                 span: value_span,
-            } => ShellError::Generic(
-                GenericError::new(
-                    "Database system does not contain expected database",
-                    format!("Could not find {:?} in database system", name.name()),
-                    value_span,
+            } => {
+                let (name, name_site) = name.into_parts();
+                let did_you_mean =
+                    nu_protocol::did_you_mean(database_list.iter().map(|entry| &entry.name), &name);
+                let msg = format!("Could not find {:?} in database system", name);
+                let inner = match (name_site, did_you_mean) {
+                    (ErrorSite::Span(span), Some(suggestion)) => ShellError::DidYouMeanCustom {
+                        msg: msg.clone(),
+                        suggestion,
+                        span,
+                    },
+                    (site, _) => ShellError::Generic(GenericError::new_with_site(
+                        "Database not found",
+                        format!("Could not find {:?} in database system", name),
+                        site,
+                    )),
+                };
+                ShellError::Generic(
+                    GenericError::new(
+                        "Database system does not contain expected database",
+                        msg,
+                        value_span,
+                    )
+                    .with_inner([inner]),
                 )
-                .with_inner([
-                    match nu_protocol::did_you_mean(
-                        database_list.iter().map(|entry| &entry.name),
-                        name.name(),
-                    ) {
-                        Some(suggestion) => ShellError::DidYouMeanCustom {
-                            msg: format!("Could not find {:?} in database system", name.name()),
-                            suggestion,
-                            span: name_span,
-                        },
-                        None => ShellError::Generic(GenericError::new(
-                            "Database not found",
-                            format!("Could not find {:?} in database system", name.name()),
-                            name_span,
-                        )),
-                    },
-                ]),
-            ),
-            DatabaseError::DatabaseNotFound {
-                name: DatabaseName::Internal { .. },
-                span,
-                ..
-            } => DatabaseError::Todo {
-                msg: "Provide database not found error for locations".into(),
-                span,
             }
-            .into(),
             DatabaseError::TableNotFound {
-                name:
-                    name @ DatabaseName::UserProvided {
-                        span: name_span, ..
-                    },
+                name,
                 table,
                 tables,
                 span: value_span,
-            } => ShellError::Generic(
-                GenericError::new(
-                    "Database does not contain expected table",
-                    format!(
-                        "Could not find {:?}.{:?} in database",
-                        name.name(),
-                        table.as_str()
-                    ),
-                    value_span,
+            } => {
+                let (name, name_site) = name.into_parts();
+                let did_you_mean =
+                    nu_protocol::did_you_mean(tables.iter().map(|entry| entry.as_str()), &name);
+                let msg = format!(
+                    "Could not find {:?}.{:?} in database",
+                    name,
+                    table.as_str()
+                );
+                let inner = match (name_site, did_you_mean) {
+                    (ErrorSite::Span(name_span), Some(suggestion)) => ShellError::DidYouMean { suggestion, span: name_span },
+                    (site, _) => ShellError::Generic(GenericError::new_with_site("Table not found", msg.clone(), site)),
+                };
+                ShellError::Generic(
+                    GenericError::new(
+                        "Database does not contain expected table",
+                        msg,
+                        value_span,
+                    )
+                    .with_inner([inner]),
                 )
-                .with_inner([
-                    match nu_protocol::did_you_mean(
-                        tables.iter().map(|entry| entry.as_str()),
-                        table.as_str(),
-                    ) {
-                        Some(suggestion) => ShellError::DidYouMeanCustom {
-                            msg: format!(
-                                "Could not find {:?}.{:?} in database",
-                                name.name(),
-                                table.as_str()
-                            ),
-                            suggestion,
-                            span: name_span,
-                        },
-                        None => ShellError::Generic(GenericError::new(
-                            "Table not found",
-                            format!(
-                                "Could not find {:?}.{:?} in database",
-                                name.name(),
-                                table.as_str()
-                            ),
-                            name_span,
-                        )),
-                    },
-                ]),
-            ),
-            DatabaseError::TableNotFound {
-                name: DatabaseName::Internal { .. },
-                span,
-                ..
-            } => DatabaseError::Todo {
-                msg: "Provide table not found error for locations".into(),
-                span,
             }
-            .into(),
             DatabaseError::Promote { path, span, error } => generic_error(
                 "nu::shell::database::promote",
                 "Promoting database connection failed",
