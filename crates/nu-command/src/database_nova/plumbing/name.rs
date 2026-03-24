@@ -1,4 +1,7 @@
-use nu_protocol::{FromValue, Span, Spanned};
+use nu_protocol::{
+    FromValue, Span, Spanned,
+    shell_error::{ErrorSite, ErrorSource},
+};
 use nu_utils::location::Location;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, fmt::Display};
@@ -34,6 +37,22 @@ impl DatabaseName {
         match self {
             Self::UserProvided { name, .. } => name,
             Self::Internal { name, .. } => name,
+        }
+    }
+
+    #[inline]
+    pub fn into_site(self) -> ErrorSite {
+        match self {
+            DatabaseName::UserProvided { span, .. } => ErrorSite::Span(span),
+            DatabaseName::Internal { location, .. } => ErrorSite::Location(location.to_string()),
+        }
+    }
+
+    #[inline]
+    pub fn into_parts(self) -> (Cow<'static, str>, ErrorSite) {
+        match self {
+            DatabaseName::UserProvided { name, span } => (name.into(), span.into()),
+            DatabaseName::Internal { name, location } => (name, location.into()),
         }
     }
 }
