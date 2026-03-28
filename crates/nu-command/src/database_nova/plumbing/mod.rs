@@ -2,6 +2,7 @@ use std::fmt::{Display, Write};
 
 use crate::database_nova::{error::DatabaseError, plumbing::decl_type::DatabaseDeclType};
 
+use chrono::DateTime;
 use nu_protocol::{Span, Value as NuValue, shell_error::io::IoError};
 use value::SqlValue;
 
@@ -81,10 +82,13 @@ fn sql_value_to_nu_value(
             msg: "Implement glob conversion back from rusqlite value".into(),
             span,
         }),
-        (SV::Text(_val), Some(DDT::Date)) => Err(DatabaseError::Todo {
-            msg: "Implement date conversion back from rusqlite value".into(),
-            span,
-        }),
+        (SV::Text(val), Some(DDT::Date)) => match DateTime::parse_from_rfc3339(&val) {
+            Ok(dt) => Ok(NV::date(dt, span)),
+            Err(err) => Err(DatabaseError::Todo {
+                msg: "Handle datetime parsing error".into(),
+                span,
+            }),
+        },
         (SV::Text(_val), Some(DDT::CellPath)) => Err(DatabaseError::Todo {
             msg: "Implement cell path parsing to read cell paths from sqlite".into(),
             span,
