@@ -1,11 +1,19 @@
+use std::fmt::Display;
+
 use rusqlite::Column;
 
-use crate::database_nova::plumbing::decl_type::DatabaseDeclType;
+use crate::database_nova::plumbing::{SqlIdentifier, decl_type::DatabaseDeclType};
 
 #[derive(Debug)]
 pub struct DatabaseColumn {
     pub name: String,
     pub decl_type: Option<DatabaseDeclType>,
+}
+
+impl DatabaseColumn {
+    pub fn sql_name(&self) -> impl Display + '_ {
+        SqlIdentifier(self.name.as_str())
+    }
 }
 
 impl<'s> From<Column<'s>> for DatabaseColumn {

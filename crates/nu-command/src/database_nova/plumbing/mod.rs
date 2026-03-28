@@ -1,3 +1,5 @@
+use std::fmt::{Display, Write};
+
 use crate::database_nova::{error::DatabaseError, plumbing::decl_type::DatabaseDeclType};
 
 use nu_protocol::{Span, Value as NuValue, shell_error::io::IoError};
@@ -17,15 +19,7 @@ pub mod table;
 pub mod uri;
 pub mod value;
 
-fn nu_value_to_sql_value(value: NuValue, strict: bool) -> Result<SqlValue, DatabaseError> {
-    let decl_type = DatabaseDeclType::try_from(&value)?;
-    if decl_type.as_str(strict).is_none() {
-        return Err(DatabaseError::Unsupported {
-            r#type: value.get_type(),
-            span: value.span(),
-        });
-    }
-
+fn nu_value_to_sql_value(value: NuValue) -> Result<SqlValue, DatabaseError> {
     match value {
         // We do *not* handle booleans as integers as it's hard to get them out again as booleans
         // this way.
@@ -113,5 +107,22 @@ fn sql_value_to_nu_value(
             decl_type,
             span,
         }),
+    }
+}
+
+struct SqlIdentifier<'s>(&'s str);
+
+impl<'s> Display for SqlIdentifier<'s> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('"')?;
+
+        for c in self.0.chars() {
+            match c {
+                '"' => f.write_str("\"\"")?,
+                _ => f.write_char(c)?,
+            }
+        }
+
+        f.write_char('"')
     }
 }

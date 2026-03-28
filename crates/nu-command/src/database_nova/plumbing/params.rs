@@ -20,7 +20,7 @@ impl DatabaseParams {
         let capacity = max.unwrap_or(min);
         let mut values = Vec::with_capacity(capacity);
         for value in iter {
-            let value = nu_value_to_sql_value(value, false)?;
+            let value = nu_value_to_sql_value(value)?;
             values.push(value);
         }
         Ok(Self::Unnamed(values))
@@ -33,7 +33,7 @@ impl DatabaseParams {
         let capacity = max.unwrap_or(min);
         let mut values = Vec::with_capacity(capacity);
         for (key, value) in iter {
-            let value = nu_value_to_sql_value(value, false)?;
+            let value = nu_value_to_sql_value(value)?;
             values.push((key, value));
         }
         Ok(Self::Named(values))

@@ -1,17 +1,22 @@
-use nu_protocol::{DataSource, FromValue, PipelineData, Record, Span, Spanned, Value};
-use nu_utils::location::Location;
+use std::iter;
+
+use itertools::Itertools;
+use nu_protocol::{DataSource, FromValue, PipelineData, Record, Span, Spanned, Type, Value};
+use nu_utils::{location::Location, push_fmt};
 use rusqlite::{Connection, backup::Progress};
 
 use crate::database_nova::{
     error::DatabaseError,
     plumbing::{
+        column::DatabaseColumn,
+        decl_type::DatabaseDeclType,
         list::{DatabaseList, DatabaseListEntry},
         name::DatabaseName,
         params::DatabaseParams,
         sql::SqlString,
         statement::DatabaseStatement,
         storage::DatabaseStorage,
-        table::DatabaseTable,
+        table::DatabaseTableName,
     },
 };
 
@@ -77,8 +82,8 @@ impl DatabaseConnection {
     }
 
     pub fn open_from_pipeline(pipeline: PipelineData, span: Span) -> Result<Self, DatabaseError> {
-        if let Some(metadata) = pipeline.metadata()
-            && let DataSource::FilePath(path) = metadata.data_source
+        if let Some(metadata) = pipeline.metadata_ref()
+            && let DataSource::FilePath(path) = &metadata.data_source
         {
             let path = nu_path::PathBuf::from(path)
                 .try_into_absolute()
@@ -101,12 +106,99 @@ impl DatabaseConnection {
 
     pub fn new_from_value<'t>(
         value: Value,
-        table_name: impl AsRef<Spanned<&'t str>>,
+        table_name: impl Into<DatabaseTableName>,
         span: Span,
     ) -> Result<Self, DatabaseError> {
+        let strict = false;
+
+        let ty = value.get_type();
+        let types = match ty {
+            Type::Table(types) => types,
+            ty => {
+                return Err(DatabaseError::CannotConvertIntoDb {
+                    value,
+                    expected: Type::table(),
+                    span,
+                });
+            }
+        };
+
+        let records = value
+            .into_list()
+            .map_err(DatabaseError::Shell)?
+            .into_iter()
+            .map(|v| v.into_record())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DatabaseError::Shell)?;
+
+        let columns = types
+            .into_iter()
+            .map(|(name, ty)| {
+                Ok(DatabaseColumn {
+                    name,
+                    decl_type: Some(DatabaseDeclType::try_from_type(&ty, span)?),
+                })
+            })
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
+        let column_iter = || {
+            columns
+                .iter()
+                .zip(columns.iter().skip(1).map(Some).chain(iter::repeat(None)))
+        };
+
         let connection = Self::new_empty(span)?;
 
-        todo!()
+        // TODO: use transaction, not necessary but feels like best practice here
+
+        let table_name = table_name.into();
+        let sql = {
+            let mut sql = String::new();
+            push_fmt!(sql, "CREATE TABLE {} (\n", table_name.sql_name());
+            for (col, next) in column_iter() {
+                push_fmt!(
+                    sql,
+                    "    {} {}",
+                    col.sql_name(),
+                    col.decl_type.expect("is some").as_str(strict)
+                );
+                next.into_iter().for_each(|_| push_fmt!(sql, ","));
+                push_fmt!(sql, "\n");
+            }
+            push_fmt!(sql, ")");
+            SqlString::new_internal(sql)
+        };
+        connection.execute(sql, DatabaseParams::new_empty(), span)?;
+
+        let insert_sql = {
+            let mut sql = String::new();
+            push_fmt!(sql, "INSERT INTO {} (", table_name.sql_name());
+            for (col, next) in column_iter() {
+                push_fmt!(sql, "{}", col.sql_name());
+                next.into_iter().for_each(|_| push_fmt!(sql, ", "));
+            }
+            push_fmt!(sql, ")\n");
+            push_fmt!(sql, "VALUES (");
+            for (col, next) in column_iter() {
+                push_fmt!(sql, "?");
+                next.into_iter().for_each(|_| push_fmt!(sql, ", "));
+            }
+            push_fmt!(sql, ")");
+            SqlString::new_internal(sql)
+        };
+        let mut insert_stmt = connection.prepare(insert_sql, span)?;
+
+        for mut record in records {
+            let values = columns.iter().map(|col| {
+                record
+                    .remove(&col.name)
+                    .unwrap_or(Value::nothing(Span::unknown()))
+            });
+            let params = DatabaseParams::new_unnamed(values)?;
+            insert_stmt.execute(params, span)?;
+        }
+
+        drop(insert_stmt);
+        Ok(connection)
     }
 
     pub fn promote(self) -> Result<Self, DatabaseError> {
@@ -167,7 +259,7 @@ impl DatabaseConnection {
         &self,
         name: &DatabaseName,
         span: Span,
-    ) -> Result<Vec<DatabaseTable>, DatabaseError> {
+    ) -> Result<Vec<DatabaseTableName>, DatabaseError> {
         let tables_sql = SqlString::new_internal(format!(
             "SELECT name FROM {name}.sqlite_master WHERE type='table'"
         ));
@@ -183,7 +275,7 @@ impl DatabaseConnection {
             .map(|tables| {
                 tables
                     .into_iter()
-                    .map(|table| DatabaseTable::UserProvided {
+                    .map(|table| DatabaseTableName::UserProvided {
                         name: table.name,
                         span,
                     })
@@ -194,7 +286,7 @@ impl DatabaseConnection {
     pub fn read_table(
         &self,
         name: &DatabaseName,
-        table: &DatabaseTable,
+        table: &DatabaseTableName,
         span: Span,
     ) -> Result<Value, DatabaseError> {
         let sql = SqlString::new_internal(format!("SELECT * FROM {name}.{table}"));

@@ -6,7 +6,7 @@ use std::{
 };
 
 use nu_protocol::{
-    ShellError, Span, Type,
+    ShellError, Span, Type, Value,
     shell_error::{ErrorSite, generic::GenericError, io::IoError},
 };
 use nu_utils::location::Location;
@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use crate::database_nova::plumbing::{
     decl_type::DatabaseDeclType, list::DatabaseList, name::DatabaseName, sql::SqlString,
-    storage::DatabaseStorage, table::DatabaseTable,
+    storage::DatabaseStorage, table::DatabaseTableName,
 };
 
 #[derive(Debug)]
@@ -42,8 +42,8 @@ pub enum DatabaseError {
 
     TableNotFound {
         name: DatabaseName,
-        table: DatabaseTable,
-        tables: Vec<DatabaseTable>,
+        table: DatabaseTableName,
+        tables: Vec<DatabaseTableName>,
         span: Span,
     },
 
@@ -93,6 +93,12 @@ pub enum DatabaseError {
 
     Unsupported {
         r#type: Type,
+        span: Span,
+    },
+
+    CannotConvertIntoDb {
+        value: Value,
+        expected: Type,
         span: Span,
     },
 
@@ -318,6 +324,24 @@ impl From<DatabaseError> for ShellError {
                 format!("The type {} is not supported", r#type),
                 span,
                 None,
+            ),
+
+            DatabaseError::CannotConvertIntoDb {
+                value,
+                expected,
+                span,
+            } => ShellError::Generic(
+                GenericError::new(
+                    "Cannot convert value into database",
+                    "The input type cannot be converted into a database",
+                    span,
+                )
+                .with_code("nu::shell::database::cannot_convert_into_db")
+                .with_inner([ShellError::RuntimeTypeMismatch {
+                    expected,
+                    actual: value.get_type(),
+                    span: value.span(),
+                }]),
             ),
 
             DatabaseError::Todo { msg, span } => generic_error(

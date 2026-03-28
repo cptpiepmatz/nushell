@@ -1,7 +1,13 @@
+use std::sync::Arc;
+
 use nu_engine::command_prelude::*;
 use nu_protocol::FromValue;
+use parking_lot::Mutex;
 
-use crate::database_nova::{plumbing::connection::DatabaseConnection, value::DatabaseSystemValue};
+use crate::database_nova::{
+    plumbing::{connection::DatabaseConnection, name::DatabaseName, table::DatabaseTableName},
+    value::{DatabaseSystemValue, DatabaseTableValue, DatabaseValue},
+};
 
 pub const TO_SQLITE: ToSqlite = ToSqlite { name: "to sqlite" };
 pub const TO_DB: ToSqlite = ToSqlite { name: "to db" };
@@ -48,6 +54,12 @@ impl Command for ToSqlite {
         if DatabaseSystemValue::is(&input) {
             return Ok(PipelineData::value(input, None));
         }
-        todo!()
+
+        let table_name = DatabaseTableName::new_internal("main");
+        let conn = DatabaseConnection::new_from_value(input, table_name.clone(), call.head)?;
+
+        let value = DatabaseValue::new(Arc::new(Mutex::new(conn)), DatabaseName::MAIN, call.head)?;
+        let value = DatabaseTableValue::from_database(value, table_name, call.head)?;
+        Ok(PipelineData::value(value.into_value(call.head), None))
     }
 }

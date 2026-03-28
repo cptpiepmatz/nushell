@@ -2,7 +2,7 @@ use crate::database_nova::{
     error::DatabaseError,
     plumbing::{
         connection::DatabaseConnection, name::DatabaseName, storage::DatabaseStorage,
-        table::DatabaseTable,
+        table::DatabaseTableName,
     },
     value::DatabaseTableValue,
 };
@@ -52,7 +52,7 @@ impl DatabaseValue {
 
     pub fn with_table(
         self,
-        table: DatabaseTable,
+        table: DatabaseTableName,
         span: Span,
     ) -> Result<DatabaseTableValue, DatabaseError> {
         DatabaseTableValue::from_database(self, table, span)
@@ -90,7 +90,7 @@ impl CustomValue for DatabaseValue {
         _optional: bool,
         _casing: Casing,
     ) -> Result<Value, ShellError> {
-        let table = DatabaseTable::UserProvided {
+        let table = DatabaseTableName::UserProvided {
             name: column_name,
             span: path_span,
         };

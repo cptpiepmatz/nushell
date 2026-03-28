@@ -2,7 +2,7 @@ use crate::database_nova::{
     error::DatabaseError,
     plumbing::{
         connection::DatabaseConnection, name::DatabaseName, storage::DatabaseStorage,
-        table::DatabaseTable,
+        table::DatabaseTableName,
     },
     value::DatabaseValue,
 };
@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub struct DatabaseTableValue {
     pub(super) conn: Arc<Mutex<DatabaseConnection>>,
     pub(super) name: DatabaseName,
-    pub(super) table: DatabaseTable,
+    pub(super) table: DatabaseTableName,
 }
 
 impl DatabaseTableValue {
@@ -31,7 +31,7 @@ impl DatabaseTableValue {
 
     pub fn from_database(
         value: DatabaseValue,
-        table: DatabaseTable,
+        table: DatabaseTableName,
         span: Span,
     ) -> Result<Self, DatabaseError> {
         let database_tables = { value.conn.lock().database_tables(&value.name, span)? };
@@ -98,7 +98,7 @@ impl IntoValue for DatabaseTableValue {
 struct DatabaseTableValueDto {
     storage: DatabaseStorage,
     schema: DatabaseName,
-    table: DatabaseTable,
+    table: DatabaseTableName,
 }
 
 impl Serialize for DatabaseTableValue {
