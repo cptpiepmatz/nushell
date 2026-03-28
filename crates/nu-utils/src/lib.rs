@@ -15,6 +15,7 @@ pub mod module_path;
 mod multilife;
 pub mod net;
 mod nu_cow;
+mod push_fmt;
 mod quoting;
 mod shared_cow;
 mod split_read;
