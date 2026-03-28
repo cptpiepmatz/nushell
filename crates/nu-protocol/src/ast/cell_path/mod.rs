@@ -4,6 +4,9 @@ use nu_utils::{escape_quote_string, needs_quoting};
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, fmt::Display};
 
+#[doc(hidden)]
+pub mod r#macro;
+
 /// One level of access of a [`CellPath`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PathMember {
