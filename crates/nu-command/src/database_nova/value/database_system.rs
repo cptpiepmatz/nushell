@@ -1,4 +1,9 @@
-use std::sync::Arc;
+use std::{
+    fs,
+    ops::Deref,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use nu_engine::command_prelude::*;
 use nu_protocol::{CustomValue, FromValue, casing::Casing};
@@ -75,6 +80,16 @@ impl CustomValue for DatabaseSystemValue {
             Box::new(self.database(name, self_span)?),
             self_span,
         ))
+    }
+
+    fn save(
+        &self,
+        path: Spanned<&Path>,
+        value_span: Span,
+        save_span: Span,
+    ) -> Result<(), ShellError> {
+        let conn = self.conn.lock();
+        super::save_database_value(conn.deref(), path, value_span, save_span)
     }
 }
 

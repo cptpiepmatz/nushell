@@ -1,4 +1,4 @@
-use std::iter;
+use std::{iter, ops::Deref};
 
 use itertools::Itertools;
 use nu_protocol::{DataSource, FromValue, PipelineData, Record, Span, Spanned, Type, Value};
@@ -321,5 +321,19 @@ impl DatabaseConnection {
 
     pub fn storage(&self) -> &DatabaseStorage {
         &self.storage
+    }
+
+    pub fn serialize(
+        &self,
+        value_span: Span,
+        serialize_span: Span,
+    ) -> Result<impl Deref<Target = [u8]>, DatabaseError> {
+        self.inner
+            .serialize(DATABASE_NAME)
+            .map_err(|error| DatabaseError::Serialize {
+                call_span: serialize_span,
+                value_span,
+                error,
+            })
     }
 }

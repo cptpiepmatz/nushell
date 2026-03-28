@@ -59,6 +59,12 @@ pub enum DatabaseError {
         error: rusqlite::Error,
     },
 
+    Serialize {
+        call_span: Span,
+        value_span: Span,
+        error: rusqlite::Error,
+    },
+
     PrepareStatement {
         sql: SqlString,
         span: Span,
@@ -261,8 +267,27 @@ impl From<DatabaseError> for ShellError {
                     "Failed to deserialize database",
                     call_span,
                 )
+                .with_code("nu::shell::database::deserialize")
                 .with_inner([ShellError::Generic(GenericError::new(
                     "Deserialization failed on a value",
+                    error.to_string(),
+                    value_span,
+                ))]),
+            ),
+
+            DatabaseError::Serialize {
+                call_span,
+                value_span,
+                error,
+            } => ShellError::Generic(
+                GenericError::new(
+                    "Serializing database failed",
+                    "Failed to serialize database",
+                    call_span,
+                )
+                .with_code("nu::shell::database::serialize")
+                .with_inner([ShellError::Generic(GenericError::new(
+                    "Serialization failed for this value",
                     error.to_string(),
                     value_span,
                 ))]),

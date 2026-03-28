@@ -10,7 +10,7 @@ use nu_engine::command_prelude::*;
 use nu_protocol::{CustomValue, casing::Casing};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{ops::Deref, path::Path, sync::Arc};
 
 #[derive(Debug, Clone)]
 pub struct DatabaseTableValue {
@@ -85,6 +85,16 @@ impl CustomValue for DatabaseTableValue {
     ) -> Result<Value, ShellError> {
         let _ = (self_span, column_name, path_span);
         todo!()
+    }
+
+    fn save(
+        &self,
+        path: Spanned<&Path>,
+        value_span: Span,
+        save_span: Span,
+    ) -> Result<(), ShellError> {
+        let conn = self.conn.lock();
+        super::save_database_value(conn.deref(), path, value_span, save_span)
     }
 }
 
