@@ -1,4 +1,4 @@
-use crate::{Span, ast::PathMember, casing::Casing};
+use crate::{ast::PathMember, casing::Casing, Span};
 
 #[doc(hidden)]
 pub struct TestPathMember<From>(From);
@@ -93,7 +93,7 @@ macro_rules! test_path_member {
 }
 
 #[doc(hidden)]
-#[macro_export(local_inner_macros)]
+#[macro_export]
 macro_rules! test_path_members {
     // hit dot, finalize current segment
     ([$($out:expr,)*] [$($cur:tt)+] . $($rest:tt)*) => {
@@ -122,7 +122,7 @@ macro_rules! test_path_members {
     };
 }
 
-#[macro_export(local_inner_macros)]
+#[macro_export]
 macro_rules! test_cell_path {
     ($($input:tt)*) => {{
         $crate::ast::CellPath {
