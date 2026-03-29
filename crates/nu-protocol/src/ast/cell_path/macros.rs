@@ -90,6 +90,11 @@ macro_rules! test_path_member {
     (($val:ident)!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).insensitive() };
     (($val:ident)?!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
     (($val:ident)!?) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
+    (($val:literal)) => { $crate::ast::cell_path::macros::TestPathMember::from($val).build() };
+    (($val:literal)?) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional() };
+    (($val:literal)!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).insensitive() };
+    (($val:literal)?!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
+    (($val:literal)!?) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
 }
 
 #[doc(hidden)]
@@ -181,10 +186,24 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_cell_path_works() {
+        let name = "col";
+        let index = 3;
         assert_eq!(test_cell_path!(1.abc).to_string(), "$.1.abc");
+        assert_eq!(test_cell_path!((2).something).to_string(), "$.2.something");
+        assert_eq!(test_cell_path!((2)?.something).to_string(), "$.2?.something");
         assert_eq!(test_cell_path!(abc.4).to_string(), "$.abc.4");
         assert_eq!(test_cell_path!(abc).to_string(), "$.abc");
+        assert_eq!(test_cell_path!(abc.def.ghi).to_string(), "$.abc.def.ghi");
+        assert_eq!(test_cell_path!(abc?.def).to_string(), "$.abc?.def");
+        assert_eq!(test_cell_path!(abc!.def).to_string(), "$.abc!.def");
+        assert_eq!(test_cell_path!(abc!?.def!).to_string(), "$.abc!?.def!");
         assert_eq!(test_cell_path!("a b c").to_string(), r#"$."a b c""#);
+        assert_eq!(test_cell_path!("a b c"."d e f").to_string(), r#"$."a b c"."d e f""#);
+        assert_eq!(test_cell_path!("a b c".col!?.2?).to_string(), r#"$."a b c".col!?.2?"#);
+        assert_eq!(test_cell_path!("spaced"?!.value).to_string(), r#"$.spaced!?.value"#);
+        assert_eq!(test_cell_path!((name).value).to_string(), "$.col.value");
+        assert_eq!(test_cell_path!((index)?.value).to_string(), "$.3?.value");
     }
 }
