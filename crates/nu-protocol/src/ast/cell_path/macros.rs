@@ -122,6 +122,26 @@ macro_rules! test_path_members {
     };
 }
 
+/// Build a [`CellPath`](super::CellPath) for tests from a dot-separated token stream.
+///
+/// This macro expands to a `CellPath { members: Vec<PathMember> }` using
+/// [`Span::test_data()`] for all members, making it convenient for unit tests.
+///
+/// Accepted segments:
+/// - Identifiers, which become string members via `stringify!`.
+/// - String or integer literals.
+/// - Parenthesized identifiers to use a variable's value (e.g. `(name)`).
+///
+/// # Examples
+///
+/// ```
+/// # #[macro_use]
+/// # extern crate nu_protocol;
+/// use nu_protocol::test_cell_path;
+///
+/// let path = test_cell_path!("a b c".col!?.2?);
+/// assert_eq!(path.to_string(), r#"$."a b c".col!?.2?"#);
+/// ```
 #[macro_export]
 macro_rules! test_cell_path {
     ($($input:tt)*) => {{
