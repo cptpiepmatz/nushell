@@ -1,5 +1,6 @@
 use crate::{Span, ast::PathMember, casing::Casing};
 
+#[doc(hidden)]
 pub struct TestPathMember<From>(From);
 
 impl<S: Into<String>> From<S> for TestPathMember<String> {
@@ -70,6 +71,7 @@ impl TestPathMember<usize> {
     }
 }
 
+#[doc(hidden)]
 #[rustfmt::skip]
 #[macro_export]
 macro_rules! test_path_member {
