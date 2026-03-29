@@ -73,21 +73,21 @@ impl TestPathMember<usize> {
 #[rustfmt::skip]
 #[macro_export]
 macro_rules! test_path_member {
-    ($val:literal) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).build() };
-    ($val:literal?) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).optional() };
-    ($val:literal!) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).insensitive() };
-    ($val:literal?!) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).optional_and_insensitive() };
-    ($val:literal!?) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).optional_and_insensitive() };
-    ($val:ident) => { $crate::ast::cell_path::r#macro::TestPathMember::from(stringify!($val)).build() };
-    ($val:ident?) => { $crate::ast::cell_path::r#macro::TestPathMember::from(stringify!($val)).optional() };
-    ($val:ident!) => { $crate::ast::cell_path::r#macro::TestPathMember::from(stringify!($val)).insensitive() };
-    ($val:ident?!) => { $crate::ast::cell_path::r#macro::TestPathMember::from(stringify!($val)).optional_and_insensitive() };
-    ($val:ident!?) => { $crate::ast::cell_path::r#macro::TestPathMember::from(stringify!($val)).optional_and_insensitive() };
-    (($val:ident)) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).build() };
-    (($val:ident)?) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).optional() };
-    (($val:ident)!) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).insensitive() };
-    (($val:ident)?!) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).optional_and_insensitive() };
-    (($val:ident)!?) => { $crate::ast::cell_path::r#macro::TestPathMember::from($val).optional_and_insensitive() };
+    ($val:literal) => { $crate::ast::cell_path::macros::TestPathMember::from($val).build() };
+    ($val:literal?) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional() };
+    ($val:literal!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).insensitive() };
+    ($val:literal?!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
+    ($val:literal!?) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
+    ($val:ident) => { $crate::ast::cell_path::macros::TestPathMember::from(stringify!($val)).build() };
+    ($val:ident?) => { $crate::ast::cell_path::macros::TestPathMember::from(stringify!($val)).optional() };
+    ($val:ident!) => { $crate::ast::cell_path::macros::TestPathMember::from(stringify!($val)).insensitive() };
+    ($val:ident?!) => { $crate::ast::cell_path::macros::TestPathMember::from(stringify!($val)).optional_and_insensitive() };
+    ($val:ident!?) => { $crate::ast::cell_path::macros::TestPathMember::from(stringify!($val)).optional_and_insensitive() };
+    (($val:ident)) => { $crate::ast::cell_path::macros::TestPathMember::from($val).build() };
+    (($val:ident)?) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional() };
+    (($val:ident)!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).insensitive() };
+    (($val:ident)?!) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
+    (($val:ident)!?) => { $crate::ast::cell_path::macros::TestPathMember::from($val).optional_and_insensitive() };
 }
 
 #[doc(hidden)]

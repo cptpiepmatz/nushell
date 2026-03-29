@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, fmt::Display};
 
 #[doc(hidden)]
-pub mod r#macro;
+pub mod macros;
 
 /// One level of access of a [`CellPath`]
 #[derive(Debug, Clone, Serialize, Deserialize)]

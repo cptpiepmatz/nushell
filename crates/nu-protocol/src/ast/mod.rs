@@ -2,7 +2,7 @@
 mod attribute;
 mod block;
 mod call;
-mod cell_path;
+pub mod cell_path;
 mod expr;
 mod expression;
 mod import_pattern;
