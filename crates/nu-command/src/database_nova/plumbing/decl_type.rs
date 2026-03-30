@@ -103,6 +103,7 @@ impl DatabaseDeclType {
             NuType::Duration => Self::Duration,
             NuType::Filesize => Self::Filesize,
             NuType::Float => Self::Float,
+            NuType::Glob => Self::Glob,
             NuType::Int => Self::Int,
             NuType::List(_) => Self::List,
             NuType::Nothing => Self::Nothing,
@@ -110,7 +111,6 @@ impl DatabaseDeclType {
             NuType::OneOf(_) => Self::Any,
             NuType::Record(_) => Self::Record,
             NuType::String => Self::String,
-            NuType::Glob => Self::Glob,
             NuType::Table(_) => Self::List,
             NuType::Block | NuType::Closure | NuType::Custom(_) | NuType::Error | NuType::Range => {
                 return Err(DatabaseError::Unsupported {

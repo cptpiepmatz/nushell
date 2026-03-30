@@ -18,6 +18,8 @@ mod continue_;
 mod conversions;
 #[cfg(feature = "sqlite")]
 mod database;
+#[cfg(feature = "sqlite")]
+mod database_nova;
 mod date;
 mod debug_info;
 mod def;
