@@ -44,3 +44,26 @@ fn experimental_options_is_const() -> Result {
     "#;
     test().run(code).expect_value_eq(false)
 }
+
+#[rstest]
+#[nu_test_support::test]
+#[exp(EXAMPLE = true)]
+#[case(true)]
+#[nu_test_support::test]
+#[exp(EXAMPLE = false)]
+#[case(false)]
+fn load_module_depending_on_experimental_option(#[case] loads_module: bool) -> Result {
+    let code = "
+        module example { export def duck [] { '🦆' } }
+
+        const has_example = debug experimental-options 
+        | where identifier == example 
+        | get enabled.0
+
+        use (if $has_example {example}) *
+
+        which duck | is-empty
+    ";
+
+    test().run(code).expect_value_eq(loads_module)
+}
