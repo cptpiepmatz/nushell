@@ -37,34 +37,54 @@ impl Command for DebugExperimentalOptions {
         _input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         Ok(PipelineData::value(
-            Value::list(
-                nu_experimental::ALL
-                    .iter()
-                    .map(|option| {
-                        Value::record(
-                            nu_protocol::record! {
-                                "identifier" => Value::string(option.identifier(), call.head),
-                                "enabled" => Value::bool(option.get(), call.head),
-                                "status" => Value::string(match option.status() {
-                                    Status::OptIn => "opt-in",
-                                    Status::OptOut => "opt-out",
-                                    Status::DeprecatedDiscard => "deprecated-discard",
-                                    Status::DeprecatedDefault => "deprecated-default"
-                                }, call.head),
-                                "description" => Value::string(option.description(), call.head),
-                                "since" => Value::string({
-                                    let (major, minor, patch) = option.since();
-                                    format!("{major}.{minor}.{patch}")
-                                }, call.head),
-                                "issue" => Value::string(option.issue_url(), call.head)
-                            },
-                            call.head,
-                        )
-                    })
-                    .collect(),
-                call.head,
-            ),
+            experimental_options_value(call.head),
             None,
         ))
     }
+
+    fn run_const(
+        &self,
+        _working_set: &StateWorkingSet,
+        call: &Call,
+        _input: PipelineData,
+    ) -> Result<PipelineData, ShellError> {
+        Ok(PipelineData::value(
+            experimental_options_value(call.head),
+            None,
+        ))
+    }
+
+    fn is_const(&self) -> bool {
+        true
+    }
+}
+
+fn experimental_options_value(span: Span) -> Value {
+    Value::list(
+        nu_experimental::ALL
+            .iter()
+            .map(|option| {
+                Value::record(
+                    nu_protocol::record! {
+                        "identifier" => Value::string(option.identifier(), span),
+                        "enabled" => Value::bool(option.get(), span),
+                        "status" => Value::string(match option.status() {
+                            Status::OptIn => "opt-in",
+                            Status::OptOut => "opt-out",
+                            Status::DeprecatedDiscard => "deprecated-discard",
+                            Status::DeprecatedDefault => "deprecated-default"
+                        }, span),
+                        "description" => Value::string(option.description(), span),
+                        "since" => Value::string({
+                            let (major, minor, patch) = option.since();
+                            format!("{major}.{minor}.{patch}")
+                        }, span),
+                        "issue" => Value::string(option.issue_url(), span)
+                    },
+                    span,
+                )
+            })
+            .collect(),
+        span,
+    )
 }
