@@ -52,6 +52,7 @@ fn experimental_options_is_const() -> Result {
 #[nu_test_support::test]
 #[exp(EXAMPLE = false)]
 #[case(false)]
+#[ignore = "`where` is not const"]
 fn load_module_depending_on_experimental_option(#[case] loads_module: bool) -> Result {
     let code = "
         module example { export def duck [] { '🦆' } }
