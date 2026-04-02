@@ -39,7 +39,7 @@ impl DatabaseDeclType {
     const FILESIZE: &str = "NU FILESIZE INT";
     const GLOB: &str = "NU GLOB TEXT";
     const LIST: &str = "NU LIST JSON TEXT";
-    const NOTHING: &str = "NU NOTHING BLOB";
+    const NOTHING: &str = "NU NUTHING BLOB"; // NOTHING is a sqlite reserved keyword
     const RECORD: &str = "NU RECORD JSON TEXT";
 
     #[rustfmt::skip]
