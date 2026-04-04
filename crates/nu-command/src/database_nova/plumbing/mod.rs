@@ -3,7 +3,7 @@ use std::fmt::{Display, Write};
 use crate::database_nova::{error::DatabaseError, plumbing::decl_type::DatabaseDeclType};
 
 use chrono::DateTime;
-use nu_protocol::{Span, Value as NuValue, shell_error::io::IoError};
+use nu_protocol::{FromValue, IntoValue, Span, Value as NuValue, shell_error::io::IoError};
 use value::SqlValue;
 
 pub mod column;
@@ -35,22 +35,25 @@ fn nu_value_to_sql_value(value: NuValue) -> Result<SqlValue, DatabaseError> {
         NuValue::Binary { val, .. } => Ok(SqlValue::Blob(val.into())),
         NuValue::CellPath { val, .. } => Ok(SqlValue::Text(format!("{val}"))),
         NuValue::Nothing { .. } => Ok(SqlValue::Null),
-        val => match nu_json::to_string(&val) {
-            Ok(val) => Ok(SqlValue::Text(val)),
-            Err(nu_json::Error::Syntax(..)) => unreachable!("we produce valid json syntax"),
-            Err(nu_json::Error::FromUtf8(error)) => Err(DatabaseError::FromUtf8 {
-                span: val.span(),
-                error,
-            }),
-            Err(nu_json::Error::Io(err)) => {
-                Err(DatabaseError::Io(IoError::new_with_additional_context(
-                    err,
-                    val.span(),
-                    None,
-                    "Error while converting nu value into database value",
-                )))
+        val => {
+            let span = val.span();
+            let val = nu_json::Value::from_value(val).map_err(DatabaseError::Shell)?;
+            match nu_json::to_string(&val) {
+                Ok(val) => Ok(SqlValue::Text(val)),
+                Err(nu_json::Error::Syntax(..)) => unreachable!("we produce valid json syntax"),
+                Err(nu_json::Error::FromUtf8(error)) => {
+                    Err(DatabaseError::FromUtf8 { span, error })
+                }
+                Err(nu_json::Error::Io(err)) => {
+                    Err(DatabaseError::Io(IoError::new_with_additional_context(
+                        err,
+                        span,
+                        None,
+                        "Error while converting nu value into database value",
+                    )))
+                }
             }
-        },
+        }
     }
 }
 
@@ -74,27 +77,49 @@ fn sql_value_to_nu_value(
         (SV::Text(val), Some(DDT::String)) => Ok(NV::string(val, span)),
         (SV::Text(val), Some(DDT::Bool)) if val == "true" => Ok(NV::bool(true, span)),
         (SV::Text(val), Some(DDT::Bool)) if val == "false" => Ok(NV::bool(false, span)),
-        (SV::Text(_val), Some(DDT::Bool)) => Err(DatabaseError::Todo {
-            msg: "Handle parsing errors in rusqlite conversion to nu values".into(),
+        (SV::Text(val), Some(DDT::Bool)) => Err(DatabaseError::ParseValue {
+            raw: val,
+            expected: DDT::Bool,
+            msg: "Expected `true` or `false`".into(),
             span,
         }),
-        (SV::Text(_val), Some(DDT::Glob)) => Err(DatabaseError::Todo {
-            msg: "Implement glob conversion back from rusqlite value".into(),
-            span,
-        }),
-        (SV::Text(val), Some(DDT::Date)) => match DateTime::parse_from_rfc3339(&val) {
-            Ok(dt) => Ok(NV::date(dt, span)),
-            Err(err) => Err(DatabaseError::Todo {
-                msg: "Handle datetime parsing error".into(),
+        (SV::Text(val), Some(DDT::Glob)) => match val.split_once(':') {
+            Some(("true", val)) => Ok(NV::glob(val, true, span)),
+            Some(("false", val)) => Ok(NV::glob(val, false, span)),
+            Some((b, _)) => Err(DatabaseError::ParseValue {
+                raw: val,
+                expected: DDT::Glob,
+                msg: "Expected `true` or `false` before separator".into(),
+                span,
+            }),
+            None => Err(DatabaseError::ParseValue {
+                raw: val,
+                expected: DDT::Glob,
+                msg: "Invalid format, expected schema `{no_expand}:{glob}`".into(),
                 span,
             }),
         },
-        (SV::Text(_val), Some(DDT::CellPath)) => Err(DatabaseError::Todo {
-            msg: "Implement cell path parsing to read cell paths from sqlite".into(),
-            span,
-        }),
-        (SV::Text(val), _) => match nu_json::from_str::<NuValue>(&val) {
-            Ok(val) => Ok(val.with_span(span)),
+        (SV::Text(val), Some(DDT::Date)) => match DateTime::parse_from_rfc3339(&val) {
+            Ok(dt) => Ok(NV::date(dt, span)),
+            Err(err) => Err(DatabaseError::ParseValue {
+                raw: val,
+                expected: DDT::Date,
+                msg: err.to_string().into(),
+                span,
+            }),
+        },
+        (SV::Text(val), Some(DDT::CellPath)) => match nuon::from_nuon(&val, Some(span)) {
+            Err(err) => Err(DatabaseError::Shell(err)),
+            Ok(val @ NV::CellPath { .. }) => Ok(val),
+            Ok(_) => Err(DatabaseError::ParseValue {
+                raw: val,
+                expected: DDT::CellPath,
+                msg: "Could be parsed as a nushell value, but not as a cell path".into(),
+                span,
+            }),
+        },
+        (SV::Text(val), _) => match nu_json::from_str::<nu_json::Value>(&val) {
+            Ok(val) => Ok(val.into_value(span)),
             Err(nu_json::Error::Syntax(..)) => Ok(NuValue::string(val, span)),
             Err(nu_json::Error::FromUtf8(error)) => Err(DatabaseError::FromUtf8 { span, error }),
             Err(nu_json::Error::Io(err)) => {

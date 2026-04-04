@@ -108,6 +108,13 @@ pub enum DatabaseError {
         span: Span,
     },
 
+    ParseValue {
+        raw: String,
+        expected: DatabaseDeclType,
+        msg: Cow<'static, str>,
+        span: Span,
+    },
+
     // TODO: mark this variant as deprecated to find missing pieces
     Todo {
         msg: Cow<'static, str>,
@@ -367,6 +374,16 @@ impl From<DatabaseError> for ShellError {
                     actual: value.get_type(),
                     span: value.span(),
                 }]),
+            ),
+
+            DatabaseError::ParseValue {
+                raw,
+                expected,
+                msg,
+                span,
+            } => ShellError::Generic(
+                GenericError::new(format!("Could parse {raw:?} as {expected}"), msg, span)
+                    .with_code("nu::shell::database::value::parse"),
             ),
 
             DatabaseError::Todo { msg, span } => generic_error(
