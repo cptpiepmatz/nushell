@@ -169,4 +169,93 @@ pub trait CustomValue: fmt::Debug + Send + Sync {
     fn is_iterable(&self) -> bool {
         false
     }
+
+    /// Returns an iterator over the contents of this custom value.
+    ///
+    /// Commands such as `each`, `where`, and other list-like operations can use this to iterate
+    /// over a custom value lazily instead of first converting it into a base value.
+    ///
+    /// Implement this method if the custom value can be iterated from front to back.
+    ///
+    /// The default implementation tries to reuse [`CustomValue::double_ended_iter`], since a
+    /// double-ended iterator can also be used as a regular iterator.
+    /// If only forward iteration is supported, override this method directly and leave
+    /// [`CustomValue::double_ended_iter`] as is.
+    ///
+    /// Returning [`CustomValueCapability::Unsupported`] indicates that this custom value does not
+    /// support lazy iteration.
+    ///
+    /// Returning [`CustomValueCapability::Error`] indicates that the value supports iteration, but
+    /// creating the iterator failed.
+    fn iter(&self) -> CustomValueCapability<Box<dyn CustomValueIterator>> {
+        use CustomValueCapability as CVC;
+        match self.double_ended_iter() {
+            CVC::Unsupported => CVC::Unsupported,
+            CVC::Error(err) => CVC::Error(err),
+            CVC::Ready(iter) => CVC::Ready(iter as Box<dyn CustomValueIterator>),
+        }
+    }
+
+    /// Returns a double-ended iterator over the contents of this custom value.
+    ///
+    /// A double-ended iterator supports both forward and backward iteration and can be used by
+    /// commands that need to read values from the back or reverse the iteration order.
+    ///
+    /// Override this method if the custom value supports double-ended iteration. 
+    /// Implementers only need to override this method, not [`CustomValue::iter`], because the 
+    /// default implementation of [`CustomValue::iter`] automatically reuses a double-ended iterator
+    /// as a regular iterator.
+    ///
+    /// The default implementation returns [`CustomValueCapability::Unsupported`].
+    fn double_ended_iter(&self) -> CustomValueCapability<Box<dyn CustomValueDoubleEndedIterator>> {
+        CustomValueCapability::Unsupported
+    }
 }
+
+/// Result of requesting a capability from a [`CustomValue`].
+///
+/// This is used for optional features that a custom value may or may not implement,
+/// such as lazy iteration.
+///
+/// A capability can be unsupported, successfully constructed, or fail during
+/// construction.
+pub enum CustomValueCapability<T> {
+    /// The custom value does not implement this capability.
+    Unsupported,
+
+    /// The capability was successfully constructed and can be used.
+    Ready(T),
+
+    /// The custom value supports this capability, but constructing it failed.
+    Error(ShellError),
+}
+
+/// Iterator trait for [`CustomValue`].
+///
+/// This is returned by [`CustomValue::iter`] and allows commands to consume a custom value lazily
+/// instead of collecting it as another value first.
+///
+/// Iterators yield [`Value`] items directly. 
+/// They may yield [`Value::Error`] to represent an error during iteration, or [`Value::Custom`] to
+/// yield another custom value.
+pub trait CustomValueIterator: Iterator<Item = Value> {
+    /// Returns the exact number of remaining elements, if known.
+    ///
+    /// Commands that only need the remaining length of the iterator may use this instead of
+    /// advancing the iterator.
+    ///
+    /// Unlike [`Iterator::size_hint`], this must be exact when present. 
+    /// Return [`None`] if the remaining length is not known exactly.
+    fn len(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// Double-ended iterator trait for [`CustomValue`].
+///
+/// This extends [`CustomValueIterator`] with support for iterating from the back as well as the
+/// front.
+///
+/// It can be returned from [`CustomValue::double_ended_iter`] to support commands that reverse the
+/// iteration order or pull elements from the end.
+pub trait CustomValueDoubleEndedIterator: CustomValueIterator + DoubleEndedIterator {}
