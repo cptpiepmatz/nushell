@@ -162,7 +162,7 @@ jobs:
       - name: cargo test
         if: contains(matrix.target.steps, 'test') && !contains(matrix.workspace.skip, 'test')
         working-directory: ${{ matrix.workspace.path }}
-        run: cargo test ${{ matrix.target.options }} --profile ${{ matrix.workspace.profile }}
+        run: cargo test ${{ matrix.target.options }} --profile ${{ matrix.workspace.profile }} -- --format pretty
 
       - name: Assert Clean Repo
         run: git diff --quiet && git diff --cached --quiet
