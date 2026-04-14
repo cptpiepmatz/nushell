@@ -1,8 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
-    hash::{BuildHasher, DefaultHasher, RandomState},
+    collections::HashMap,
+    hash::{BuildHasher, RandomState},
     io,
-    ops::Deref,
     sync::{
         LazyLock,
         mpsc::{self, RecvTimeoutError, SyncSender},
@@ -14,7 +13,10 @@ use std::{
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use kitest::formatter::{
     FmtTestOutcome, FmtTestStart, GroupedTestFormatter, TestFormatter,
-    common::label::{FromGroupCtx, GroupLabel},
+    common::{
+        color::ColorSetting,
+        label::{FromGroupCtx, GroupLabel},
+    },
     pretty::PrettyFormatter,
 };
 
@@ -27,12 +29,22 @@ static RANDOM_STATE: LazyLock<RandomState> = LazyLock::new(|| RandomState::new()
 
 type InnerFormatter<'t> = PrettyFormatter<'t, io::Stdout, GroupLabel<FromGroupCtx>, Extra>;
 
+#[derive(Debug)]
 pub struct ProgressFormatter<'t> {
     formatter: InnerFormatter<'t>,
     multi_progress: MultiProgress,
     progress_bars: HashMap<&'t str, ProgressBar>,
     ticker: Option<JoinHandle<()>>,
     ticker_tx: SyncSender<TickerEvent>,
+}
+
+impl<'t> ProgressFormatter<'t> {
+    pub fn with_color_setting(self, color_setting: impl Into<ColorSetting>) -> Self {
+        Self {
+            formatter: self.formatter.with_color_setting(color_setting),
+            ..self
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -119,7 +131,7 @@ impl<'t> TestFormatter<'t, Extra> for ProgressFormatter<'t> {
     fn fmt_test_start(&mut self, data: Self::TestStart) -> Result<(), Self::Error> {
         let id = RANDOM_STATE.hash_one(data.test_name);
         let pb = ProgressBar::new_spinner()
-            .with_message(data.test_name.to_string())
+            .with_message(format!("test {}", data.test_name))
             .with_style(
                 ProgressStyle::default_spinner()
                     .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
@@ -142,8 +154,6 @@ impl<'t> TestFormatter<'t, Extra> for ProgressFormatter<'t> {
             pb.finish_and_clear();
             self.multi_progress.remove(&pb);
         }
-        // self.multi_progress
-        //     .println(format!("{} END", data.test_name))?;
         self.ticker_tx
             .send(TickerEvent::Remove { id })
             .expect("ticker disconnected");
@@ -184,21 +194,33 @@ impl<'t> GroupedTestFormatter<'t, Extra, GroupKey, GroupCtx> for ProgressFormatt
     >>::GroupedRunOutcomes;
 
     fn fmt_grouped_run_start(&mut self, data: Self::GroupedRunStart) -> Result<(), Self::Error> {
-        self.formatter.fmt_grouped_run_start(data)
+        <InnerFormatter<'t> as GroupedTestFormatter<'t, Extra, GroupKey, GroupCtx>>::fmt_grouped_run_start(
+            &mut self.formatter,
+            data,
+        )
     }
 
     fn fmt_group_start(&mut self, data: Self::GroupStart) -> Result<(), Self::Error> {
-        self.formatter.fmt_group_start(data)
+        <InnerFormatter<'t> as GroupedTestFormatter<'t, Extra, GroupKey, GroupCtx>>::fmt_group_start(
+            &mut self.formatter,
+            data,
+        )
     }
 
     fn fmt_group_outcomes(&mut self, data: Self::GroupOutcomes) -> Result<(), Self::Error> {
-        self.formatter.fmt_group_outcomes(data)
+        <InnerFormatter<'t> as GroupedTestFormatter<'t, Extra, GroupKey, GroupCtx>>::fmt_group_outcomes(
+            &mut self.formatter,
+            data,
+        )
     }
 
     fn fmt_grouped_run_outcomes(
         &mut self,
         data: Self::GroupedRunOutcomes,
     ) -> Result<(), Self::Error> {
-        self.formatter.fmt_group_outcomes(data)
+        <InnerFormatter<'t> as GroupedTestFormatter<'t, Extra, GroupKey, GroupCtx>>::fmt_grouped_run_outcomes(
+            &mut self.formatter,
+            data,
+        )
     }
 }

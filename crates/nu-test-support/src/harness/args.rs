@@ -18,6 +18,7 @@ pub struct Args {
 
 #[derive(Debug)]
 pub enum Format {
+    Progress,
     Pretty,
     Terse,
 }
@@ -28,7 +29,7 @@ impl Default for Args {
             color: ColorSetting::Automatic,
             exact: false,
             filter: Vec::new(),
-            format: Format::Pretty,
+            format: Format::Progress,
             help: false,
             ignored: false,
             list: false,
@@ -70,6 +71,7 @@ impl Args {
                 Long("format") => {
                     let color: String = parser.value()?.parse()?;
                     match color.as_str() {
+                        "progress" => args.format = Format::Progress,
                         "pretty" => args.format = Format::Pretty,
                         "terse" => args.format = Format::Terse,
                         _ => todo!(),
@@ -109,15 +111,15 @@ impl Args {
         line!("  [FILTERS...]  Names or patterns of tests to run");
         line!();
         line!("Options:");
-        line!("  --color <auto|always|never>  Control colored output");
-        line!("  --exact                      Match filters exactly");
-        line!("  --format <pretty|terse>      Choose output style");
-        line!("  --help                       Show this help text");
-        line!("  --ignored                    Run only ignored tests");
-        line!("  --list                       List tests without running them");
-        line!("  --nocapture                  Print test output directly");
-        line!("  --skip <FILTER>              Skip matching tests, can be used multiple times");
-        line!("  --test-threads <N>           Number of test threads to use, default is {}", *super::DEFAULT_THREAD_COUNT);
+        line!("  --color <auto|always|never>       Control colored output");
+        line!("  --exact                           Match filters exactly");
+        line!("  --format <progress|pretty|terse>  Choose output style");
+        line!("  --help                            Show this help text");
+        line!("  --ignored                         Run only ignored tests");
+        line!("  --list                            List tests without running them");
+        line!("  --nocapture                       Print test output directly");
+        line!("  --skip <FILTER>                   Skip matching tests, can be used multiple times");
+        line!("  --test-threads <N>                Number of test threads to use, default is {}", *super::DEFAULT_THREAD_COUNT);
         line!();
         line!("Test Attributes:");
         line!("  #[test]                      Mark a function as a test. Must take no arguments.");
