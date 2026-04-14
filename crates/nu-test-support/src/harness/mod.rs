@@ -9,6 +9,7 @@ use crate::{
     self as nu_test_support,
     harness::{
         args::{Args, Format},
+        formatter::ProgressFormatter,
         group::{GroupRunner, Grouper},
         test::TestRunner,
     },
@@ -16,7 +17,10 @@ use crate::{
 
 use kitest::{
     filter::DefaultFilter,
-    formatter::{pretty::PrettyFormatter, terse::TerseFormatter},
+    formatter::{
+        pretty::{self, PrettyFormatter},
+        terse::TerseFormatter,
+    },
     group::TestGroupBTreeMap,
 };
 use nu_ansi_term::Color;
@@ -28,6 +32,7 @@ pub use linkme;
 pub use kitest::prelude::*;
 
 mod args;
+pub(crate) mod formatter;
 pub(crate) mod group;
 pub(crate) mod test;
 
@@ -41,11 +46,13 @@ pub mod macros {
 }
 
 pub const DEFAULT_THREAD_COUNT_MUL: NonZeroUsize = NonZeroUsize::new(4).unwrap();
-pub static DEFAULT_THREAD_COUNT: LazyLock<NonZeroUsize> = LazyLock::new(|| {
-    std::thread::available_parallelism()
-        .map(|n| n.saturating_mul(DEFAULT_THREAD_COUNT_MUL))
-        .unwrap_or(NonZeroUsize::MIN)
-});
+// pub static DEFAULT_THREAD_COUNT: LazyLock<NonZeroUsize> = LazyLock::new(|| {
+//     std::thread::available_parallelism()
+//         .map(|n| n.saturating_mul(DEFAULT_THREAD_COUNT_MUL))
+//         .unwrap_or(NonZeroUsize::MIN)
+// });
+pub static DEFAULT_THREAD_COUNT: LazyLock<NonZeroUsize> =
+    LazyLock::new(|| const { NonZeroUsize::new(8).expect("non-zero") });
 
 /// All collected tests.
 #[linkme::distributed_slice]
@@ -92,17 +99,23 @@ pub fn main() -> ExitCode {
         .with_runner(runner)
         .with_filter(filter);
 
-    let pretty_formatter = PrettyFormatter::default()
-        .with_color_setting(args.color)
-        .with_group_label_from_ctx();
-    let terse_formatter = TerseFormatter::default()
-        .with_color_setting(args.color)
-        .with_group_label_from_ctx();
+    // let pretty_formatter = PrettyFormatter::default()
+    //     .with_color_setting(args.color)
+    //     .with_group_label_from_ctx();
+    // let terse_formatter = TerseFormatter::default()
+    //     .with_color_setting(args.color)
+    //     .with_group_label_from_ctx();
 
-    match (args.format, args.list) {
-        (Format::Pretty, true) => harness.with_formatter(pretty_formatter).list().exit_code(),
-        (Format::Pretty, false) => harness.with_formatter(pretty_formatter).run().exit_code(),
-        (Format::Terse, true) => harness.with_formatter(terse_formatter).list().exit_code(),
-        (Format::Terse, false) => harness.with_formatter(terse_formatter).run().exit_code(),
-    }
+    harness
+        .with_formatter(ProgressFormatter::default())
+        .run()
+        .exit_code()
+    // harness.with_formatter(pretty_formatter).run().exit_code()
+
+    // match (args.format, args.list) {
+    //     (Format::Pretty, true) => harness.with_formatter(pretty_formatter).list().exit_code(),
+    //     (Format::Pretty, false) => harness.with_formatter(pretty_formatter).run().exit_code(),
+    //     (Format::Terse, true) => harness.with_formatter(terse_formatter).list().exit_code(),
+    //     (Format::Terse, false) => harness.with_formatter(terse_formatter).run().exit_code(),
+    // }
 }

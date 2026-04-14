@@ -4731,6 +4731,7 @@ version = "0.112.2"
 dependencies = [
  "bytes",
  "gatekeeper",
+ "indicatif",
  "itertools 0.14.0",
  "kitest",
  "lexopt",
