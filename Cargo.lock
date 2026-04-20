@@ -5018,6 +5018,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nu-test"
+version = "0.112.3"
+dependencies = [
+ "nu-test-support",
+]
+
+[[package]]
 name = "nu-test-support"
 version = "0.112.3"
 dependencies = [

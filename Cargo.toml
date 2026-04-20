@@ -74,6 +74,7 @@ members = [
   "crates/nu-system",
   "crates/nu-table",
   "crates/nu-term-grid",
+  "crates/nu-test",
   "crates/nu-test-support",
   "crates/nu-test-support-macros",
   "crates/nu-utils",
