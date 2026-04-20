@@ -5021,7 +5021,18 @@ dependencies = [
 name = "nu-test"
 version = "0.112.3"
 dependencies = [
+ "nu-cmd-extra",
+ "nu-cmd-lang",
+ "nu-command",
+ "nu-engine",
+ "nu-experimental",
+ "nu-glob",
+ "nu-parser",
+ "nu-path",
+ "nu-protocol",
+ "nu-std",
  "nu-test-support",
+ "nu-utils",
 ]
 
 [[package]]
