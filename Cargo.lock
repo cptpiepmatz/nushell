@@ -5033,6 +5033,7 @@ dependencies = [
  "nu-std",
  "nu-test-support",
  "nu-utils",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
