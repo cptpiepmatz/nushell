@@ -12,12 +12,12 @@ use nu_protocol::{
 use thiserror::Error;
 
 pub struct Discovery {
-    engine_state: EngineState,
-    tests: Vec<DiscoveredTest>,
-    before_each: Vec<DiscoveredLifecycleHook>,
-    after_each: Vec<DiscoveredLifecycleHook>,
-    before_all: Vec<DiscoveredLifecycleHook>,
-    after_all: Vec<DiscoveredLifecycleHook>,
+    pub engine_state: EngineState,
+    pub tests: Vec<DiscoveredTest>,
+    pub before_each: Vec<DiscoveredLifecycleHook>,
+    pub after_each: Vec<DiscoveredLifecycleHook>,
+    pub before_all: Vec<DiscoveredLifecycleHook>,
+    pub after_all: Vec<DiscoveredLifecycleHook>,
 }
 
 impl Debug for Discovery {
@@ -42,18 +42,18 @@ impl Debug for Discovery {
 
 #[derive(Debug)]
 pub struct DiscoveredTest {
-    block_id: BlockId,
-    name: String,
-    ignore: Option<Value>,
-    test_value: Value,
+    pub block_id: BlockId,
+    pub name: String,
+    pub ignore: Option<Value>,
+    pub test_value: Value,
     // TODO: add more relevant fields
 }
 
 #[derive(Debug)]
 pub struct DiscoveredLifecycleHook {
-    block_id: BlockId,
-    name: String,
-    value: Value,
+    pub block_id: BlockId,
+    pub name: String,
+    pub value: Value,
 }
 
 #[derive(Debug, Error)]

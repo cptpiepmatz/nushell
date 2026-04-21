@@ -25,6 +25,7 @@ nu-protocol = { path = "../nu-protocol", version = "0.112.3" }
 nu-std = { path = "../nu-std", version = "0.112.3" }
 nu-utils = { path = "../nu-utils", version = "0.112.3" }
 
+kitest = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -5021,6 +5021,7 @@ dependencies = [
 name = "nu-test"
 version = "0.112.3"
 dependencies = [
+ "kitest",
  "nu-cmd-extra",
  "nu-cmd-lang",
  "nu-command",

@@ -7,4 +7,7 @@ def something-before-each [] {}
 def something-at-the-end [] {}
 
 @test
-def something [] {}
+def something-to-test [] {}
+
+@test
+def another-test [] {}

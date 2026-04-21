@@ -7,9 +7,10 @@ use nu_test_support::harness::main;
 #[macro_use]
 extern crate nu_test_support;
 
-mod discover;
+pub mod discover;
+pub mod test;
 
-fn engine_state() -> EngineState {
+pub fn engine_state() -> EngineState {
     let engine_state = nu_cmd_lang::create_default_context();
     let engine_state = nu_command::add_shell_command_context(engine_state);
     let mut engine_state = nu_cmd_extra::add_extra_command_context(engine_state);
