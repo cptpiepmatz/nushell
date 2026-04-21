@@ -1,26 +1,23 @@
 use std::{
-    any::Any,
-    collections::HashSet,
+    collections::HashMap,
     fmt::{self, Debug},
     mem,
-    sync::LazyLock,
 };
 
-use nu_engine::scope::ScopeData;
 use nu_path::Path;
 use nu_protocol::{
-    CompileError, Id, ParseError, ShellError, Span,
-    engine::{DEFAULT_OVERLAY_NAME, EngineState, Stack, StateWorkingSet},
+    BlockId, CompileError, ParseError, ShellError, Value,
+    engine::{EngineState, StateWorkingSet},
 };
 use thiserror::Error;
 
 pub struct Discovery {
     engine_state: EngineState,
     tests: Vec<DiscoveredTest>,
-    before_each: Vec<String>,
-    after_each: Vec<String>,
-    before_all: Vec<String>,
-    after_all: Vec<String>,
+    before_each: Vec<DiscoveredLifecycleHook>,
+    after_each: Vec<DiscoveredLifecycleHook>,
+    before_all: Vec<DiscoveredLifecycleHook>,
+    after_all: Vec<DiscoveredLifecycleHook>,
 }
 
 impl Debug for Discovery {
@@ -45,9 +42,18 @@ impl Debug for Discovery {
 
 #[derive(Debug)]
 pub struct DiscoveredTest {
+    block_id: BlockId,
     name: String,
-    ignore: bool,
+    ignore: Option<Value>,
+    test_value: Value,
     // TODO: add more relevant fields
+}
+
+#[derive(Debug)]
+pub struct DiscoveredLifecycleHook {
+    block_id: BlockId,
+    name: String,
+    value: Value,
 }
 
 #[derive(Debug, Error)]
@@ -62,7 +68,10 @@ pub enum DiscoverError {
     MergeDelta(#[from] ShellError),
 }
 
-pub fn discover(mut engine_state: EngineState, path: impl AsRef<Path>) -> Result<Discovery, DiscoverError> {
+pub fn discover(
+    mut engine_state: EngineState,
+    path: impl AsRef<Path>,
+) -> Result<Discovery, DiscoverError> {
     let mut working_set = StateWorkingSet::new(&engine_state);
     let code = format!("overlay new testing; source '{}'", path.as_ref().display());
     nu_parser::parse(&mut working_set, None, code.as_bytes(), false);
@@ -85,7 +94,8 @@ pub fn discover(mut engine_state: EngineState, path: impl AsRef<Path>) -> Result
         .skip(1) // skip first overlay which is 'zero'
         .map(|(_, overlay)| overlay.decls.values())
         .flatten()
-        .map(|decl_id| engine_state.get_decl(*decl_id));
+        .map(|decl_id| engine_state.get_decl(*decl_id))
+        .flat_map(|command| command.block_id().map(|block_id| (command, block_id)));
 
     let mut tests = Vec::new();
     let mut before_each = Vec::new();
@@ -93,30 +103,50 @@ pub fn discover(mut engine_state: EngineState, path: impl AsRef<Path>) -> Result
     let mut before_all = Vec::new();
     let mut after_all = Vec::new();
 
-    for command in commands {
+    for (command, block_id) in commands {
         let name = command.name();
-        let attributes: HashSet<_> = command
-            .attributes()
-            .into_iter()
-            .map(|(attr, _)| attr)
-            .collect();
+        let mut attributes: HashMap<_, _> = command.attributes().into_iter().collect();
 
-        if attributes.contains("test") {
+        if let Some(test_value) = attributes.remove("test") {
             tests.push(DiscoveredTest {
+                block_id,
                 name: name.to_string(),
-                ignore: attributes.contains("ignore"),
+                ignore: attributes.remove("ignore"),
+                test_value,
             });
         }
 
-        let push_if_present = |attr, list: &mut Vec<_>| {
-            if attributes.contains(attr) {
-                list.push(name.to_string());
-            }
-        };
-        push_if_present("before-each", &mut before_each);
-        push_if_present("after-each", &mut after_each);
-        push_if_present("before-all", &mut before_all);
-        push_if_present("after-all", &mut after_all);
+        if let Some(value) = attributes.remove("before-each") {
+            before_each.push(DiscoveredLifecycleHook {
+                block_id,
+                name: name.to_string(),
+                value,
+            })
+        }
+
+        if let Some(value) = attributes.remove("after-each") {
+            after_each.push(DiscoveredLifecycleHook {
+                block_id,
+                name: name.to_string(),
+                value,
+            })
+        }
+
+        if let Some(value) = attributes.remove("before-all") {
+            before_all.push(DiscoveredLifecycleHook {
+                block_id,
+                name: name.to_string(),
+                value,
+            })
+        }
+
+        if let Some(value) = attributes.remove("after-all") {
+            after_all.push(DiscoveredLifecycleHook {
+                block_id,
+                name: name.to_string(),
+                value,
+            })
+        }
     }
 
     Ok(Discovery {
@@ -139,6 +169,6 @@ mod tests {
         let discovery = discover(engine_state, "tests/example.nu").unwrap();
         dbg!(discovery);
 
-        todo!()
+        // todo!()
     }
 }

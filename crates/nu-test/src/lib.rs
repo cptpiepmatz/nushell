@@ -1,4 +1,4 @@
-use nu_protocol::{Config, engine::EngineState, IntoValue, Span};
+use nu_protocol::{Config, IntoValue, Span, engine::EngineState};
 
 #[cfg(test)]
 use nu_test_support::harness::main;
