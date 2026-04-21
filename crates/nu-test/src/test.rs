@@ -1,4 +1,7 @@
-use std::{error::Error, fmt::{self, Display}};
+use std::{
+    error::Error,
+    fmt::{self, Display},
+};
 
 use kitest::{
     Whatever,
@@ -7,7 +10,9 @@ use kitest::{
     test::{Test, TestFn, TestFnHandle, TestMeta, TestResult},
 };
 use nu_protocol::{
-    BlockId, PipelineData, ShellError, Value, debugger::WithoutDebug, engine::{EngineState, Stack}
+    BlockId, PipelineData, ShellError, Value,
+    debugger::WithoutDebug,
+    engine::{EngineState, Stack},
 };
 
 use crate::discover::Discovery;
@@ -62,11 +67,52 @@ struct TestErrors {
 
 impl Display for TestErrors {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        if self.is_empty() {
+            return write!(f, "no test errors");
+        }
+
+        if !self.before_each_errors.is_empty() {
+            writeln!(f, "before_each hook failures:")?;
+            for (i, err) in self.before_each_errors.iter().enumerate() {
+                writeln!(f, "  {}. {err}", i + 1)?;
+            }
+        }
+
+        if let Some(err) = &self.test_error {
+            writeln!(f, "test body failure: {err}")?;
+        }
+
+        if !self.after_each_errors.is_empty() {
+            writeln!(f, "after_each hook failures:")?;
+            for (i, err) in self.after_each_errors.iter().enumerate() {
+                writeln!(f, "  {}. {err}", i + 1)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
-impl Error for TestErrors {}
+impl Error for TestErrors {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.primary_error().map(|e| e as &(dyn Error + 'static))
+    }
+}
+
+impl TestErrors {
+    fn is_empty(&self) -> bool {
+        self.before_each_errors.is_empty()
+            && self.test_error.is_none()
+            && self.after_each_errors.is_empty()
+    }
+
+    fn primary_error(&self) -> Option<&ShellError> {
+        self.test_error
+            .as_ref()
+            .or_else(|| self.before_each_errors.first())
+            .or_else(|| self.after_each_errors.first())
+    }
+}
 
 impl TestFn for NushellTestFn {
     fn call_test(&self) -> TestResult {
@@ -109,10 +155,7 @@ impl TestFn for NushellTestFn {
             }
         }
 
-        if !errors.before_each_errors.is_empty()
-            || errors.test_error.is_none()
-            || !errors.after_each_errors.is_empty()
-        {
+        if !errors.is_empty() {
             return TestResult(Err(Whatever::from(errors)));
         }
 
