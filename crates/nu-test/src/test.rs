@@ -1,3 +1,5 @@
+use std::{error::Error, fmt::{self, Display}};
+
 use kitest::{
     Whatever,
     ignore::IgnoreStatus,
@@ -5,9 +7,7 @@ use kitest::{
     test::{Test, TestFn, TestFnHandle, TestMeta, TestResult},
 };
 use nu_protocol::{
-    BlockId, PipelineData, Value,
-    debugger::WithoutDebug,
-    engine::{EngineState, Stack},
+    BlockId, PipelineData, ShellError, Value, debugger::WithoutDebug, engine::{EngineState, Stack}
 };
 
 use crate::discover::Discovery;
@@ -53,9 +53,25 @@ struct NushellTestFn {
     after_each_block_ids: Vec<BlockId>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq)]
+struct TestErrors {
+    before_each_errors: Vec<ShellError>,
+    test_error: Option<ShellError>,
+    after_each_errors: Vec<ShellError>,
+}
+
+impl Display for TestErrors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        todo!()
+    }
+}
+
+impl Error for TestErrors {}
+
 impl TestFn for NushellTestFn {
     fn call_test(&self) -> TestResult {
         let mut stack = Stack::new();
+        let mut errors = TestErrors::default();
 
         for block_id in self.before_each_block_ids.iter().copied() {
             let block = self.engine_state.get_block(block_id);
@@ -65,19 +81,20 @@ impl TestFn for NushellTestFn {
                 block,
                 PipelineData::empty(),
             ) {
-                return TestResult(Err(Whatever::from(err)));
+                errors.before_each_errors.push(err);
             }
         }
 
-        let test_block = self.engine_state.get_block(self.test_block_id);
-        if let Err(err) = nu_engine::eval_block::<WithoutDebug>(
-            &self.engine_state,
-            &mut stack,
-            test_block,
-            PipelineData::empty(),
-        ) {
-            // should we return here or first try to do the after each?
-            return TestResult(Err(Whatever::from(err)));
+        if errors.before_each_errors.is_empty() {
+            let test_block = self.engine_state.get_block(self.test_block_id);
+            if let Err(err) = nu_engine::eval_block::<WithoutDebug>(
+                &self.engine_state,
+                &mut stack,
+                test_block,
+                PipelineData::empty(),
+            ) {
+                errors.test_error = Some(err);
+            }
         }
 
         for block_id in self.after_each_block_ids.iter().copied() {
@@ -88,8 +105,15 @@ impl TestFn for NushellTestFn {
                 block,
                 PipelineData::empty(),
             ) {
-                return TestResult(Err(Whatever::from(err)));
+                errors.after_each_errors.push(err);
             }
+        }
+
+        if !errors.before_each_errors.is_empty()
+            || errors.test_error.is_none()
+            || !errors.after_each_errors.is_empty()
+        {
+            return TestResult(Err(Whatever::from(errors)));
         }
 
         TestResult(Ok(None))
