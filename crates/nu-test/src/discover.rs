@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fmt::{self, Debug},
     mem,
 };
 
@@ -11,6 +10,7 @@ use nu_protocol::{
 };
 use thiserror::Error;
 
+#[derive(Debug)]
 pub struct Discovery {
     pub engine_state: EngineState,
     pub tests: Vec<DiscoveredTest>,
@@ -18,26 +18,6 @@ pub struct Discovery {
     pub after_each: Vec<DiscoveredLifecycleHook>,
     pub before_all: Vec<DiscoveredLifecycleHook>,
     pub after_all: Vec<DiscoveredLifecycleHook>,
-}
-
-impl Debug for Discovery {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct EngineStateDebug;
-        impl Debug for EngineStateDebug {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "EngineState {{...}}")
-            }
-        }
-
-        f.debug_struct("Discovery")
-            .field("engine_state", &EngineStateDebug)
-            .field("tests", &self.tests)
-            .field("before_each", &self.before_each)
-            .field("after_each", &self.after_each)
-            .field("before_all", &self.before_all)
-            .field("after_all", &self.after_all)
-            .finish()
-    }
 }
 
 #[derive(Debug)]
