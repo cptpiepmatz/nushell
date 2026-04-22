@@ -1,6 +1,6 @@
 use std::{
     error::Error,
-    fmt::{self, Display},
+    fmt::{self, Display}, path::PathBuf, sync::Arc,
 };
 
 use kitest::{
@@ -15,10 +15,22 @@ use nu_protocol::{
     engine::{EngineState, Stack},
 };
 
-use crate::discover::Discovery;
+use crate::{discover::Discovery, group::TestModule};
 
-pub fn build_tests(discovery: Discovery) -> impl Iterator<Item = Test> {
-    discovery.tests.into_iter().map(move |test| {
+pub struct Extra {
+    pub module_path: Arc<PathBuf>,
+}
+
+pub fn build_tests(discovery: Discovery) -> (impl Iterator<Item = Test<Extra>>, TestModule) {
+    let module_path = Arc::new(discovery.path);
+
+    let test_module = TestModule {
+        engine_state: discovery.engine_state.clone(),
+        before_all_block_ids: discovery.before_all.into_iter().map(|hook| hook.block_id).collect(),
+        after_all_block_ids: discovery.after_all.into_iter().map(|hook| hook.block_id).collect(),
+    };
+
+    let tests = discovery.tests.into_iter().map(move |test| {
         let test_fn = NushellTestFn {
             engine_state: discovery.engine_state.clone(),
             test_block_id: test.block_id,
@@ -44,11 +56,15 @@ pub fn build_tests(discovery: Discovery) -> impl Iterator<Item = Test> {
             },
             should_panic: PanicExpectation::ShouldNotPanic,
             origin: None,
-            extra: (),
+            extra: Extra {
+                module_path: module_path.clone(),
+            },
         };
 
         Test::new(TestFnHandle::Owned(Box::new(test_fn)), meta)
-    })
+    });
+
+    (tests, test_module)
 }
 
 struct NushellTestFn {

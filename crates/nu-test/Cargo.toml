@@ -9,10 +9,8 @@ rust-version.workspace = true
 version = "0.112.3"
 publish = false # not done yet
 
-[lib]
-harness = false
-
 [dependencies]
+nu-cli = { path = "../nu-cli", version = "0.112.3" }
 nu-cmd-extra = { path = "../nu-cmd-extra", version = "0.112.3" }
 nu-cmd-lang = { path = "../nu-cmd-lang", version = "0.112.3" }
 nu-command = { path = "../nu-command", version = "0.112.3" }
@@ -25,8 +23,6 @@ nu-protocol = { path = "../nu-protocol", version = "0.112.3" }
 nu-std = { path = "../nu-std", version = "0.112.3" }
 nu-utils = { path = "../nu-utils", version = "0.112.3" }
 
+derive_more = { workspace = true }
 kitest = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-nu-test-support = { path = "../nu-test-support" }

@@ -5021,7 +5021,9 @@ dependencies = [
 name = "nu-test"
 version = "0.112.3"
 dependencies = [
+ "derive_more 2.1.1",
  "kitest",
+ "nu-cli",
  "nu-cmd-extra",
  "nu-cmd-lang",
  "nu-command",
@@ -5032,7 +5034,6 @@ dependencies = [
  "nu-path",
  "nu-protocol",
  "nu-std",
- "nu-test-support",
  "nu-utils",
  "thiserror 2.0.18",
 ]

@@ -1,17 +1,19 @@
 use std::{
     collections::HashMap,
     mem,
+    path::{PathBuf, Path}
 };
 
-use nu_path::Path;
 use nu_protocol::{
     BlockId, CompileError, ParseError, ShellError, Value,
     engine::{EngineState, StateWorkingSet},
 };
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(derive_more::Debug)]
 pub struct Discovery {
+    pub path: PathBuf,
+    #[debug("EngineState {{...}}")]
     pub engine_state: EngineState,
     pub tests: Vec<DiscoveredTest>,
     pub before_each: Vec<DiscoveredLifecycleHook>,
@@ -130,6 +132,7 @@ pub fn discover(
     }
 
     Ok(Discovery {
+        path: path.as_ref().to_path_buf(),
         engine_state,
         tests,
         before_each,
