@@ -16,43 +16,28 @@ use nu_protocol::{
     engine::{EngineState, Stack},
 };
 
-use crate::test::Extra;
+use crate::{ModuleName, test::Extra};
 
 #[derive(Debug, Clone, Default)]
-pub struct TestModules(HashMap<TestModuleKey, TestModule>);
+pub struct TestModules(HashMap<ModuleName, TestModule>);
 
 impl TestModules {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn insert(&mut self, key: impl Into<TestModuleKey>, module: TestModule) {
+    pub fn insert(&mut self, key: impl Into<ModuleName>, module: TestModule) {
         self.0.insert(key.into(), module);
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TestModuleKey(Arc<PathBuf>);
-
-impl<P: AsRef<Path>> From<P> for TestModuleKey {
-    fn from(value: P) -> Self {
-        Self(Arc::new(value.as_ref().to_path_buf()))
-    }
-}
-
-impl Display for TestModuleKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.display().fmt(f)
-    }
-}
-
-impl TestGrouper<Extra, TestModuleKey, TestModule> for TestModules {
-    fn group(&mut self, meta: &TestMeta<Extra>) -> TestModuleKey {
+impl TestGrouper<Extra, ModuleName, TestModule> for TestModules {
+    fn group(&mut self, meta: &TestMeta<Extra>) -> ModuleName {
         // the test modules are inserted before hand to avoid unnecessary bloat in Extra
-        TestModuleKey(meta.extra.module_path.clone())
+        meta.extra.module_name.clone()
     }
 
-    fn group_ctx(&mut self, key: &TestModuleKey) -> Option<TestModule> {
+    fn group_ctx(&mut self, key: &ModuleName) -> Option<TestModule> {
         self.0.remove(key)
     }
 }
@@ -67,11 +52,11 @@ pub struct TestModule {
 
 pub struct ModuleRunner;
 
-impl<'t> TestGroupRunner<'t, Extra, TestModuleKey, TestModule> for ModuleRunner {
+impl<'t> TestGroupRunner<'t, Extra, ModuleName, TestModule> for ModuleRunner {
     fn run_group<F>(
         &self,
         f: F,
-        _: &TestModuleKey,
+        _: &ModuleName,
         test_module: Option<&TestModule>,
     ) -> ControlFlow<TestGroupOutcomes<'t>, TestGroupOutcomes<'t>>
     where

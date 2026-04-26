@@ -1,6 +1,6 @@
 use std::{
     error::Error,
-    fmt::{self, Display}, path::PathBuf, sync::Arc,
+    fmt::{self, Display}, path::{Path, PathBuf}, sync::Arc,
 };
 
 use kitest::{
@@ -15,14 +15,14 @@ use nu_protocol::{
     engine::{EngineState, Stack},
 };
 
-use crate::{discover::Discovery, group::TestModule};
+use crate::{ModuleName, discover::Discovery, group::TestModule, module_name};
 
 pub struct Extra {
-    pub module_path: Arc<PathBuf>,
+    pub module_name: ModuleName,
 }
 
-pub fn build_tests(discovery: Discovery) -> (impl Iterator<Item = Test<Extra>>, TestModule) {
-    let module_path = Arc::new(discovery.path);
+pub fn build_tests(discovery: Discovery, cwd: impl AsRef<Path>) -> (impl Iterator<Item = Test<Extra>>, TestModule) {
+    let module_name = module_name(cwd, discovery.path);
 
     let test_module = TestModule {
         engine_state: discovery.engine_state.clone(),
@@ -57,7 +57,7 @@ pub fn build_tests(discovery: Discovery) -> (impl Iterator<Item = Test<Extra>>, 
             should_panic: PanicExpectation::ShouldNotPanic,
             origin: None,
             extra: Extra {
-                module_path: module_path.clone(),
+                module_name: module_name.clone(),
             },
         };
 
