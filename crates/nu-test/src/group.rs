@@ -1,10 +1,4 @@
-use std::{
-    collections::HashMap,
-    fmt::{self, Display},
-    ops::ControlFlow,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::HashMap, ops::ControlFlow};
 
 use kitest::{
     group::{TestGroupOutcomes, TestGroupRunner, TestGrouper},

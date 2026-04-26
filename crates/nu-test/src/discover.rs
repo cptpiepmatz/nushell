@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     mem,
-    path::{PathBuf, Path}
+    path::{Path, PathBuf},
 };
 
 use nu_protocol::{

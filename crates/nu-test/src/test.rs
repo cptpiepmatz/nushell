@@ -1,6 +1,7 @@
 use std::{
     error::Error,
-    fmt::{self, Display}, path::{Path, PathBuf}, sync::Arc,
+    fmt::{self, Display},
+    path::Path,
 };
 
 use kitest::{
@@ -21,13 +22,24 @@ pub struct Extra {
     pub module_name: ModuleName,
 }
 
-pub fn build_tests(discovery: Discovery, cwd: impl AsRef<Path>) -> (impl Iterator<Item = Test<Extra>>, TestModule) {
+pub fn build_tests(
+    discovery: Discovery,
+    cwd: impl AsRef<Path>,
+) -> (impl Iterator<Item = Test<Extra>>, TestModule) {
     let module_name = module_name(cwd, discovery.path);
 
     let test_module = TestModule {
         engine_state: discovery.engine_state.clone(),
-        before_all_block_ids: discovery.before_all.into_iter().map(|hook| hook.block_id).collect(),
-        after_all_block_ids: discovery.after_all.into_iter().map(|hook| hook.block_id).collect(),
+        before_all_block_ids: discovery
+            .before_all
+            .into_iter()
+            .map(|hook| hook.block_id)
+            .collect(),
+        after_all_block_ids: discovery
+            .after_all
+            .into_iter()
+            .map(|hook| hook.block_id)
+            .collect(),
     };
 
     let tests = discovery.tests.into_iter().map(move |test| {
