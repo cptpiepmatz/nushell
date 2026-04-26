@@ -18,6 +18,7 @@ use nu_protocol::{
 
 use crate::{ModuleName, discover::Discovery, group::TestModule, module_name};
 
+#[derive(Debug)]
 pub struct Extra {
     pub module_name: ModuleName,
 }
@@ -25,7 +26,7 @@ pub struct Extra {
 pub fn build_tests(
     discovery: Discovery,
     cwd: impl AsRef<Path>,
-) -> (impl Iterator<Item = Test<Extra>>, TestModule) {
+) -> (impl ExactSizeIterator<Item = Test<Extra>>, TestModule) {
     let module_name = module_name(cwd, discovery.path);
 
     let test_module = TestModule {

@@ -4,11 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use itertools::Itertools;
 use nu_protocol::{
     BlockId, CompileError, ParseError, ShellError, Value,
     engine::{EngineState, StateWorkingSet},
 };
 use thiserror::Error;
+use walkdir::WalkDir;
 
 #[derive(derive_more::Debug)]
 pub struct Discovery {
@@ -48,6 +50,9 @@ pub enum DiscoverError {
 
     #[error(transparent)]
     MergeDelta(#[from] ShellError),
+
+    #[error(transparent)]
+    Walk(#[from] walkdir::Error),
 }
 
 pub fn discover(
@@ -140,6 +145,22 @@ pub fn discover(
         before_all,
         after_all,
     })
+}
+
+pub fn discover_recursively(
+    initial_engine_state: &EngineState,
+    start_path: impl AsRef<Path>,
+) -> Result<Vec<Discovery>, DiscoverError> {
+    let path_is_nu = |path: &Path| path.extension().map(|ext| ext == "nu").unwrap_or_default();
+
+    WalkDir::new(start_path)
+        .into_iter()
+        .map(|res| res.map_err(DiscoverError::Walk))
+        .filter_ok(|dir_entry| dir_entry.file_type().is_file())
+        .filter_ok(|dir_entry| path_is_nu(dir_entry.path()))
+        .map_ok(|dir_entry| discover(initial_engine_state.clone(), dir_entry.path()))
+        .map(|res| res.flatten())
+        .collect()
 }
 
 #[cfg(test)]
