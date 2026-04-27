@@ -9,8 +9,6 @@ mod signals;
 #[cfg(unix)]
 mod terminal;
 mod test_bins;
-#[cfg(feature = "test")]
-mod test;
 
 use crate::{
     command::parse_cli_args_from_env,
@@ -125,10 +123,11 @@ fn main() -> Result<()> {
         report_shell_error(None, &engine_state, &err);
     }
 
-    #[cfg(feature = "mcp")]
-    let handle_ctrlc = !parsed_nu_cli_args.mcp;
-    #[cfg(not(feature = "mcp"))]
     let handle_ctrlc = true;
+    #[cfg(feature = "mcp")]
+    let handle_ctrlc = handle_ctrlc && !parsed_nu_cli_args.mcp;
+    #[cfg(feature = "test")]
+    let handle_ctrlc = handle_ctrlc && parsed_nu_cli_args.test.is_none();
     if handle_ctrlc {
         ctrlc_protection(&mut engine_state);
     }
@@ -594,7 +593,15 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "test")]
     if let Some(test_path) = parsed_nu_cli_args.test.as_ref() {
-        return test::run_test_harness(engine_state, &test_path.item);
+        let cwd = std::env::var("PWD")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap());
+        return nu_test::run_test_harness(
+            &engine_state,
+            &test_path.item,
+            cwd,
+            nu_test::Args::default(),
+        );
     }
 
     if parsed_nu_cli_args.lsp {

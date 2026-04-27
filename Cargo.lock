@@ -5025,6 +5025,7 @@ dependencies = [
  "derive_more 2.1.1",
  "itertools 0.14.0",
  "kitest",
+ "miette",
  "nu-cli",
  "nu-cmd-extra",
  "nu-cmd-lang",

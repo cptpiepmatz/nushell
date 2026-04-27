@@ -26,6 +26,7 @@ nu-utils = { path = "../nu-utils", version = "0.112.3" }
 derive_more = { workspace = true, features = ["display"]}
 itertools = { workspace = true }
 kitest = { workspace = true }
+miette = { workspace = true }
 pathdiff = { workspace = true }
 thiserror = { workspace = true }
 walkdir = { workspace = true }

@@ -1,15 +1,19 @@
 use std::{
     borrow::Cow,
     env,
+    num::NonZeroUsize,
     path::{Component, Path},
     sync::Arc,
 };
 
 use itertools::Itertools;
+use kitest::runner::DefaultRunner;
 use nu_protocol::{
     Config, IntoValue, Span, Value,
     engine::{EngineState, StateWorkingSet},
 };
+
+use crate::group::{ModuleRunner, TestModules};
 
 pub mod discover;
 pub mod group;
@@ -71,4 +75,44 @@ pub fn module_name(cwd: impl AsRef<Path>, module_path: impl AsRef<Path>) -> Modu
     }
 
     ModuleName(Arc::from(module_name))
+}
+
+#[non_exhaustive]
+#[derive(Default, Debug)]
+pub struct Args {}
+
+pub fn run_test_harness(
+    initial_engine_state: &EngineState,
+    test_path: impl AsRef<Path>,
+    cwd: impl AsRef<Path>,
+    args: Args,
+) -> miette::Result<()> {
+    let cwd = cwd.as_ref().canonicalize().unwrap();
+    let test_path = cwd.join(test_path).canonicalize().unwrap();
+    let discoveries = discover::discover_recursively(&initial_engine_state, test_path).unwrap();
+    let test_iter = discoveries
+        .into_iter()
+        .map(|discovery| test::build_tests(discovery, &cwd));
+    let mut all_tests = Vec::new();
+    let mut test_modules = TestModules::new();
+    for (tests, test_module) in test_iter.into_iter().filter(|(tests, _)| tests.len() > 0) {
+        all_tests.extend(tests);
+        test_modules.insert(
+            all_tests
+                .last()
+                .expect("not empty")
+                .extra
+                .module_name
+                .clone(),
+            test_module,
+        );
+    }
+
+    let _ = kitest::harness(&all_tests)
+        .with_grouper(test_modules)
+        .with_runner(DefaultRunner::default().with_thread_count(NonZeroUsize::MIN))
+        .with_group_runner(ModuleRunner)
+        .run();
+
+    Ok(())
 }
