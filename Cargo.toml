@@ -269,14 +269,15 @@ nu-engine = { path = "./crates/nu-engine", version = "0.112.3" }
 nu-experimental = { path = "./crates/nu-experimental", version = "0.112.3" }
 nu-explore = { path = "./crates/nu-explore", version = "0.112.3" }
 nu-lsp = { path = "./crates/nu-lsp/", version = "0.112.3" }
+nu-mcp = { path = "./crates/nu-mcp", version = "0.112.3", optional = true }
 nu-parser = { path = "./crates/nu-parser", version = "0.112.3" }
 nu-path = { path = "./crates/nu-path", version = "0.112.3" }
 nu-plugin-engine = { path = "./crates/nu-plugin-engine", optional = true, version = "0.112.3" }
 nu-protocol = { path = "./crates/nu-protocol", version = "0.112.3" }
 nu-std = { path = "./crates/nu-std", version = "0.112.3" }
 nu-system = { path = "./crates/nu-system", version = "0.112.3" }
+nu-test = { path = "./crates/nu-test", version = "0.112.3", optional = true }
 nu-utils = { path = "./crates/nu-utils", version = "0.112.3" }
-nu-mcp = { path = "./crates/nu-mcp", version = "0.112.3", optional = true }
 reedline = { workspace = true, features = ["bashisms"] }
 
 crossterm = { workspace = true }
@@ -330,6 +331,7 @@ full = [
   "system-clipboard",
   "trash-support",
   "mcp",
+  "test",
 ]
 
 plugin = [
@@ -351,17 +353,20 @@ mcp = [
   "nu-mcp/mcp",
 ]
 
+test = ["dep:nu-test"]
+
 network = ["nu-command/network"]
 native-tls = ["nu-command/native-tls"]
 rustls-tls = ["nu-command/rustls-tls"]
 
 default = [
-  "plugin",
-  "trash-support",
-  "sqlite",
-  "network",
-  "rustls-tls",
   "mcp",
+  "network",
+  "plugin",
+  "rustls-tls",
+  "sqlite",
+  "test",
+  "trash-support",
 ]
 stable = ["default"]
 # NOTE: individual features are also passed to `nu-cmd-lang` that uses them to generate the feature matrix in the `version` command

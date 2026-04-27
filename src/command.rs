@@ -414,6 +414,15 @@ const CLI_FLAGS: &[CliFlag] = &[
         CliCategory::Startup,
         "nu --mcp --mcp-transport http --mcp-port 3000",
     ),
+    #[cfg(feature = "test")]
+    CliFlag::value(
+        "test",
+        Some('t'),
+        ValueHint::Path,
+        "test a file or a directory recursively",
+        CliCategory::Startup,
+        "nu --test my_test.nu"
+    ),
 ];
 
 // Container for parsed CLI values before conversion to NushellCliArgs.
@@ -456,6 +465,8 @@ struct CliValues {
     mcp_transport: Option<Spanned<String>>,
     #[cfg(feature = "mcp")]
     mcp_port: Option<u16>,
+    #[cfg(feature = "test")]
+    test: Option<Spanned<String>>,
 }
 
 // Error type for CLI parsing with optional help text.
@@ -727,6 +738,11 @@ pub(crate) fn parse_cli_args(args: Vec<OsString>) -> Result<ParsedCli, CliError>
                 let value = parse_port_value(&mut parser, "mcp-port")?;
                 cli.mcp_port = Some(value);
             }
+            #[cfg(feature = "test")]
+            Short('t') | Long("test") => {
+                let value = parse_string_value(&mut parser, "test")?;
+                cli.test = Some(spanned_value(value));
+            }
             Value(value) => {
                 let value = value.string().map_err(|_| {
                     CliError::new("Invalid argument", "argument is not valid unicode")
@@ -790,6 +806,8 @@ pub(crate) fn parse_cli_args(args: Vec<OsString>) -> Result<ParsedCli, CliError>
             mcp_transport: cli.mcp_transport,
             #[cfg(feature = "mcp")]
             mcp_port: cli.mcp_port,
+            #[cfg(feature = "test")]
+            test: cli.test,
         },
         script_name,
         args_to_script,
@@ -1413,6 +1431,8 @@ pub(crate) struct NushellCliArgs {
     pub(crate) mcp_transport: Option<Spanned<String>>,
     #[cfg(feature = "mcp")]
     pub(crate) mcp_port: Option<u16>,
+    #[cfg(feature = "test")]
+    pub(crate) test: Option<Spanned<String>>,
 }
 
 #[cfg(test)]

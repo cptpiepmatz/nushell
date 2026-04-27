@@ -9,6 +9,8 @@ mod signals;
 #[cfg(unix)]
 mod terminal;
 mod test_bins;
+#[cfg(feature = "test")]
+mod test;
 
 use crate::{
     command::parse_cli_args_from_env,
@@ -588,6 +590,11 @@ fn main() -> Result<()> {
         };
         nu_mcp::initialize_mcp_server(engine_state, transport)?;
         return Ok(());
+    }
+
+    #[cfg(feature = "test")]
+    if let Some(test_path) = parsed_nu_cli_args.test.as_ref() {
+        return test::run_test_harness(engine_state, &test_path.item);
     }
 
     if parsed_nu_cli_args.lsp {
