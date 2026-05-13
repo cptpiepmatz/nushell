@@ -14,6 +14,7 @@ use nu_protocol::{
 use thiserror::Error;
 use walkdir::WalkDir;
 
+// TODO: doc undefined order behavior
 #[derive(derive_more::Debug)]
 pub struct Discovery {
     pub path: PathBuf,
