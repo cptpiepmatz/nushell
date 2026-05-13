@@ -2,6 +2,7 @@ use std::{
     error::Error,
     fmt::{self, Display},
     path::Path,
+    sync::Arc,
 };
 
 use kitest::{
@@ -12,6 +13,7 @@ use kitest::{
 };
 use nu_protocol::{
     BlockId, PipelineData, ShellError, Value,
+    ast::Block,
     debugger::WithoutDebug,
     engine::{EngineState, Stack},
 };
@@ -46,6 +48,7 @@ pub fn build_tests(
     let tests = discovery.tests.into_iter().map(move |test| {
         let test_fn = NushellTestFn {
             engine_state: discovery.engine_state.clone(),
+            parse_block: discovery.parse_block.clone(),
             test_block_id: test.block_id,
             before_each_block_ids: discovery
                 .before_each
@@ -82,6 +85,7 @@ pub fn build_tests(
 
 struct NushellTestFn {
     engine_state: EngineState,
+    parse_block: Arc<Block>,
     test_block_id: BlockId,
     before_each_block_ids: Vec<BlockId>,
     after_each_block_ids: Vec<BlockId>,
@@ -89,6 +93,7 @@ struct NushellTestFn {
 
 #[derive(Debug, Default, Clone, PartialEq)]
 struct TestErrors {
+    parse_eval_error: Option<ShellError>,
     before_each_errors: Vec<ShellError>,
     test_error: Option<ShellError>,
     after_each_errors: Vec<ShellError>,
@@ -130,7 +135,8 @@ impl Error for TestErrors {
 
 impl TestErrors {
     fn is_empty(&self) -> bool {
-        self.before_each_errors.is_empty()
+        self.parse_eval_error.is_none()
+            && self.before_each_errors.is_empty()
             && self.test_error.is_none()
             && self.after_each_errors.is_empty()
     }
@@ -147,6 +153,17 @@ impl TestFn for NushellTestFn {
     fn call_test(&self) -> TestResult {
         let mut stack = Stack::new();
         let mut errors = TestErrors::default();
+
+        // this loads changes that apply during parse time
+        if let Err(err) = nu_engine::eval_block::<WithoutDebug>(
+            &self.engine_state,
+            &mut stack,
+            &self.parse_block,
+            PipelineData::empty(),
+        ) {
+            errors.parse_eval_error = Some(err);
+            return TestResult(Err(Whatever::from(errors)));
+        }
 
         for block_id in self.before_each_block_ids.iter().copied() {
             let block = self.engine_state.get_block(block_id);

@@ -2,11 +2,13 @@ use std::{
     collections::HashMap,
     mem,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use itertools::Itertools;
 use nu_protocol::{
     BlockId, CompileError, ParseError, ShellError, Value,
+    ast::Block,
     engine::{EngineState, StateWorkingSet},
 };
 use thiserror::Error;
@@ -17,6 +19,8 @@ pub struct Discovery {
     pub path: PathBuf,
     #[debug("EngineState {{...}}")]
     pub engine_state: EngineState,
+    #[debug("Block {{...}}")]
+    pub parse_block: Arc<Block>,
     pub tests: Vec<DiscoveredTest>,
     pub before_each: Vec<DiscoveredLifecycleHook>,
     pub after_each: Vec<DiscoveredLifecycleHook>,
@@ -61,7 +65,7 @@ pub fn discover(
 ) -> Result<Discovery, DiscoverError> {
     let mut working_set = StateWorkingSet::new(&engine_state);
     let code = format!("overlay new testing; source '{}'", path.as_ref().display());
-    nu_parser::parse(&mut working_set, None, code.as_bytes(), false);
+    let parse_block = nu_parser::parse(&mut working_set, None, code.as_bytes(), false);
 
     mem::take(&mut working_set.parse_errors)
         .into_iter()
@@ -139,6 +143,7 @@ pub fn discover(
     Ok(Discovery {
         path: path.as_ref().to_path_buf(),
         engine_state,
+        parse_block,
         tests,
         before_each,
         after_each,

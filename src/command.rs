@@ -421,7 +421,7 @@ const CLI_FLAGS: &[CliFlag] = &[
         ValueHint::Path,
         "test a file or a directory recursively",
         CliCategory::Startup,
-        "nu --test my_test.nu"
+        "nu --test my_test.nu",
     ),
 ];
 
