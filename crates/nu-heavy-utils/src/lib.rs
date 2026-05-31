@@ -1,5 +1,6 @@
 pub mod endian;
 pub mod merge;
+pub mod yaml;
 
 pub use endian::Endian;
 
