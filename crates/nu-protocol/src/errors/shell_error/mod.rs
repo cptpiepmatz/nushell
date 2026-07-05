@@ -431,10 +431,12 @@ pub enum ShellError {
     #[error("Can't convert to {to_type}.")]
     #[diagnostic(code(nu::shell::cant_convert))]
     CantConvert {
-        to_type: String,
-        from_type: String,
+        from_type: Type,
+        to_type: Type,
         #[label("can't convert {from_type} to {to_type}")]
-        span: Span,
+        from_value_span: Span,
+        #[label("conversion required here")]
+        call_span: Span,
         #[help]
         help: Option<String>,
     },
