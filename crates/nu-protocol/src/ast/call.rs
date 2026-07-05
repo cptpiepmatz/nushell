@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeclId, FromValue, ShellError, Span, Spanned, Value, ast::Expression, engine::StateWorkingSet,
-    eval_const::eval_constant,
+    DeclId, FromValue, ShellError, Span, Spanned, Type, Value, ast::Expression,
+    engine::StateWorkingSet, eval_const::eval_constant,
 };
 
 /// Parsed command arguments
@@ -263,10 +263,11 @@ impl Call {
                     match result {
                         Value::Bool { val, .. } => Ok(val),
                         _ => Err(ShellError::CantConvert {
-                            to_type: "bool".into(),
-                            from_type: result.get_type().to_string(),
-                            span: result.span(),
-                            help: Some("".into()),
+                            from_type: result.get_type(),
+                            to_type: Type::Bool,
+                            from_value_span: result.span(),
+                            call_span: self.head,
+                            help: None,
                         }),
                     }
                 } else {
@@ -285,7 +286,7 @@ impl Call {
     ) -> Result<Option<T>, ShellError> {
         if let Some(expr) = self.get_flag_expr(name) {
             let result = eval_constant(working_set, expr)?;
-            FromValue::from_value(result).map(Some)
+            FromValue::from_value(result, self.head).map(Some)
         } else {
             Ok(None)
         }
@@ -301,7 +302,7 @@ impl Call {
         for result in
             self.rest_iter_flattened(starting_pos, |expr| eval_constant(working_set, expr))?
         {
-            output.push(FromValue::from_value(result)?);
+            output.push(FromValue::from_value(result, self.head)?);
         }
 
         Ok(output)
@@ -349,7 +350,7 @@ impl Call {
         })?;
 
         let result = eval_constant(working_set, expr)?;
-        FromValue::from_value(result)
+        FromValue::from_value(result, self.head)
     }
 
     pub fn span(&self) -> Span {
