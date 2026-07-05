@@ -90,7 +90,7 @@ fn derive_struct_from_value(
 ///
 /// Struct with named fields:
 /// ```rust,ignore
-/// #[derive(IntoValue)]
+/// #[derive(FromValue)]
 /// struct Pet {
 ///     name: String,
 ///     age: u8,
@@ -99,10 +99,11 @@ fn derive_struct_from_value(
 ///
 /// impl nu_protocol::FromValue for Pet {
 ///     fn from_value(
-///         v: nu_protocol::Value
+///         v: nu_protocol::Value,
+///         call_span: nu_protocol::Span,
 ///     ) -> std::result::Result<Self, nu_protocol::ShellError> {
 ///         let span = v.span();
-///         let mut record = v.into_record()?;
+///         let mut record = v.into_record(call_span)?;
 ///         std::result::Result::Ok(Pet {
 ///             name: <String as nu_protocol::FromValue>::from_value(
 ///                 record
@@ -112,6 +113,7 @@ fn derive_struct_from_value(
 ///                         span: std::option::Option::None,
 ///                         src_span: span
 ///                     })?,
+///                 call_span,
 ///             )?,
 ///             age: <u8 as nu_protocol::FromValue>::from_value(
 ///                 record
@@ -121,10 +123,11 @@ fn derive_struct_from_value(
 ///                         span: std::option::Option::None,
 ///                         src_span: span
 ///                     })?,
+///                 call_span,
 ///             )?,
 ///             favorite_toy: record
 ///                 .remove("favorite_toy")
-///                 .map(|v| <#ty as nu_protocol::FromValue>::from_value(v))
+///                 .map(|v| <Option<String> as nu_protocol::FromValue>::from_value(v, call_span))
 ///                 .transpose()?
 ///                 .flatten(),
 ///         })
@@ -134,15 +137,16 @@ fn derive_struct_from_value(
 ///
 /// Struct with unnamed fields:
 /// ```rust,ignore
-/// #[derive(IntoValue)]
+/// #[derive(FromValue)]
 /// struct Color(u8, u8, u8);
 ///
 /// impl nu_protocol::FromValue for Color {
 ///     fn from_value(
-///         v: nu_protocol::Value
+///         v: nu_protocol::Value,
+///         call_span: nu_protocol::Span,
 ///     ) -> std::result::Result<Self, nu_protocol::ShellError> {
 ///         let span = v.span();
-///         let list = v.into_list()?;
+///         let list = v.into_list(call_span)?;
 ///         let mut deque: std::collections::VecDeque<_> = std::convert::From::from(list);
 ///         std::result::Result::Ok(Self(
 ///             {
@@ -154,6 +158,7 @@ fn derive_struct_from_value(
 ///                             span: std::option::Option::None,
 ///                             src_span: span
 ///                         })?,
+///                     call_span,
 ///                 )?
 ///             },
 ///             {
@@ -165,6 +170,7 @@ fn derive_struct_from_value(
 ///                             span: std::option::Option::None,
 ///                             src_span: span
 ///                         })?,
+///                     call_span,
 ///                 )?
 ///             },
 ///             {
@@ -176,6 +182,7 @@ fn derive_struct_from_value(
 ///                             span: std::option::Option::None,
 ///                             src_span: span
 ///                         })?,
+///                     call_span,
 ///                 )?
 ///             }
 ///         ))
@@ -185,20 +192,22 @@ fn derive_struct_from_value(
 ///
 /// Unit struct:
 /// ```rust,ignore
-/// #[derive(IntoValue)]
+/// #[derive(FromValue)]
 /// struct Unicorn;
 ///
 /// impl nu_protocol::FromValue for Unicorn {
 ///     fn from_value(
-///         v: nu_protocol::Value
+///         v: nu_protocol::Value,
+///         call_span: nu_protocol::Span,
 ///     ) -> std::result::Result<Self, nu_protocol::ShellError> {
 ///         match v {
 ///             nu_protocol::Value::Nothing {..} => Ok(Self),
 ///             v => std::result::Result::Err(nu_protocol::ShellError::CantConvert {
-///                 to_type: std::string::ToString::to_string(&<Self as nu_protocol::FromValue>::expected_type()),
-///                 from_type: std::string::ToString::to_string(&v.get_type()),
-///                 span: v.span(),
-///                 help: std::option::Option::None
+///                 from_type: v.get_type(),
+///                 to_type: <Self as nu_protocol::FromValue>::expected_type(),
+///                 from_value_span: v.span(),
+///                 call_span,
+///                 help: std::option::Option::None,
 ///             })
 ///         }
 ///     }
@@ -414,7 +423,7 @@ fn derive_enum_from_value(
 ///
 /// This is how such a derived implementation looks:
 /// ```rust,ignore
-/// #[derive(IntoValue)]
+/// #[derive(FromValue)]
 /// enum Weather {
 ///     Sunny,
 ///     Cloudy,
@@ -422,22 +431,25 @@ fn derive_enum_from_value(
 ///     Raining
 /// }
 ///
-/// impl nu_protocol::IntoValue for Weather {
-///     fn into_value(self, span: nu_protocol::Span) -> nu_protocol::Value {
+/// impl nu_protocol::FromValue for Weather {
+///     fn from_value(
+///         v: nu_protocol::Value,
+///         call_span: nu_protocol::Span,
+///     ) -> std::result::Result<Self, nu_protocol::ShellError> {
 ///         let span = v.span();
 ///         let ty = v.get_type();
 ///
-///         let s = v.into_string()?;
+///         let s = v.into_string(call_span)?;
 ///         match s.as_str() {
-///             "sunny" => std::result::Ok(Self::Sunny),
-///             "cloudy" => std::result::Ok(Self::Cloudy),
-///             "rain" => std::result::Ok(Self::Raining),
+///             "sunny" => std::result::Result::Ok(Self::Sunny),
+///             "cloudy" => std::result::Result::Ok(Self::Cloudy),
+///             "rain" => std::result::Result::Ok(Self::Raining),
 ///             _ => std::result::Result::Err(nu_protocol::ShellError::CantConvert {
-///                 to_type: std::string::ToString::to_string(
-///                     &<Self as nu_protocol::FromValue>::expected_type()
-///                 ),
-///                 from_type: std::string::ToString::to_string(&ty),
-///                 span: span,help: std::option::Option::None,
+///                 from_type: ty,
+///                 to_type: <Self as nu_protocol::FromValue>::expected_type(),
+///                 from_value_span: span,
+///                 call_span,
+///                 help: std::option::Option::None,
 ///             }),
 ///         }
 ///     }
