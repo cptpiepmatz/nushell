@@ -1023,7 +1023,7 @@ impl EngineState {
 
         let pwd = pwd.ok_or_else(|| error("$env.PWD not found", ""))?;
 
-        if let Ok(pwd) = pwd.as_str() {
+        if let Ok(pwd) = pwd.as_str(Span::unknown()) {
             let path = AbsolutePathBuf::try_from(pwd)
                 .map_err(|_| error("$env.PWD is not an absolute path", pwd))?;
 

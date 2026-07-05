@@ -234,7 +234,7 @@ impl UpdateFromValue for TrimStrategy {
             return;
         };
 
-        match methodology.as_str() {
+        match methodology.as_str(Span::unknown()) {
             Ok("wrapping") => {
                 let mut try_to_keep_words = if let &mut Self::Wrap { try_to_keep_words } = self {
                     try_to_keep_words
@@ -430,18 +430,18 @@ impl UpdateFromValue for TableConfig {
                     _ => errors.type_mismatch(path, Type::custom("int or nothing"), val),
                 },
                 "footer_inheritance" => self.footer_inheritance.update(val, path, errors),
-                "missing_value_symbol" => match val.as_str() {
+                "missing_value_symbol" => match val.as_str(Span::unknown()) {
                     Ok(val) => self.missing_value_symbol = val.to_string(),
                     Err(_) => errors.type_mismatch(path, Type::String, val),
                 },
                 "batch_duration" => {
-                    match Duration::from_value(val.clone()).map_err(ConfigError::from) {
+                    match Duration::from_value(val.clone(), Span::unknown()).map_err(ConfigError::from) {
                         Ok(val) => self.batch_duration = val,
                         Err(err) => errors.error(err),
                     }
                 }
                 "stream_page_size" => {
-                    let Ok(n) = val.as_int() else {
+                    let Ok(n) = val.as_int(Span::unknown()) else {
                         errors.type_mismatch(path, Type::Int, val);
                         continue;
                     };

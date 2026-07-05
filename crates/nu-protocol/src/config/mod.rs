@@ -212,11 +212,11 @@ impl UpdateFromValue for Config {
                 "auto_cd_implicit" => self.auto_cd_implicit.update(val, path, errors),
                 "plugins" => self.plugins.update(val, path, errors),
                 "plugin_gc" => self.plugin_gc.update(val, path, errors),
-                "menus" => match Vec::from_value(val.clone()) {
+                "menus" => match Vec::from_value(val.clone(), Span::unknown()) {
                     Ok(menus) => self.menus = menus,
                     Err(err) => errors.error(err.into()),
                 },
-                "keybindings" => match Vec::from_value(val.clone()) {
+                "keybindings" => match Vec::from_value(val.clone(), Span::unknown()) {
                     Ok(keybindings) => self.keybindings = keybindings,
                     Err(err) => errors.error(err.into()),
                 },
@@ -225,7 +225,7 @@ impl UpdateFromValue for Config {
                 "datetime_format" => self.datetime_format.update(val, path, errors),
                 "error_style" => self.error_style.update(val, path, errors),
                 "error_lines" => {
-                    if let Ok(lines) = val.as_int() {
+                    if let Ok(lines) = val.as_int(Span::unknown()) {
                         if lines >= 0 {
                             self.error_lines = lines;
                         } else {
@@ -236,7 +236,7 @@ impl UpdateFromValue for Config {
                     }
                 }
                 "recursion_limit" => {
-                    if let Ok(limit) = val.as_int() {
+                    if let Ok(limit) = val.as_int(Span::unknown()) {
                         if limit > 1 {
                             self.recursion_limit = limit;
                         } else {

@@ -1,5 +1,5 @@
 use super::{ConfigErrors, ConfigPath, IntoValue, ShellError, UpdateFromValue, Value};
-use crate::{self as nu_protocol, FromValue, engine::EngineState};
+use crate::{self as nu_protocol, FromValue, Span, engine::EngineState};
 use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 
@@ -48,7 +48,7 @@ impl UseAnsiColoring {
         let env_value = |env_name| {
             engine_state
                 .get_env_var(env_name)
-                .and_then(|v| v.coerce_bool().ok())
+                .and_then(|v| v.coerce_bool(Span::unknown()).ok())
                 .unwrap_or(false)
         };
 
@@ -61,14 +61,14 @@ impl UseAnsiColoring {
         }
 
         if let Some(cli_color) = engine_state.get_env_var("clicolor")
-            && let Ok(cli_color) = cli_color.coerce_bool()
+            && let Ok(cli_color) = cli_color.coerce_bool(Span::unknown())
         {
             return cli_color;
         }
 
         // If the TERM environment variable is set to "dumb", disable ANSI colors
         if let Some(term) = engine_state.get_env_var("term")
-            && term.as_str().ok() == Some("dumb")
+            && term.as_str(Span::unknown()).ok() == Some("dumb")
         {
             return false;
         }
@@ -87,8 +87,8 @@ impl From<bool> for UseAnsiColoring {
 }
 
 impl FromValue for UseAnsiColoring {
-    fn from_value(v: Value) -> Result<Self, ShellError> {
-        if let Ok(v) = v.as_bool() {
+    fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
+        if let Ok(v) = v.as_bool(call_span) {
             return Ok(v.into());
         }
 
@@ -99,7 +99,7 @@ impl FromValue for UseAnsiColoring {
             False = 2,
         }
 
-        Ok(match UseAnsiColoringString::from_value(v)? {
+        Ok(match UseAnsiColoringString::from_value(v, call_span)? {
             UseAnsiColoringString::Auto => Self::Auto,
             UseAnsiColoringString::True => Self::True,
             UseAnsiColoringString::False => Self::False,
@@ -114,7 +114,7 @@ impl UpdateFromValue for UseAnsiColoring {
         path: &mut ConfigPath<'a>,
         errors: &mut ConfigErrors,
     ) {
-        let Ok(value) = UseAnsiColoring::from_value(value.clone()) else {
+        let Ok(value) = UseAnsiColoring::from_value(value.clone(), Span::unknown()) else {
             errors.type_mismatch(path, UseAnsiColoring::expected_type(), value);
             return;
         };

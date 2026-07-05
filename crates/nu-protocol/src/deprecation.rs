@@ -39,14 +39,15 @@ pub enum DeprecationType {
 }
 
 impl FromValue for DeprecationType {
-    fn from_value(v: Value) -> Result<Self, ShellError> {
+    fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
         match v {
             Value::String { val, .. } => Ok(DeprecationType::Flag(val)),
             Value::Nothing { .. } => Ok(DeprecationType::Command),
             v => Err(ShellError::CantConvert {
-                to_type: Self::expected_type().to_string(),
-                from_type: v.get_type().to_string(),
-                span: v.span(),
+                from_type: v.get_type(),
+                to_type: Self::expected_type(),
+                from_value_span: v.span(),
+                call_span,
                 help: None,
             }),
         }
@@ -58,13 +59,14 @@ impl FromValue for DeprecationType {
 }
 
 impl FromValue for ReportMode {
-    fn from_value(v: Value) -> Result<Self, ShellError> {
+    fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
         let span = v.span();
         let Value::String { val, .. } = v else {
             return Err(ShellError::CantConvert {
-                to_type: Self::expected_type().to_string(),
-                from_type: v.get_type().to_string(),
-                span: v.span(),
+                from_type: v.get_type(),
+                to_type: Self::expected_type(),
+                from_value_span: v.span(),
+                call_span,
                 help: None,
             });
         };

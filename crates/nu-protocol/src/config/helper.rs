@@ -73,7 +73,7 @@ impl UpdateFromValue for Value {
 
 impl UpdateFromValue for bool {
     fn update(&mut self, value: &Value, path: &mut ConfigPath, errors: &mut ConfigErrors) {
-        if let Ok(val) = value.as_bool() {
+        if let Ok(val) = value.as_bool(Span::unknown()) {
             *self = val;
         } else {
             errors.type_mismatch(path, Type::Bool, value);
@@ -83,7 +83,7 @@ impl UpdateFromValue for bool {
 
 impl UpdateFromValue for i64 {
     fn update(&mut self, value: &Value, path: &mut ConfigPath, errors: &mut ConfigErrors) {
-        if let Ok(val) = value.as_int() {
+        if let Ok(val) = value.as_int(Span::unknown()) {
             *self = val;
         } else {
             errors.type_mismatch(path, Type::Int, value);
@@ -93,7 +93,7 @@ impl UpdateFromValue for i64 {
 
 impl UpdateFromValue for usize {
     fn update(&mut self, value: &Value, path: &mut ConfigPath, errors: &mut ConfigErrors) {
-        if let Ok(val) = value.as_int() {
+        if let Ok(val) = value.as_int(Span::unknown()) {
             if let Ok(val) = val.try_into() {
                 *self = val;
             } else {
@@ -107,7 +107,7 @@ impl UpdateFromValue for usize {
 
 impl UpdateFromValue for String {
     fn update(&mut self, value: &Value, path: &mut ConfigPath, errors: &mut ConfigErrors) {
-        if let Ok(val) = value.as_str() {
+        if let Ok(val) = value.as_str(Span::unknown()) {
             *self = val.into();
         } else {
             errors.type_mismatch(path, Type::String, value);
@@ -126,7 +126,7 @@ where
         path: &mut ConfigPath<'a>,
         errors: &mut ConfigErrors,
     ) {
-        if let Ok(record) = value.as_record() {
+        if let Ok(record) = value.as_record(Span::unknown()) {
             *self = record
                 .iter()
                 .map(|(key, val)| {
@@ -150,7 +150,7 @@ pub(super) fn config_update_string_enum<T>(
     T: FromStr,
     T::Err: Display,
 {
-    if let Ok(str) = value.as_str() {
+    if let Ok(str) = value.as_str(Span::unknown()) {
         match str.parse() {
             Ok(val) => *choice = val,
             Err(err) => errors.invalid_value(path, err.to_string(), value),

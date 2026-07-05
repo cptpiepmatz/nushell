@@ -87,7 +87,7 @@ impl UpdateFromValue for PluginGcConfig {
             match col.as_str() {
                 "enabled" => self.enabled.update(val, path, errors),
                 "stop_after" => {
-                    if let Ok(duration) = val.as_duration() {
+                    if let Ok(duration) = val.as_duration(Span::unknown()) {
                         if duration >= 0 {
                             self.stop_after = duration;
                         } else {

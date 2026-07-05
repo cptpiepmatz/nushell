@@ -394,8 +394,8 @@ impl IntoValue for Span {
 }
 
 impl FromValue for Span {
-    fn from_value(value: Value) -> Result<Self, ShellError> {
-        let rec = value.as_record();
+    fn from_value(value: Value, call_span: Span) -> Result<Self, ShellError> {
+        let rec = value.as_record(call_span);
         match rec {
             Ok(val) => {
                 let Some(pre_start) = val.get("start") else {
@@ -412,8 +412,8 @@ impl FromValue for Span {
                         value.span(),
                     )));
                 };
-                let start = pre_start.as_int()? as usize;
-                let end = pre_end.as_int()? as usize;
+                let start = pre_start.as_int(call_span)? as usize;
+                let end = pre_end.as_int(call_span)? as usize;
                 if start <= end {
                     Ok(Self::new(start, end))
                 } else {

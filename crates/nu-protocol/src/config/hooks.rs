@@ -68,21 +68,21 @@ impl UpdateFromValue for Hooks {
             let path = &mut path.push(col);
             match col.as_str() {
                 "pre_prompt" => {
-                    if let Ok(hooks) = val.as_list() {
+                    if let Ok(hooks) = val.as_list(Span::unknown()) {
                         self.pre_prompt = hooks.into()
                     } else {
                         errors.type_mismatch(path, Type::list(Type::Any), val);
                     }
                 }
                 "pre_execution" => {
-                    if let Ok(hooks) = val.as_list() {
+                    if let Ok(hooks) = val.as_list(Span::unknown()) {
                         self.pre_execution = hooks.into()
                     } else {
                         errors.type_mismatch(path, Type::list(Type::Any), val);
                     }
                 }
                 "env_change" => {
-                    if let Ok(record) = val.as_record() {
+                    if let Ok(record) = val.as_record(Span::unknown()) {
                         self.env_change = record
                             .iter()
                             .map(|(key, val)| {
@@ -90,7 +90,7 @@ impl UpdateFromValue for Hooks {
                                     .env_change
                                     .remove(&EnvName::from(key))
                                     .unwrap_or_default();
-                                let new = if let Ok(hooks) = val.as_list() {
+                                let new = if let Ok(hooks) = val.as_list(Span::unknown()) {
                                     hooks.into()
                                 } else {
                                     errors.type_mismatch(

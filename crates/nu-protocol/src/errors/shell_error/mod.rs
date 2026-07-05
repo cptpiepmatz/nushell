@@ -1562,7 +1562,7 @@ impl ShellError {
 }
 
 impl FromValue for ShellError {
-    fn from_value(v: Value) -> Result<Self, ShellError> {
+    fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
         let from_type = v.get_type();
         match v {
             Value::Error { error, .. } => Ok(*error),
@@ -1573,12 +1573,14 @@ impl FromValue for ShellError {
                 (*val)
                     .get("raw")
                     .ok_or(ShellError::CantConvert {
-                        to_type: Self::expected_type().to_string(),
-                        from_type: from_type.to_string(),
-                        span: internal_span,
+                        from_type,
+                        to_type: Self::expected_type(),
+                        from_value_span: internal_span,
+                        call_span,
                         help: None,
                     })?
                     .clone(),
+                call_span,
             ),
             Value::Nothing { internal_span } => Ok(Self::Generic(GenericError::new(
                 "error",
@@ -1586,9 +1588,10 @@ impl FromValue for ShellError {
                 internal_span,
             ))),
             _ => Err(ShellError::CantConvert {
-                to_type: Self::expected_type().to_string(),
-                from_type: v.get_type().to_string(),
-                span: v.span(),
+                from_type,
+                to_type: Self::expected_type(),
+                from_value_span: v.span(),
+                call_span,
                 help: None,
             }),
         }
@@ -1645,9 +1648,10 @@ fn shell_error_serialize_roundtrip() {
     // Ensure that we can serialize and deserialize `ShellError`, and check that it basically would
     // look the same
     let original_error = ShellError::CantConvert {
-        span: Span::new(100, 200),
-        to_type: "Foo".into(),
-        from_type: "Bar".into(),
+        from_type: "Foo".into(),
+        to_type: "Bar".into(),
+        from_value_span: Span::new(100, 200),
+        call_span: Span::new(300, 400),
         help: Some("this is a test".into()),
     };
     println!("orig_error = {original_error:#?}");

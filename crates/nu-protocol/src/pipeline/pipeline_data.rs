@@ -258,11 +258,11 @@ impl PipelineData {
     /// Drain and write this [`PipelineData`] to `dest`.
     ///
     /// Values are converted to bytes and separated by newlines if this is a `ListStream`.
-    pub fn write_to(self, mut dest: impl Write) -> Result<(), ShellError> {
+    pub fn write_to(self, mut dest: impl Write, call_span: Span) -> Result<(), ShellError> {
         match self {
             PipelineData::Empty => Ok(()),
             PipelineData::Value(value, ..) => {
-                let bytes = value_to_bytes(value)?;
+                let bytes = value_to_bytes(value, call_span)?;
                 dest.write_all(&bytes).map_err(|err| {
                     IoError::new_internal(err, "Could not write PipelineData to dest")
                 })?;
@@ -273,7 +273,7 @@ impl PipelineData {
             }
             PipelineData::ListStream(stream, ..) => {
                 for value in stream {
-                    let bytes = value_to_bytes(value)?;
+                    let bytes = value_to_bytes(value, call_span)?;
                     dest.write_all(&bytes).map_err(|err| {
                         IoError::new_internal(err, "Could not write PipelineData to dest")
                     })?;
@@ -303,6 +303,7 @@ impl PipelineData {
         mut self,
         engine_state: &EngineState,
         stack: &mut Stack,
+        call_span: Span,
     ) -> Result<Self, ShellError> {
         match stack.pipe_stdout().unwrap_or(&OutDest::Inherit) {
             OutDest::Print => {
@@ -316,7 +317,7 @@ impl PipelineData {
                 self.into_value(span).map(|val| Self::Value(val, metadata))
             }
             OutDest::File(file) => {
-                self.write_to(file.as_ref())?;
+                self.write_to(file.as_ref(), call_span)?;
                 Ok(Self::Empty)
             }
             OutDest::Null | OutDest::Inherit => {
@@ -1088,14 +1089,14 @@ where
     }
 }
 
-fn value_to_bytes(value: Value) -> Result<Vec<u8>, ShellError> {
+fn value_to_bytes(value: Value, call_span: Span) -> Result<Vec<u8>, ShellError> {
     let bytes = match value {
         Value::String { val, .. } => val.into_bytes(),
         Value::Binary { val, .. } => val,
         Value::List { vals, .. } => {
             let val = vals
                 .into_iter()
-                .map(Value::coerce_into_string)
+                .map(|v | v.coerce_into_string(call_span))
                 .collect::<Result<Vec<String>, ShellError>>()?
                 .join("\n")
                 + "\n";
@@ -1104,7 +1105,7 @@ fn value_to_bytes(value: Value) -> Result<Vec<u8>, ShellError> {
         }
         // Propagate errors by explicitly matching them before the final case.
         Value::Error { error, .. } => return Err(*error),
-        value => value.coerce_into_string()?.into_bytes(),
+        value => value.coerce_into_string(call_span)?.into_bytes(),
     };
     Ok(bytes)
 }

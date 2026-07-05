@@ -208,12 +208,12 @@ impl From<ErrorLabel> for SourceSpan {
 }
 
 impl FromValue for ErrorLabel {
-    fn from_value(v: Value) -> Result<Self, ShellError> {
-        let record = v.clone().into_record()?;
+    fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
+        let record = v.clone().into_record(call_span)?;
         let text = String::from_value(match record.get("text") {
             Some(val) => val.clone(),
             None => Value::string("", v.span()),
-        })
+        }, call_span)
         .unwrap_or("originates from here".into());
         let span = Span::from_value(match record.get("span") {
             Some(val) => val.clone(),
@@ -225,7 +225,7 @@ impl FromValue for ErrorLabel {
                 },
                 v.span(),
             ),
-        });
+        }, call_span);
 
         match span {
             Ok(s) => Ok(Self { text, span: s }),
@@ -314,20 +314,19 @@ impl From<ErrorSource> for NamedSource<String> {
 }
 
 impl FromValue for ErrorSource {
-    fn from_value(v: Value) -> Result<Self, ShellError> {
-        let record = v.clone().into_record()?;
+    fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
+        let record = v.clone().into_record(call_span)?;
         let name = record
             .get("name")
-            .and_then(|s| String::from_value(s.clone()).ok());
-        // let name = String::from_value(record.get("name").unwrap().clone()).ok();
+            .and_then(|s| String::from_value(s.clone(), call_span).ok());
 
         let text = if let Some(text) = record.get("text") {
-            String::from_value(text.clone()).ok()
+            String::from_value(text.clone(), call_span).ok()
         } else {
             None
         };
         let path = if let Some(path) = record.get("path") {
-            String::from_value(path.clone()).ok()
+            String::from_value(path.clone(), call_span).ok()
         } else {
             None
         };
@@ -345,9 +344,10 @@ impl FromValue for ErrorSource {
                 path,
             }),
             _ => Err(ShellError::CantConvert {
-                to_type: Self::expected_type().to_string(),
-                from_type: v.get_type().to_string(),
-                span: v.span(),
+                from_type: v.get_type(),
+                to_type: Self::expected_type(),
+                from_value_span: v.span(),
+                call_span,
                 help: None,
             }),
         }

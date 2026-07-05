@@ -7,7 +7,7 @@ use std::{cmp::Ordering, fmt::Display, str::FromStr};
 use winnow::Parser;
 
 mod int_range {
-    use crate::{FromValue, ShellError, Signals, Span, Value, ast::RangeInclusion};
+    use crate::{FromValue, ShellError, Signals, Span, Type, Value, ast::RangeInclusion};
     use serde::{Deserialize, Serialize};
     use std::{cmp::Ordering, fmt::Display, ops::Bound};
 
@@ -28,18 +28,19 @@ mod int_range {
             inclusion: RangeInclusion,
             span: Span,
         ) -> Result<Self, ShellError> {
-            fn to_int(value: Value) -> Result<Option<i64>, ShellError> {
+            let to_int = |value: Value| -> Result<Option<i64>, ShellError> {
                 match value {
                     Value::Int { val, .. } => Ok(Some(val)),
                     Value::Nothing { .. } => Ok(None),
                     val => Err(ShellError::CantConvert {
-                        to_type: "int".into(),
-                        from_type: val.get_type().to_string(),
-                        span: val.span(),
+                        from_type: val.get_type(),
+                        to_type: Type::Int,
+                        from_value_span: val.span(),
+                        call_span: span,
                         help: None,
                     }),
                 }
-            }
+            };
 
             let start = to_int(start)?.unwrap_or(0);
 
@@ -260,9 +261,9 @@ mod int_range {
     }
 
     impl FromValue for IntRange {
-        fn from_value(v: Value) -> Result<Self, ShellError> {
+        fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
             let span = v.span();
-            let range = Range::from_value(v)?;
+            let range = Range::from_value(v, call_span)?;
             match range {
                 Range::IntRange(v) => Ok(v),
                 Range::FloatRange(_) => Err(ShellError::TypeMismatch {
@@ -308,7 +309,7 @@ mod int_range {
 }
 
 mod float_range {
-    use crate::{IntRange, Range, ShellError, Signals, Span, Value, ast::RangeInclusion};
+    use crate::{IntRange, Range, ShellError, Signals, Span, Type, Value, ast::RangeInclusion};
     use nu_utils::ObviousFloat;
     use serde::{Deserialize, Serialize};
     use std::{cmp::Ordering, fmt::Display, ops::Bound};
@@ -328,19 +329,20 @@ mod float_range {
             inclusion: RangeInclusion,
             span: Span,
         ) -> Result<Self, ShellError> {
-            fn to_float(value: Value) -> Result<Option<f64>, ShellError> {
+            let to_float = |value: Value| -> Result<Option<f64>, ShellError> {
                 match value {
                     Value::Float { val, .. } => Ok(Some(val)),
                     Value::Int { val, .. } => Ok(Some(val as f64)),
                     Value::Nothing { .. } => Ok(None),
                     val => Err(ShellError::CantConvert {
-                        to_type: "float".into(),
-                        from_type: val.get_type().to_string(),
-                        span: val.span(),
+                        from_type: val.get_type(),
+                        to_type: Type::Float,
+                        from_value_span: val.span(),
+                        call_span: span,
                         help: None,
                     }),
                 }
-            }
+            };
 
             // `start` must be finite (not NaN or infinity).
             // `next` must be finite and not equal to `start`.

@@ -1003,7 +1003,7 @@ impl Command for BlockCommand {
             .filter_map(|(key, value)| {
                 (key == "deprecated")
                     .then_some(value.clone())
-                    .map(DeprecationEntry::from_value)
+                    .map(|v| DeprecationEntry::from_value(v, Span::unknown()))
                     .and_then(Result::ok)
             })
             .collect()

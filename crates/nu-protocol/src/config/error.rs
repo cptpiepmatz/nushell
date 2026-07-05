@@ -67,7 +67,7 @@ impl<'a> ConfigErrors<'a> {
         self.error(ConfigError::InvalidValue {
             path: path.to_string(),
             valid: expected.into(),
-            actual: if let Ok(str) = actual.as_str() {
+            actual: if let Ok(str) = actual.as_str(Span::unknown()) {
                 format!("'{str}'")
             } else {
                 actual.to_abbreviated_string(self.config)

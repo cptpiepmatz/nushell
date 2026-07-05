@@ -61,7 +61,7 @@ impl UpdateFromValue for FilesizeConfig {
             let path = &mut path.push(col);
             match col.as_str() {
                 "unit" => {
-                    if let Ok(str) = val.as_str() {
+                    if let Ok(str) = val.as_str(Span::unknown()) {
                         match str.parse() {
                             Ok(unit) => self.unit = unit,
                             Err(_) => errors.invalid_value(path, "'metric', 'binary', 'B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', or 'EiB'", val),

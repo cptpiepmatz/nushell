@@ -472,39 +472,40 @@ enum CellPathMutation {
 }
 
 impl Value {
-    fn cant_convert_to<T>(&self, typ: &str) -> Result<T, ShellError> {
+    fn cant_convert_to<T>(&self, typ: Type, call_span: Span) -> Result<T, ShellError> {
         Err(ShellError::CantConvert {
-            to_type: typ.into(),
-            from_type: self.get_type().to_string(),
-            span: self.span(),
+            from_type: self.get_type(),
+            to_type: typ,
+            from_value_span: self.span(),
+            call_span,
             help: None,
         })
     }
 
     /// Returns the inner `bool` value or an error if this `Value` is not a bool
-    pub fn as_bool(&self) -> Result<bool, ShellError> {
+    pub fn as_bool(&self, call_span: Span) -> Result<bool, ShellError> {
         if let Value::Bool { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("boolean")
+            self.cant_convert_to(Type::Bool, call_span)
         }
     }
 
     /// Returns the inner `i64` value or an error if this `Value` is not an int
-    pub fn as_int(&self) -> Result<i64, ShellError> {
+    pub fn as_int(&self, call_span: Span) -> Result<i64, ShellError> {
         if let Value::Int { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("int")
+            self.cant_convert_to(Type::Int, call_span)
         }
     }
 
     /// Returns the inner `f64` value or an error if this `Value` is not a float
-    pub fn as_float(&self) -> Result<f64, ShellError> {
+    pub fn as_float(&self, call_span: Span) -> Result<f64, ShellError> {
         if let Value::Float { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("float")
+            self.cant_convert_to(Type::Float, call_span)
         }
     }
 
@@ -515,7 +516,7 @@ impl Value {
     /// - `Float`
     ///
     /// ```
-    /// # use nu_protocol::Value;
+    /// # use nu_protocol::{Span, Value};
     /// for val in Value::test_values() {
     ///     assert_eq!(
     ///         matches!(val, Value::Float { .. } | Value::Int { .. }),
@@ -523,74 +524,74 @@ impl Value {
     ///     );
     /// }
     /// ```
-    pub fn coerce_float(&self) -> Result<f64, ShellError> {
+    pub fn coerce_float(&self, call_span: Span) -> Result<f64, ShellError> {
         match self {
             Value::Float { val, .. } => Ok(*val),
             Value::Int { val, .. } => Ok(*val as f64),
-            val => val.cant_convert_to("float"),
+            val => val.cant_convert_to(Type::Float, call_span),
         }
     }
 
     /// Returns the inner `i64` filesize value or an error if this `Value` is not a filesize
-    pub fn as_filesize(&self) -> Result<Filesize, ShellError> {
+    pub fn as_filesize(&self, call_span: Span) -> Result<Filesize, ShellError> {
         if let Value::Filesize { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("filesize")
+            self.cant_convert_to(Type::Filesize, call_span)
         }
     }
 
     /// Returns the inner `i64` duration value or an error if this `Value` is not a duration
-    pub fn as_duration(&self) -> Result<i64, ShellError> {
+    pub fn as_duration(&self, call_span: Span) -> Result<i64, ShellError> {
         if let Value::Duration { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("duration")
+            self.cant_convert_to(Type::Duration, call_span)
         }
     }
 
     /// Returns the inner [`DateTime`] value or an error if this `Value` is not a date
-    pub fn as_date(&self) -> Result<DateTime<FixedOffset>, ShellError> {
+    pub fn as_date(&self, call_span: Span) -> Result<DateTime<FixedOffset>, ShellError> {
         if let Value::Date { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("datetime")
+            self.cant_convert_to(Type::Date, call_span)
         }
     }
 
     /// Returns a reference to the inner [`Range`] value or an error if this `Value` is not a range
-    pub fn as_range(&self) -> Result<Range, ShellError> {
+    pub fn as_range(&self, call_span: Span) -> Result<Range, ShellError> {
         if let Value::Range { val, .. } = self {
             Ok(**val)
         } else {
-            self.cant_convert_to("range")
+            self.cant_convert_to(Type::Range, call_span)
         }
     }
 
     /// Unwraps the inner [`Range`] value or returns an error if this `Value` is not a range
-    pub fn into_range(self) -> Result<Range, ShellError> {
+    pub fn into_range(self, call_span: Span) -> Result<Range, ShellError> {
         if let Value::Range { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("range")
+            self.cant_convert_to(Type::Range, call_span)
         }
     }
 
     /// Returns a reference to the inner `str` value or an error if this `Value` is not a string
-    pub fn as_str(&self) -> Result<&str, ShellError> {
+    pub fn as_str(&self, call_span: Span) -> Result<&str, ShellError> {
         if let Value::String { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("string")
+            self.cant_convert_to(Type::String, call_span)
         }
     }
 
     /// Unwraps the inner `String` value or returns an error if this `Value` is not a string
-    pub fn into_string(self) -> Result<String, ShellError> {
+    pub fn into_string(self, call_span: Span) -> Result<String, ShellError> {
         if let Value::String { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("string")
+            self.cant_convert_to(Type::String, call_span)
         }
     }
 
@@ -619,11 +620,11 @@ impl Value {
     ///                 | Value::Binary { .. }
     ///                 | Value::Date { .. }
     ///         ),
-    ///         val.coerce_str().is_ok(),
+    ///         val.coerce_str(Span::test_data()).is_ok(),
     ///     );
     /// }
     /// ```
-    pub fn coerce_str(&self) -> Result<Cow<'_, str>, ShellError> {
+    pub fn coerce_str(&self, call_span: Span) -> Result<Cow<'_, str>, ShellError> {
         match self {
             Value::Bool { val, .. } => Ok(Cow::Owned(val.to_string())),
             Value::Int { val, .. } => Ok(Cow::Owned(val.to_string())),
@@ -632,19 +633,19 @@ impl Value {
             Value::Glob { val, .. } => Ok(Cow::Borrowed(val)),
             Value::Binary { val, .. } => match std::str::from_utf8(val) {
                 Ok(s) => Ok(Cow::Borrowed(s)),
-                Err(_) => self.cant_convert_to("string"),
+                Err(_) => self.cant_convert_to(Type::String, call_span),
             },
             Value::Date { val, .. } => Ok(Cow::Owned(
                 val.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             )),
-            val => val.cant_convert_to("string"),
+            val => val.cant_convert_to(Type::String, call_span),
         }
     }
 
     /// Returns this `Value` converted to a `String` or an error if it cannot be converted
     ///
     /// # Note
-    /// This function is equivalent to `value.coerce_str().map(Cow::into_owned)`
+    /// This function is equivalent to `value.coerce_str(call_span).map(Cow::into_owned)`
     /// which might allocate a new `String`.
     ///
     /// To avoid this allocation, prefer [`coerce_str`](Self::coerce_str)
@@ -662,7 +663,7 @@ impl Value {
     /// - `Date`
     ///
     /// ```
-    /// # use nu_protocol::Value;
+    /// # use nu_protocol::{Span, Value};
     /// for val in Value::test_values() {
     ///     assert_eq!(
     ///         matches!(
@@ -675,12 +676,12 @@ impl Value {
     ///                 | Value::Binary { .. }
     ///                 | Value::Date { .. }
     ///         ),
-    ///         val.coerce_string().is_ok(),
+    ///         val.coerce_string(Span::test_data()).is_ok(),
     ///     );
     /// }
     /// ```
-    pub fn coerce_string(&self) -> Result<String, ShellError> {
-        self.coerce_str().map(Cow::into_owned)
+    pub fn coerce_string(&self, call_span: Span) -> Result<String, ShellError> {
+        self.coerce_str(call_span).map(Cow::into_owned)
     }
 
     /// Returns this `Value` converted to a `String` or an error if it cannot be converted
@@ -695,7 +696,7 @@ impl Value {
     /// - `Date`
     ///
     /// ```
-    /// # use nu_protocol::Value;
+    /// # use nu_protocol::{Span, Value};
     /// for val in Value::test_values() {
     ///     assert_eq!(
     ///         matches!(
@@ -708,11 +709,11 @@ impl Value {
     ///                 | Value::Binary { .. }
     ///                 | Value::Date { .. }
     ///         ),
-    ///         val.coerce_into_string().is_ok(),
+    ///         val.coerce_into_string(Span::test_data()).is_ok(),
     ///     );
     /// }
     /// ```
-    pub fn coerce_into_string(self) -> Result<String, ShellError> {
+    pub fn coerce_into_string(self, call_span: Span) -> Result<String, ShellError> {
         let span = self.span();
         match self {
             Value::Bool { val, .. } => Ok(val.to_string()),
@@ -722,15 +723,17 @@ impl Value {
             Value::Glob { val, .. } => Ok(val),
             Value::Binary { val, .. } => match String::from_utf8(val) {
                 Ok(s) => Ok(s),
-                Err(err) => Value::binary(err.into_bytes(), span).cant_convert_to("string"),
+                Err(err) => {
+                    Value::binary(err.into_bytes(), span).cant_convert_to(Type::String, call_span)
+                }
             },
             Value::Date { val, .. } => Ok(val.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
-            val => val.cant_convert_to("string"),
+            val => val.cant_convert_to(Type::String, call_span),
         }
     }
 
     /// Returns this `Value` as a `char` or an error if it is not a single character string
-    pub fn as_char(&self) -> Result<char, ShellError> {
+    pub fn as_char(&self, call_span: Span) -> Result<char, ShellError> {
         let span = self.span();
         if let Value::String { val, .. } = self {
             let mut chars = val.chars();
@@ -742,88 +745,88 @@ impl Value {
                 }),
             }
         } else {
-            self.cant_convert_to("char")
+            self.cant_convert_to(Type::custom("char"), call_span)
         }
     }
 
     /// Converts this `Value` to a `PathBuf` or returns an error if it is not a string
-    pub fn to_path(&self) -> Result<PathBuf, ShellError> {
+    pub fn to_path(&self, call_span: Span) -> Result<PathBuf, ShellError> {
         if let Value::String { val, .. } = self {
             Ok(PathBuf::from(val))
         } else {
-            self.cant_convert_to("path")
+            self.cant_convert_to(Type::custom("path"), call_span)
         }
     }
 
     /// Returns a reference to the inner [`Record`] value or an error if this `Value` is not a record
-    pub fn as_record(&self) -> Result<&Record, ShellError> {
+    pub fn as_record(&self, call_span: Span) -> Result<&Record, ShellError> {
         if let Value::Record { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("record")
+            self.cant_convert_to(Type::record(), call_span)
         }
     }
 
     /// Unwraps the inner [`Record`] value or returns an error if this `Value` is not a record
-    pub fn into_record(self) -> Result<Record, ShellError> {
+    pub fn into_record(self, call_span: Span) -> Result<Record, ShellError> {
         if let Value::Record { val, .. } = self {
             Ok(val.into_owned())
         } else {
-            self.cant_convert_to("record")
+            self.cant_convert_to(Type::record(), call_span)
         }
     }
 
     /// Returns a reference to the inner list slice or an error if this `Value` is not a list
-    pub fn as_list(&self) -> Result<&[Value], ShellError> {
+    pub fn as_list(&self, call_span: Span) -> Result<&[Value], ShellError> {
         if let Value::List { vals, .. } = self {
             Ok(vals)
         } else {
-            self.cant_convert_to("list")
+            self.cant_convert_to(Type::list(Type::Any), call_span)
         }
     }
 
     /// Unwraps the inner list `Vec` or returns an error if this `Value` is not a list
-    pub fn into_list(self) -> Result<Vec<Value>, ShellError> {
+    pub fn into_list(self, call_span: Span) -> Result<Vec<Value>, ShellError> {
         if let Value::List { vals, .. } = self {
             Ok(vals)
         } else {
-            self.cant_convert_to("list")
+            self.cant_convert_to(Type::list(Type::Any), call_span)
         }
     }
 
     /// Returns a reference to the inner [`Closure`] value or an error if this `Value` is not a closure
-    pub fn as_closure(&self) -> Result<&Closure, ShellError> {
+    pub fn as_closure(&self, call_span: Span) -> Result<&Closure, ShellError> {
         if let Value::Closure { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("closure")
+            self.cant_convert_to(Type::Closure, call_span)
         }
     }
 
     /// Unwraps the inner [`Closure`] value or returns an error if this `Value` is not a closure
-    pub fn into_closure(self) -> Result<Closure, ShellError> {
+    pub fn into_closure(self, call_span: Span) -> Result<Closure, ShellError> {
         if let Value::Closure { val, .. } = self {
             Ok(*val)
         } else {
-            self.cant_convert_to("closure")
+            self.cant_convert_to(Type::Closure, call_span)
         }
     }
 
     /// Returns a reference to the inner binary slice or an error if this `Value` is not a binary value
-    pub fn as_binary(&self) -> Result<&[u8], ShellError> {
+    pub fn as_binary(&self, call_span: Span) -> Result<&[u8], ShellError> {
         if let Value::Binary { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("binary")
+            self.cant_convert_to(Type::Binary, call_span)
         }
     }
 
     /// Unwraps the inner binary `Vec` or returns an error if this `Value` is not a binary value
-    pub fn into_binary(self) -> Result<Vec<u8>, ShellError> {
+    pub fn into_binary(self, call_span: Span) -> Result<Vec<u8>, ShellError> {
         if let Value::Binary { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("binary")
+            self.cant_convert_to(Type::Binary, call_span)
         }
     }
 
@@ -837,19 +840,19 @@ impl Value {
     /// - `String`
     ///
     /// ```
-    /// # use nu_protocol::Value;
+    /// # use nu_protocol::{Span, Value};
     /// for val in Value::test_values() {
     ///     assert_eq!(
     ///         matches!(val, Value::Binary { .. } | Value::String { .. }),
-    ///         val.coerce_binary().is_ok(),
+    ///         val.coerce_binary(Span::test_data()).is_ok(),
     ///     );
     /// }
     /// ```
-    pub fn coerce_binary(&self) -> Result<&[u8], ShellError> {
+    pub fn coerce_binary(&self, call_span: Span) -> Result<&[u8], ShellError> {
         match self {
             Value::Binary { val, .. } => Ok(val),
             Value::String { val, .. } => Ok(val.as_bytes()),
-            val => val.cant_convert_to("binary"),
+            val => val.cant_convert_to(Type::Binary, call_span),
         }
     }
 
@@ -860,37 +863,37 @@ impl Value {
     /// - `String`
     ///
     /// ```
-    /// # use nu_protocol::Value;
+    /// # use nu_protocol::{Span, Value};
     /// for val in Value::test_values() {
     ///     assert_eq!(
     ///         matches!(val, Value::Binary { .. } | Value::String { .. }),
-    ///         val.coerce_into_binary().is_ok(),
+    ///         val.coerce_into_binary(Span::test_data()).is_ok(),
     ///     );
     /// }
     /// ```
-    pub fn coerce_into_binary(self) -> Result<Vec<u8>, ShellError> {
+    pub fn coerce_into_binary(self, call_span: Span) -> Result<Vec<u8>, ShellError> {
         match self {
             Value::Binary { val, .. } => Ok(val),
             Value::String { val, .. } => Ok(val.into_bytes()),
-            val => val.cant_convert_to("binary"),
+            val => val.cant_convert_to(Type::Binary, call_span),
         }
     }
 
     /// Returns a reference to the inner [`CellPath`] value or an error if this `Value` is not a cell path
-    pub fn as_cell_path(&self) -> Result<&CellPath, ShellError> {
+    pub fn as_cell_path(&self, call_span: Span) -> Result<&CellPath, ShellError> {
         if let Value::CellPath { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("cell path")
+            self.cant_convert_to(Type::CellPath, call_span)
         }
     }
 
     /// Unwraps the inner [`CellPath`] value or returns an error if this `Value` is not a cell path
-    pub fn into_cell_path(self) -> Result<CellPath, ShellError> {
+    pub fn into_cell_path(self, call_span: Span) -> Result<CellPath, ShellError> {
         if let Value::CellPath { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("cell path")
+            self.cant_convert_to(Type::CellPath, call_span)
         }
     }
 
@@ -909,7 +912,7 @@ impl Value {
     ///
     /// For all other, more complex variants of [`Value`], the function cannot determine a
     /// boolean representation and returns `Err`.
-    pub fn coerce_bool(&self) -> Result<bool, ShellError> {
+    pub fn coerce_bool(&self, call_span: Span) -> Result<bool, ShellError> {
         match self {
             Value::Bool { val: false, .. } | Value::Int { val: 0, .. } | Value::Nothing { .. } => {
                 Ok(false)
@@ -920,25 +923,25 @@ impl Value {
                 _ => Ok(true),
             },
             Value::Bool { .. } | Value::Int { .. } | Value::Float { .. } => Ok(true),
-            _ => self.cant_convert_to("bool"),
+            _ => self.cant_convert_to(Type::Bool, call_span),
         }
     }
 
     /// Returns a reference to the inner [`CustomValue`] trait object or an error if this `Value` is not a custom value
-    pub fn as_custom_value(&self) -> Result<&dyn CustomValue, ShellError> {
+    pub fn as_custom_value(&self, call_span: Span) -> Result<&dyn CustomValue, ShellError> {
         if let Value::Custom { val, .. } = self {
             Ok(val.as_ref())
         } else {
-            self.cant_convert_to("custom value")
+            self.cant_convert_to(Type::custom("custom value"), call_span)
         }
     }
 
     /// Unwraps the inner [`CustomValue`] trait object or returns an error if this `Value` is not a custom value
-    pub fn into_custom_value(self) -> Result<Box<dyn CustomValue>, ShellError> {
+    pub fn into_custom_value(self, call_span: Span) -> Result<Box<dyn CustomValue>, ShellError> {
         if let Value::Custom { val, .. } = self {
             Ok(val)
         } else {
-            self.cant_convert_to("custom value")
+            self.cant_convert_to(Type::custom("custom value"), call_span)
         }
     }
 
@@ -1058,7 +1061,7 @@ impl Value {
                 let out = vals
                     .iter()
                     .map(|item| {
-                        item.as_record()
+                        item.as_record(span)
                             .ok()
                             .and_then(|val| val.get(name).cloned())
                             .unwrap_or(Value::nothing(span))
@@ -2174,7 +2177,11 @@ impl CompareTypes<Type> for Value {
                 }
                 Type::Table(cols) => vals
                     .iter()
-                    .map(|val| val.as_record().ok().and_then(|rec| rec.compare_types(cols)))
+                    .map(|val| {
+                        val.as_record(val.span())
+                            .ok()
+                            .and_then(|rec| rec.compare_types(cols))
+                    })
                     .try_fold(TypeRelation::Equal, |acc, e| acc.combine(e?)),
                 _ => None,
             },
@@ -5616,42 +5623,48 @@ mod tests {
 
     #[test]
     fn test_env_as_bool() {
+        let span = Span::test_data();
+
         // explicit false values
-        assert_eq!(Value::test_bool(false).coerce_bool(), Ok(false));
-        assert_eq!(Value::test_int(0).coerce_bool(), Ok(false));
-        assert_eq!(Value::test_float(0.0).coerce_bool(), Ok(false));
-        assert_eq!(Value::test_string("").coerce_bool(), Ok(false));
-        assert_eq!(Value::test_string("0").coerce_bool(), Ok(false));
-        assert_eq!(Value::test_nothing().coerce_bool(), Ok(false));
+        assert_eq!(Value::test_bool(false).coerce_bool(span), Ok(false));
+        assert_eq!(Value::test_int(0).coerce_bool(span), Ok(false));
+        assert_eq!(Value::test_float(0.0).coerce_bool(span), Ok(false));
+        assert_eq!(Value::test_string("").coerce_bool(span), Ok(false));
+        assert_eq!(Value::test_string("0").coerce_bool(span), Ok(false));
+        assert_eq!(Value::test_nothing().coerce_bool(span), Ok(false));
 
         // explicit true values
-        assert_eq!(Value::test_bool(true).coerce_bool(), Ok(true));
-        assert_eq!(Value::test_int(1).coerce_bool(), Ok(true));
-        assert_eq!(Value::test_float(1.0).coerce_bool(), Ok(true));
-        assert_eq!(Value::test_string("1").coerce_bool(), Ok(true));
+        assert_eq!(Value::test_bool(true).coerce_bool(span), Ok(true));
+        assert_eq!(Value::test_int(1).coerce_bool(span), Ok(true));
+        assert_eq!(Value::test_float(1.0).coerce_bool(span), Ok(true));
+        assert_eq!(Value::test_string("1").coerce_bool(span), Ok(true));
 
         // implicit true values
-        assert_eq!(Value::test_int(42).coerce_bool(), Ok(true));
-        assert_eq!(Value::test_float(0.5).coerce_bool(), Ok(true));
-        assert_eq!(Value::test_string("not zero").coerce_bool(), Ok(true));
+        assert_eq!(Value::test_int(42).coerce_bool(span), Ok(true));
+        assert_eq!(Value::test_float(0.5).coerce_bool(span), Ok(true));
+        assert_eq!(Value::test_string("not zero").coerce_bool(span), Ok(true));
 
         // complex values returning None
-        assert!(Value::test_record(Record::default()).coerce_bool().is_err());
+        assert!(
+            Value::test_record(Record::default())
+                .coerce_bool(span)
+                .is_err()
+        );
         assert!(
             Value::test_list(vec![Value::test_int(1)])
-                .coerce_bool()
+                .coerce_bool(span)
                 .is_err()
         );
         assert!(
             Value::test_date(
                 chrono::DateTime::parse_from_rfc3339("2024-01-01T12:00:00+00:00").unwrap(),
             )
-            .coerce_bool()
+            .coerce_bool(span)
             .is_err()
         );
-        assert!(Value::test_glob("*.rs").coerce_bool().is_err());
-        assert!(Value::test_binary(vec![1, 2, 3]).coerce_bool().is_err());
-        assert!(Value::test_duration(3600).coerce_bool().is_err());
+        assert!(Value::test_glob("*.rs").coerce_bool(span).is_err());
+        assert!(Value::test_binary(vec![1, 2, 3]).coerce_bool(span).is_err());
+        assert!(Value::test_duration(3600).coerce_bool(span).is_err());
     }
 
     mod memory_size {

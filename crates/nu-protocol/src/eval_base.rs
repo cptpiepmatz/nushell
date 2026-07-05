@@ -2,12 +2,10 @@
 use nu_path::expand_path;
 
 use crate::{
-    BlockId, Config, ENV_VARIABLE_ID, GetSpan, Range, Record, ShellError, Span, Value, VarId,
-    ast::{
+    BlockId, Config, ENV_VARIABLE_ID, GetSpan, Range, Record, ShellError, Span, Type, Value, VarId, ast::{
         Assignment, Bits, Boolean, Call, Comparison, Expr, Expression, ExternalArgument, ListItem,
         Math, Operator, RecordItem, eval_operator,
-    },
-    debugger::DebugContext,
+    }, debugger::DebugContext,
 };
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
@@ -92,7 +90,7 @@ pub trait Eval {
                     match item {
                         RecordItem::Pair(col, val) => {
                             // avoid duplicate cols
-                            let col_name = Self::eval::<D>(state, mut_state, col)?.coerce_into_string()?;
+                            let col_name = Self::eval::<D>(state, mut_state, col)?.coerce_into_string(expr_span)?;
                             let col_span = col.span(&state);
                             if let Some(orig_span) = col_names.get(&col_name) {
                                 return Err(ShellError::ColumnDefinedTwice {
@@ -137,7 +135,7 @@ pub trait Eval {
             Expr::Table(table) => {
                 let mut output_headers = vec![];
                 for expr in table.columns.as_ref() {
-                    let header = Self::eval::<D>(state, mut_state, expr)?.coerce_into_string()?;
+                    let header = Self::eval::<D>(state, mut_state, expr)?.coerce_into_string(expr_span)?;
                     if let Some(idx) = output_headers
                         .iter()
                         .position(|existing| existing == &header)
@@ -172,9 +170,10 @@ pub trait Eval {
             Expr::ValueWithUnit(value) => match Self::eval::<D>(state, mut_state, &value.expr)? {
                 Value::Int { val, .. } => value.unit.item.build_value(val, value.unit.span),
                 x => Err(ShellError::CantConvert {
-                    to_type: "unit value".into(),
-                    from_type: x.get_type().to_string(),
-                    span: value.expr.span(&state),
+                    from_type: x.get_type(),
+                    to_type: Type::custom("unit value"),
+                    from_value_span: x.span(),
+                    call_span: value.expr.span(&state),
                     help: None,
                 }),
             },

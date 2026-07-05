@@ -668,7 +668,7 @@ where
     V: FromValue,
 {
     fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError> {
-        let record = v.into_record()?;
+        let record = v.into_record(call_span)?;
         let items: Result<Vec<(String, V)>, ShellError> = record
             .into_iter()
             .map(|(k, v)| Ok((k, V::from_value(v, call_span)?)))

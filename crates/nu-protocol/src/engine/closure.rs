@@ -3,7 +3,7 @@ use std::{
     fmt::{self, Debug},
 };
 
-use crate::{BlockId, ShellError, Span, Value, VarId, engine::EngineState};
+use crate::{BlockId, ShellError, Span, Type, Value, VarId, engine::EngineState};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,17 +33,19 @@ impl Closure {
     pub fn coerce_into_string<'a>(
         &self,
         engine_state: &'a EngineState,
-        span: Span,
+        closure_span: Span,
+        call_span: Span,
     ) -> Result<Cow<'a, str>, ShellError> {
         let block = engine_state.get_block(self.block_id);
-        if let Some(span) = block.span {
-            let contents_bytes = engine_state.get_span_contents(span);
+        if let Some(block_span) = block.span {
+            let contents_bytes = engine_state.get_span_contents(block_span);
             Ok(String::from_utf8_lossy(contents_bytes))
         } else {
             Err(ShellError::CantConvert {
-                to_type: "string".into(),
-                from_type: "closure".into(),
-                span,
+                from_type: Type::Closure,
+                to_type: Type::String,
+                from_value_span: closure_span,
+                call_span,
                 help: Some(format!(
                     "unable to retrieve block contents for closure with id {}",
                     self.block_id.get()

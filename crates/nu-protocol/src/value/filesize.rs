@@ -244,8 +244,8 @@ impl TryFrom<f32> for Filesize {
 }
 
 impl FromValue for Filesize {
-    fn from_value(value: Value) -> Result<Self, ShellError> {
-        value.as_filesize()
+    fn from_value(value: Value, call_span: Span) -> Result<Self, ShellError> {
+        value.as_filesize(call_span)
     }
 
     fn expected_type() -> Type {
