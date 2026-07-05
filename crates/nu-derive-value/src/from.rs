@@ -208,7 +208,8 @@ fn struct_from_value(data: &DataStruct, container_attrs: &ContainerAttributes) -
     let body = parse_value_via_fields(&data.fields, quote!(Self), container_attrs)?;
     Ok(quote! {
         fn from_value(
-            v: nu_protocol::Value
+            v: nu_protocol::Value,
+            call_span: nu_protocol::Span,
         ) -> std::result::Result<Self, nu_protocol::ShellError> {
             #body
         }
@@ -467,20 +468,20 @@ fn enum_from_value(data: &DataEnum, attrs: &[Attribute]) -> Result {
 
     Ok(quote! {
         fn from_value(
-            v: nu_protocol::Value
+            v: nu_protocol::Value,
+            call_span: nu_protocol::Span,
         ) -> std::result::Result<Self, nu_protocol::ShellError> {
             let span = v.span();
             let ty = v.get_type();
 
-            let s = v.into_string()?;
+            let s = v.into_string(call_span)?;
             match s.as_str() {
                 #(#arms,)*
                 _ => std::result::Result::Err(nu_protocol::ShellError::CantConvert {
-                    to_type: std::string::ToString::to_string(
-                        &<Self as nu_protocol::FromValue>::expected_type()
-                    ),
-                    from_type: std::string::ToString::to_string(&ty),
-                    span: span,
+                    from_type: ty,
+                    to_type: <Self as nu_protocol::FromValue>::expected_type(),
+                    from_value_span: span,
+                    call_span,
                     help: std::option::Option::None,
                 }),
             }
@@ -572,7 +573,7 @@ fn parse_value_via_fields(
                     (true, _) => quote! {
                         #ident: record
                             .remove(#ident_s)
-                            .map(|v| <#ty as nu_protocol::FromValue>::from_value(v))
+                            .map(|v| <#ty as nu_protocol::FromValue>::from_value(v, call_span))
                             .transpose()?
                             .flatten()
                     },
@@ -585,12 +586,13 @@ fn parse_value_via_fields(
                                     span: std::option::Option::None,
                                     src_span: span
                                 })?,
+                            call_span,
                         )?
                     },
                     (false, true) => quote! {
                         #ident: record
                             .remove(#ident_s)
-                            .map(|v| <#ty as nu_protocol::FromValue>::from_value(v))
+                            .map(|v| <#ty as nu_protocol::FromValue>::from_value(v, call_span))
                             .transpose()?
                             .unwrap_or_default()
                     },
@@ -598,7 +600,7 @@ fn parse_value_via_fields(
             }
             Ok(quote! {
                 let span = v.span();
-                let mut record = v.into_record()?;
+                let mut record = v.into_record(call_span)?;
                 std::result::Result::Ok(#self_ident {#(#fields_ts),*})
             })
         }
@@ -615,12 +617,13 @@ fn parse_value_via_fields(
                                 span: std::option::Option::None,
                                 src_span: span
                             })?,
+                        call_span,
                     )?
                 }}
             });
             Ok(quote! {
                 let span = v.span();
-                let list = v.into_list()?;
+                let list = v.into_list(call_span)?;
                 let mut deque: std::collections::VecDeque<_> = std::convert::From::from(list);
                 std::result::Result::Ok(#self_ident(#(#fields),*))
             })
@@ -629,10 +632,11 @@ fn parse_value_via_fields(
             match v {
                 nu_protocol::Value::Nothing {..} => Ok(#self_ident),
                 v => std::result::Result::Err(nu_protocol::ShellError::CantConvert {
-                    to_type: std::string::ToString::to_string(&<Self as nu_protocol::FromValue>::expected_type()),
-                    from_type: std::string::ToString::to_string(&v.get_type()),
-                    span: v.span(),
-                    help: std::option::Option::None
+                    from_type: v.get_type(),
+                    to_type: <Self as nu_protocol::FromValue>::expected_type(),
+                    from_value_span: v.span(),
+                    call_span,
+                    help: std::option::Option::None,
                 })
             }
         }),
