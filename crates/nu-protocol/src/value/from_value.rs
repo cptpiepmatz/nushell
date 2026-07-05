@@ -122,12 +122,12 @@ use std::{
 /// );
 /// ```
 pub trait FromValue: Sized {
-    // TODO: instead of ShellError, maybe we could have a FromValueError that implements Into<ShellError>
     /// Loads a value from a [`Value`].
     ///
     /// This method retrieves a value similarly to how strings are parsed using [`FromStr`].
     /// The operation might fail if the `Value` contains unexpected types or structures.
-    fn from_value(v: Value) -> Result<Self, ShellError>;
+    /// On failure, the passed span should point to the operation that caused the failure.
+    fn from_value(v: Value, call_span: Span) -> Result<Self, ShellError>;
 
     /// Expected `Value` type.
     ///
