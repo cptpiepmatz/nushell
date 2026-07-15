@@ -205,45 +205,48 @@ fn test_computable_style_static() {
     );
 }
 
-// Because each closure currently runs in a separate environment, checks that the closures have run
-// must use the filesystem.
-#[test]
-fn test_computable_style_closure_basic() {
-    use nu_test_support::{nu, nu_repl_code, playground::Playground};
-    Playground::setup("computable_style_closure_basic", |dirs, _| {
-        let inp = [
-            "$env.config = {
-                color_config: {
-                    string: {|e| touch ($e + '.obj'); 'red' }
-                }
-            };",
-            "[bell book candle] | table | ignore",
-            "ls | get name | to nuon",
-        ];
-        let actual_repl = nu!(cwd: dirs.test(), nu_repl_code(&inp));
-        assert_eq!(actual_repl.err, "");
-        assert_eq!(actual_repl.out, r#"["bell.obj", "book.obj", "candle.obj"]"#);
-    });
-}
+#[cfg(test)]
+mod tests {
+    use nu_test_support::prelude::*;
 
-#[test]
-fn test_computable_style_closure_errors() {
-    use nu_test_support::{nu, nu_repl_code};
-    let inp = [
-        "$env.config = {
-            color_config: {
-                string: {|e| $e + 2 }
-            }
-        };",
-        "[bell] | table",
-    ];
-    let actual_repl = nu!(nu_repl_code(&inp));
-    // Check that the error was printed
-    assert!(
-        actual_repl
-            .err
-            .contains("nu::shell::operator_incompatible_types")
-    );
-    // Check that the value was printed
-    assert!(actual_repl.out.contains("bell"));
+    // Because each closure currently runs in a separate environment, checks that the closures have run
+    // must use the filesystem.
+    #[test]
+    fn test_computable_style_closure_basic() -> Result {
+        Playground::setup("computable_style_closure_basic", |dirs, _| {
+            let input = [
+                "$env.OUTPUT = []",
+                "$env.config = {
+                    color_config: {
+                        string: {|e| touch ($e + '.obj'); 'red' }
+                    }
+                };",
+                "[bell book candle] | table | ignore",
+                "ls | get name",
+            ];
+
+            let mut tester = test().cwd(dirs.test());
+            input
+                .into_iter()
+                .map(|input| tester.run(input))
+                .try_fold(Value::test_nothing(), |_, value| value)
+                .expect_value_eq(["bell.obj", "book.obj", "candle.obj"])
+        })
+    }
+
+    #[test]
+    #[deps(NU)]
+    fn test_computable_style_closure_errors() -> Result {
+        let code = "let commands = $in; nu -n -c $commands | complete";
+        let commands = "
+            $env.config = { color_config: { string: {|e| $e + 2 } } }
+            [bell] | table --collapse --theme none | str trim
+        ";
+
+        let result: CompleteResult = test().run_with_data(code, commands)?;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "bell\n");
+        assert_contains("nu::shell::operator_incompatible_types", result.stderr);
+        Ok(())
+    }
 }

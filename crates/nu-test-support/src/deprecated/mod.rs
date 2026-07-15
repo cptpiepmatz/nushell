@@ -22,6 +22,7 @@ impl Outcome {
     }
 }
 
+#[deprecated]
 pub fn nu_repl_code(source_lines: &[&str]) -> String {
     let mut out = String::from("nu --testbin=nu_repl ...[ ");
 

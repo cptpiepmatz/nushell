@@ -1,7 +1,9 @@
 use nu_test_support::fs::Stub::FileWithContent;
 use nu_test_support::playground::Playground;
-use nu_test_support::{nu, nu_repl_code, nu_with_std};
+use nu_test_support::{nu, nu_with_std};
 use pretty_assertions::assert_eq;
+
+use nu_test_support::prelude::*;
 
 #[test]
 fn env_shorthand() {
@@ -155,20 +157,44 @@ fn has_file_loc() {
 }
 
 #[test]
-fn hides_env_in_block() {
-    let inp = &[
-        "$env.foo = 'foo'",
-        "hide-env foo",
-        "let b = {|| $env.foo }",
-        "do $b",
-    ];
+fn hides_env_in_block() -> Result {
+    let code = "
+        $env.foo = 'foo'
+        hide-env foo
+        let b = {|| $env.foo }
+        do $b
+    ";
 
-    let actual = nu!(&inp.join("; "));
-    let actual_repl = nu!(nu_repl_code(inp));
+    let code_err = test().run(&code).expect_shell_error()?;
+    assert!(matches!(code_err, ShellError::CantFindColumn { .. }));
 
-    assert!(actual.err.contains("column_not_found"));
-    assert!(actual_repl.err.contains("column_not_found"));
+    let mut tester = test();
+    let lines_err = code
+        .lines()
+        .map(|line| tester.run(line))
+        .collect::<Result<Vec<Value>>>()
+        .map(|_| Value::test_nothing()) // ignore the values, we only care about the error
+        .expect_shell_error()?;
+    assert!(matches!(lines_err, ShellError::CantFindColumn { .. }));
+
+    Ok(())
 }
+
+// #[test]
+// fn hides_env_in_block() {
+//     let inp = &[
+//         "$env.foo = 'foo'",
+//         "hide-env foo",
+//         "let b = {|| $env.foo }",
+//         "do $b",
+//     ];
+
+//     let actual = nu!(&inp.join("; "));
+//     let actual_repl = nu!(nu_repl_code(inp));
+
+//     assert!(actual.err.contains("column_not_found"));
+//     assert!(actual_repl.err.contains("column_not_found"));
+// }
 
 #[test]
 fn env_var_not_var() {
